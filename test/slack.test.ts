@@ -58,12 +58,88 @@ test('/tip connect response is only visible to the command sender', async () => 
   )
 
   expect(response.status).toBe(200)
-  expect(await response.json()).toMatchObject({
+  const json = (await response.json()) as { response_type: string; text: string }
+  expect(json).toMatchObject({
     response_type: 'ephemeral',
+  })
+
+  const url = new URL(json.text.match(/https?:\S+/)?.[0] ?? '')
+  expect(url.searchParams.get('token')).toMatch(/^[0-9a-z]{24}$/)
+})
+
+test('/tip success is public and links the transaction', async () => {
+  const env = await createEnv(slack.apiUrl)
+  const now = new Date().toISOString()
+  const txHash = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
+  await createDb(env.DB)
+    .insertInto('account')
+    .values([
+      {
+        access_key_address: '0x1111111111111111111111111111111111111111',
+        access_key_authorization: '{}',
+        access_key_ciphertext: await encryptSecret('0xprivate', env.ACCESS_KEY_ENCRYPTION_SECRET),
+        access_key_expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // 1 hour
+        created_at: now,
+        id: 'account-sender',
+        platform: 'slack',
+        platform_account_id: 'U000000001',
+        tempo_address: '0x1111111111111111111111111111111111111111',
+        updated_at: now,
+        workspace_id: 'workspace-test',
+      },
+      {
+        access_key_address: null,
+        access_key_authorization: null,
+        access_key_ciphertext: null,
+        access_key_expires_at: null,
+        created_at: now,
+        id: 'account-recipient',
+        platform: 'slack',
+        platform_account_id: 'U000000002',
+        tempo_address: '0x2222222222222222222222222222222222222222',
+        updated_at: now,
+        workspace_id: 'workspace-test',
+      },
+    ])
+    .execute()
+  await createDb(env.DB)
+    .insertInto('tip')
+    .values({
+      amount: '0.0001',
+      created_at: now,
+      id: 'tip-existing',
+      idempotency_key: 'command:T000000001:trigger-public',
+      reason: 'coffee',
+      recipient_account_id: 'account-recipient',
+      sender_account_id: 'account-sender',
+      source_type: 'command',
+      status: 'confirmed',
+      token_address: '0x0000000000000000000000000000000000000000',
+      tx_hash: txHash,
+      updated_at: now,
+      workspace_id: 'workspace-test',
+    })
+    .execute()
+  const body = new URLSearchParams({
+    team_id: 'T000000001',
+    text: '<@U000000002> for coffee',
+    trigger_id: 'trigger-public',
+    user_id: 'U000000001',
+  }).toString()
+
+  const response = await handleSlackCommandRequest(
+    env,
+    createSlackRequest('/api/slack/commands', body),
+  )
+
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual({
+    response_type: 'in_channel',
+    text: `Already sent: <@U000000001> → <@U000000002> 0.0001 PathUSD for coffee. <https://explore.testnet.tempo.xyz/tx/${txHash}|Tx 0x1234…cdef>`,
   })
 })
 
-test('app mention posts a thread reply through Emulate Slack', async () => {
+test('app mention can tip without an extra tip verb', async () => {
   const parent = await slackApi<{ ok: boolean; ts: string }>(slack.apiUrl, 'chat.postMessage', {
     channel: 'C000000001',
     text: '<@U000000001> tip <@U000000002> for coffee',
@@ -71,7 +147,7 @@ test('app mention posts a thread reply through Emulate Slack', async () => {
   const body = JSON.stringify({
     event: {
       channel: 'C000000001',
-      text: '<@B000000001> tip <@U000000002> for coffee',
+      text: '<@B000000001> <@U000000002> for coffee',
       ts: parent.ts,
       type: 'app_mention',
       user: 'U000000001',

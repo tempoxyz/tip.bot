@@ -1,41 +1,8 @@
 import path from 'node:path'
-import { cloudflare } from '@cloudflare/vite-plugin'
-import tailwindcss from '@tailwindcss/vite'
-import { devtools } from '@tanstack/devtools-vite'
-import { tanstackStart } from '@tanstack/react-start/plugin/vite'
-import viteReact from '@vitejs/plugin-react'
-import regen from 'regen-ui/vite'
-import autoImport from 'unplugin-auto-import/vite'
-import iconsResolver from 'unplugin-icons/resolver'
-import icons from 'unplugin-icons/vite'
 import { defineConfig, lazyPlugins } from 'vite-plus'
 
-import { Env } from './test/env.ts'
-
+const isStaticCheck = ['check', 'fmt', 'lint'].includes(process.env.VP_COMMAND ?? '')
 const isTest = process.env.NODE_ENV === 'test' || process.env.VITEST !== undefined
-if (isTest) {
-  // @cloudflare/vitest-pool-workers currently forwards this harmless workerd shutdown log.
-  const writeStdout = process.stdout.write.bind(process.stdout)
-  const writeStderr = process.stderr.write.bind(process.stderr)
-  process.stdout.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
-    if (String(chunk).includes('disconnected: WebSocket peer disconnected')) return true
-    return writeStdout(chunk, ...(args as [BufferEncoding?, (() => void)?]))
-  }) as typeof process.stdout.write
-  process.stderr.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
-    if (String(chunk).includes('disconnected: WebSocket peer disconnected')) return true
-    return writeStderr(chunk, ...(args as [BufferEncoding?, (() => void)?]))
-  }) as typeof process.stderr.write
-}
-
-const portlessTailscaleHost = (() => {
-  const url = process.env.PORTLESS_TAILSCALE_URL
-  if (!url) return null
-  try {
-    return new URL(url).hostname
-  } catch {
-    return null
-  }
-})()
 
 export default defineConfig({
   staged: {
@@ -84,12 +51,25 @@ export default defineConfig({
       {
         plugins: lazyPlugins(async () => {
           if (!isTest) return []
+          // @cloudflare/vitest-pool-workers currently forwards this harmless workerd shutdown log.
+          const writeStdout = process.stdout.write.bind(process.stdout)
+          const writeStderr = process.stderr.write.bind(process.stderr)
+          process.stdout.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
+            if (String(chunk).includes('disconnected: WebSocket peer disconnected')) return true
+            return writeStdout(chunk, ...(args as [BufferEncoding?, (() => void)?]))
+          }) as typeof process.stdout.write
+          process.stderr.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
+            if (String(chunk).includes('disconnected: WebSocket peer disconnected')) return true
+            return writeStderr(chunk, ...(args as [BufferEncoding?, (() => void)?]))
+          }) as typeof process.stderr.write
+
+          const envModule = await import('./test/env.ts')
           const { cloudflareTest } = await import('@cloudflare/vitest-pool-workers')
           return [
             cloudflareTest({
               main: 'test/worker.ts',
               miniflare: {
-                bindings: Env.get(),
+                bindings: envModule.Env.get(),
                 compatibilityDate: '2026-05-07',
                 compatibilityFlags: ['nodejs_compat'],
                 d1Databases: ['DB'],
@@ -112,35 +92,67 @@ export default defineConfig({
     tsconfigPaths: true,
   },
   server: {
-    allowedHosts: portlessTailscaleHost ? [portlessTailscaleHost] : [],
+    allowedHosts: isStaticCheck
+      ? []
+      : (() => {
+          const url = process.env.PORTLESS_TAILSCALE_URL
+          if (!url) return []
+          try {
+            return [new URL(url).hostname]
+          } catch {
+            return []
+          }
+        })(),
     fs: { allow: [process.cwd()] },
   },
-  plugins: [
-    devtools(),
-    regen({ tailwindPlugin: false }),
-    !isTest &&
-      cloudflare({
-        viteEnvironment: { name: 'ssr' },
-        persistState: { path: process.env.CLOUDFLARE_PERSIST_STATE_PATH ?? '.wrangler/state' },
-      }),
-    tailwindcss(),
-    icons({
-      compiler: 'jsx',
-      jsx: 'react',
-    }),
-    autoImport({
-      dts: 'src/auto-imports.d.ts',
-      include: [/\.[jt]sx?$/, /\.[jt]sx?\?tsr-/],
-      resolvers: [
-        iconsResolver({
-          prefix: 'Icon',
-          extension: 'jsx',
+  plugins: lazyPlugins(async () => {
+    const [
+      autoImportModule,
+      devtoolsModule,
+      iconsModule,
+      iconsResolverModule,
+      regenModule,
+      tailwindcssModule,
+      tanstackStartModule,
+      viteReactModule,
+    ] = await Promise.all([
+      import('unplugin-auto-import/vite'),
+      import('@tanstack/devtools-vite'),
+      import('unplugin-icons/vite'),
+      import('unplugin-icons/resolver'),
+      import('regen-ui/vite'),
+      import('@tailwindcss/vite'),
+      import('@tanstack/react-start/plugin/vite'),
+      import('@vitejs/plugin-react'),
+    ])
+
+    return [
+      devtoolsModule.devtools(),
+      regenModule.default({ tailwindPlugin: false }),
+      !isTest &&
+        (await import('@cloudflare/vite-plugin')).cloudflare({
+          viteEnvironment: { name: 'ssr' },
+          persistState: { path: process.env.CLOUDFLARE_PERSIST_STATE_PATH ?? '.wrangler/state' },
         }),
-      ],
-    }),
-    tanstackStart({
-      client: { entry: 'entry-client.tsx' },
-    }),
-    viteReact(),
-  ],
+      tailwindcssModule.default(),
+      iconsModule.default({
+        compiler: 'jsx',
+        jsx: 'react',
+      }),
+      autoImportModule.default({
+        dts: 'src/auto-imports.d.ts',
+        include: [/\.[jt]sx?$/, /\.[jt]sx?\?tsr-/],
+        resolvers: [
+          iconsResolverModule.default({
+            prefix: 'Icon',
+            extension: 'jsx',
+          }),
+        ],
+      }),
+      tanstackStartModule.tanstackStart({
+        client: { entry: 'entry-client.tsx' },
+      }),
+      viteReactModule.default(),
+    ]
+  }),
 })

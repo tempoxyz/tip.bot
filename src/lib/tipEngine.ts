@@ -48,7 +48,7 @@ export async function handleTipRequest(env: Env, request: Request, input: TipInp
   if (existing?.tx_hash)
     return {
       ok: true,
-      text: `Already tipped <@${input.recipientAccountId}> ${existing.amount} PathUSD. Tx: ${existing.tx_hash}`,
+      text: `Already sent: <@${input.senderAccountId}> → <@${input.recipientAccountId}> ${existing.amount} PathUSD${existing.reason ? ` for ${existing.reason}` : ''}. ${formatTxLink(env, existing.tx_hash)}`,
     }
   if (existing) return { ok: false, text: `Tip already recorded with status ${existing.status}.` }
 
@@ -104,7 +104,7 @@ export async function handleTipRequest(env: Env, request: Request, input: TipInp
       .execute()
     return {
       ok: true,
-      text: `<@${input.senderAccountId}> tipped <@${input.recipientAccountId}> ${amount} PathUSD${input.reason ? ` for ${input.reason}` : ''}. Tx: ${txHash}`,
+      text: `Tip sent: <@${input.senderAccountId}> → <@${input.recipientAccountId}> ${amount} PathUSD${input.reason ? ` for ${input.reason}` : ''}. ${formatTxLink(env, txHash)}`,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Tip submission failed.'
@@ -192,4 +192,13 @@ async function submitTipTransaction(
   } as never)
 
   return (receipt as { transactionHash?: string }).transactionHash ?? JSON.stringify(receipt)
+}
+
+function formatTxLink(env: Env, txHash: string) {
+  return `<${getTempoChain(env.TEMPO_CHAIN).blockExplorers.default.url}/tx/${txHash}|Tx ${shortTxHash(txHash)}>`
+}
+
+function shortTxHash(txHash: string) {
+  if (txHash.length <= 13) return txHash
+  return `${txHash.slice(0, 6)}…${txHash.slice(-4)}`
 }

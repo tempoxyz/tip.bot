@@ -31,6 +31,7 @@ if (command === 'manifest') {
 function createManifest() {
   const appName =
     process.env.SLACK_APP_NAME ?? (appEnv === 'production' ? 'tip.bot' : 'tip.bot tmm')
+  const botDisplayName = process.env.SLACK_BOT_DISPLAY_NAME ?? 'tip'
 
   return {
     display_information: {
@@ -41,7 +42,7 @@ function createManifest() {
     features: {
       bot_user: {
         always_online: false,
-        display_name: appName,
+        display_name: botDisplayName,
       },
       slash_commands: [
         {
@@ -154,6 +155,7 @@ Usage:
 Environment:
   SLACK_CONFIG_TOKEN     Slack app configuration token from https://api.slack.com/apps
   SLACK_APP_NAME         Optional manifest app name override
+  SLACK_BOT_DISPLAY_NAME Optional bot mention display name override
   SLACK_APP_ID           Optional app ID for update
   SLACK_LOCAL_APP_ID     Optional local app ID for update
   SLACK_PRODUCTION_APP_ID Optional production app ID for update

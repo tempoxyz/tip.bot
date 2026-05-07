@@ -109,7 +109,7 @@ export async function createSlackInstallUrl(request: Request, env: SlackEnv) {
 
 export async function createConnectUrl(request: Request, env: SlackEnv, data: SlackAccountRef) {
   const workspace = await ensureWorkspace(env, data.teamId)
-  const token = crypto.randomUUID()
+  const token = Nanoid.generate(24)
   const now = Date.now()
   const expiresAt = new Date(now + connectTokenTtlMs).toISOString()
   const nowIso = new Date(now).toISOString()
