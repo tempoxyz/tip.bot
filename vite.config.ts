@@ -10,6 +10,8 @@ import iconsResolver from 'unplugin-icons/resolver'
 import icons from 'unplugin-icons/vite'
 import { defineConfig, lazyPlugins } from 'vite-plus'
 
+import { Env } from './test/env.ts'
+
 const isTest = process.env.NODE_ENV === 'test' || process.env.VITEST !== undefined
 if (isTest) {
   // @cloudflare/vitest-pool-workers currently forwards this harmless workerd shutdown log.
@@ -38,19 +40,24 @@ const portlessTailscaleHost = (() => {
 export default defineConfig({
   staged: {
     '*': 'vp check --fix',
+    '*.{ts,tsx}': "bash -c 'pnpm typecheck'",
   },
   fmt: {
-    ignorePatterns: ['src/auto-imports.d.ts', 'src/routeTree.gen.ts'],
+    ignorePatterns: [
+      'src/auto-imports.d.ts',
+      'src/routeTree.gen.ts',
+      'src/worker-configuration.d.ts',
+    ],
     singleQuote: true,
     semi: false,
   },
   lint: {
     ignorePatterns: [
       'dist/**',
-      'scripts/**',
       'test/**',
       'src/auto-imports.d.ts',
       'src/lib/db.gen.ts',
+      'src/lib/db.schemas.gen.ts',
       'src/routeTree.gen.ts',
       'src/worker-configuration.d.ts',
     ],
@@ -82,13 +89,7 @@ export default defineConfig({
             cloudflareTest({
               main: 'test/worker.ts',
               miniflare: {
-                bindings: {
-                  ACCESS_KEY_ENCRYPTION_SECRET: 'test-access-key-encryption-secret',
-                  FEE_PAYER_PRIVATE_KEY:
-                    '0x0000000000000000000000000000000000000000000000000000000000000001',
-                  SLACK_SIGNING_SECRET: 'test-signing-secret',
-                  TEMPO_CHAIN: 'testnet',
-                },
+                bindings: Env.get(),
                 compatibilityDate: '2026-05-07',
                 compatibilityFlags: ['nodejs_compat'],
                 d1Databases: ['DB'],

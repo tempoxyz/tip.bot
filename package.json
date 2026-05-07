@@ -27,7 +27,10 @@
     "slack:app:validate": "node --experimental-strip-types scripts/slackApp.ts validate",
     "test": "vp test",
     "test:e2e": "playwright test --config test/playwright.config.ts --pass-with-no-tests",
-    "typecheck": "tsgo --noEmit && tsgo --noEmit -p tsconfig.node.json"
+    "typecheck": "tsgo -b",
+    "typecheck:app": "tsgo --noEmit -p config/tsconfig.app.json",
+    "typecheck:scripts": "tsgo --noEmit -p config/tsconfig.node.json",
+    "typecheck:test": "tsgo --noEmit -p config/tsconfig.test.json && tsgo --noEmit -p config/tsconfig.workers.json"
   },
   "dependencies": {
     "@base-ui/react": "1.4.1",

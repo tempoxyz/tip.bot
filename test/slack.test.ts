@@ -10,7 +10,7 @@ import { api } from '#/lib/api.ts'
 import { encryptSecret } from '#/lib/crypto.ts'
 import { createDb } from '#/lib/db.ts'
 import { handleSlackCommandRequest, handleSlackEventRequest } from '#/lib/slackHandlers.ts'
-import type { TipEnv } from '#/lib/tipEngine.ts'
+import { Env as TestEnv, type TestEnv as TestEnvironment } from './env.ts'
 
 const signingSecret = 'test-signing-secret'
 
@@ -209,19 +209,18 @@ async function getAvailablePort() {
   return address.port
 }
 
-async function createEnv(apiUrl: string, overrides: Partial<TipEnv> = {}) {
+async function createEnv(apiUrl: string, overrides: Partial<TestEnvironment> = {}) {
   const env = {
-    ACCESS_KEY_ENCRYPTION_SECRET: 'test-encryption-secret',
+    ...TestEnv.get(),
     DB: createTestDatabase(),
     SLACK_API_URL: apiUrl,
-    SLACK_SIGNING_SECRET: signingSecret,
     ...overrides,
-  } as TipEnv
+  } as TestEnvironment
   await installSlackTestApp(env)
-  return env
+  return env as unknown as Env & TestEnvironment
 }
 
-async function installSlackTestApp(env: TipEnv) {
+async function installSlackTestApp(env: TestEnvironment) {
   const now = new Date().toISOString()
   if (!env.ACCESS_KEY_ENCRYPTION_SECRET)
     throw new Error('ACCESS_KEY_ENCRYPTION_SECRET is not configured.')

@@ -42,7 +42,7 @@ jobs:
           SLACK_SIGNING_SECRET: ci-placeholder
 
       - name: Check generated code
-        run: git diff --exit-code -- src/lib/db.gen.ts worker-configuration.d.ts
+        run: git diff --exit-code -- src/lib/db.gen.ts src/lib/db.schemas.gen.ts src/worker-configuration.d.ts
 
       - name: Check
         run: pnpm check

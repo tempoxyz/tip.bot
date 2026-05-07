@@ -35,7 +35,7 @@ function createManifest() {
   return {
     display_information: {
       background_color: '#111111',
-      description: 'Slack-native stablecoin micropayments',
+      description: 'Chat-native stablecoin micropayments',
       name: appName,
     },
     features: {
@@ -100,7 +100,7 @@ function printCreateResult(result: Record<string, unknown>) {
   console.log(`SLACK_CLIENT_SECRET=${credentials.client_secret}`)
   console.log(`SLACK_SIGNING_SECRET=${credentials.signing_secret}`)
   console.log(`SLACK_APP_BASE_URL=${baseUrl}`)
-  console.log(`SLACK_${appEnv.toUpperCase()}_APP_ID=${result.app_id}`)
+  console.log(`SLACK_${appEnv.toUpperCase()}_APP_ID=${String(result.app_id)}`)
 }
 
 async function slackApi(method: string, body: Record<string, unknown>) {
