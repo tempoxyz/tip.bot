@@ -1,7 +1,7 @@
 {
   "display_information": {
     "name": "tip.bot",
-    "description": "Slack-native Tempo tipping",
+    "description": "Slack-native stablecoin micropayments",
     "background_color": "#111111"
   },
   "features": {
@@ -12,7 +12,7 @@
     "slash_commands": [
       {
         "command": "/tip",
-        "url": "https://REPLACE_WITH_PUBLIC_URL/api/slack/commands",
+        "url": "https://g12wr7p453.tail388b2e.ts.net/api/slack/commands",
         "description": "Tip teammates",
         "usage_hint": "connect | @account | config",
         "should_escape": true
@@ -34,7 +34,7 @@
   },
   "settings": {
     "event_subscriptions": {
-      "request_url": "https://REPLACE_WITH_PUBLIC_URL/api/slack/events",
+      "request_url": "https://g12wr7p453.tail388b2e.ts.net/api/slack/events",
       "bot_events": ["app_mention", "reaction_added"]
     },
     "interactivity": {

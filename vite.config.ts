@@ -26,6 +26,7 @@ if (isTest) {
 }
 
 const eventemitter3Entry = path.resolve('node_modules/.pnpm/node_modules/eventemitter3/index.mjs')
+const portlessTailscaleHost = getPortlessTailscaleHost()
 
 export default defineConfig({
   staged: {
@@ -102,6 +103,7 @@ export default defineConfig({
     tsconfigPaths: true,
   },
   server: {
+    allowedHosts: portlessTailscaleHost ? [portlessTailscaleHost] : [],
     fs: { allow: [process.cwd()] },
   },
   plugins: [
@@ -133,3 +135,14 @@ export default defineConfig({
     viteReact(),
   ],
 })
+
+function getPortlessTailscaleHost() {
+  const url = process.env.PORTLESS_TAILSCALE_URL
+  if (!url) return null
+
+  try {
+    return new URL(url).hostname
+  } catch {
+    return null
+  }
+}
