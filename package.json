@@ -1,0 +1,82 @@
+{
+  "name": "tip",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#/*": "./src/*"
+  },
+  "scripts": {
+    "build": "vp build",
+    "cf-typegen": "wrangler types",
+    "check": "vp check",
+    "db:codegen": "node --experimental-strip-types scripts/db-codegen.ts",
+    "db:execute": "wrangler d1 execute tip --local",
+    "db:migrate": "wrangler d1 migrations apply tip --local",
+    "db:reset": "rm -rf .wrangler/state && pnpm run db:migrate",
+    "deploy": "vp build && wrangler deploy",
+    "dev": "PORTLESS_PORT=443 PORTLESS_HTTPS=1 portless run vp dev",
+    "dev:app": "vp dev",
+    "format": "vp fmt --write",
+    "format:check": "vp fmt --check",
+    "lint": "vp lint",
+    "prepare": "vp config",
+    "preview": "vp build && vp preview",
+    "test": "vp test",
+    "test:e2e": "playwright test --config test/playwright.config.ts --pass-with-no-tests",
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@base-ui/react": "1.4.1",
+    "@cloudflare/vite-plugin": "1.36.0",
+    "@slack/web-api": "7.15.2",
+    "@tanstack/react-devtools": "0.10.2",
+    "@tanstack/react-router": "1.169.2",
+    "@tanstack/react-router-devtools": "1.166.13",
+    "@tanstack/react-router-ssr-query": "1.166.11",
+    "@tanstack/react-start": "1.167.64",
+    "@tanstack/router-plugin": "1.167.34",
+    "accounts": "0.9.0",
+    "kysely": "0.28.17",
+    "nanoid": "^5.1.11",
+    "ox": "0.14.20",
+    "react": "19.2.5",
+    "react-dom": "19.2.5",
+    "regen-ui": "0.2.0",
+    "viem": "2.48.8",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.16.1",
+    "@iconify/json": "2.2.467",
+    "@playwright/test": "1.59.1",
+    "@svgr/core": "8.1.0",
+    "@svgr/plugin-jsx": "8.1.0",
+    "@tailwindcss/vite": "4.2.4",
+    "@tanstack/devtools-vite": "0.6.0",
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "22.19.17",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@typescript/native-preview": "7.0.0-dev.20260505.1",
+    "@vitejs/plugin-react": "6.0.1",
+    "better-sqlite3": "12.9.0",
+    "emulate": "0.5.0",
+    "portless": "0.12.0",
+    "tailwindcss": "4.2.4",
+    "typescript": "6.0.3",
+    "unplugin-auto-import": "21.0.0",
+    "unplugin-icons": "23.0.1",
+    "vite": "catalog:",
+    "vite-plus": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "4.88.0"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "^24.5.1",
+      "onFail": "download"
+    }
+  },
+  "packageManager": "pnpm@11.0.7"
+}

@@ -1,0 +1,86 @@
+name: Check
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  WRANGLER_SEND_METRICS: false
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: ./.github/actions/setup-pnpm
+
+      - name: Audit dependencies
+        run: pnpm audit
+
+      - name: Run migrations
+        run: |
+          rm -rf .wrangler/state
+          pnpm run db:migrate
+
+      - name: Generate code
+        run: |
+          pnpm run db:codegen
+          pnpm run cf-typegen
+        env:
+          ACCESS_KEY_ENCRYPTION_SECRET: ci-placeholder
+          FEE_PAYER_PRIVATE_KEY: 0x0000000000000000000000000000000000000000000000000000000000000000
+          SLACK_BOT_TOKEN: ci-placeholder
+          SLACK_SIGNING_SECRET: ci-placeholder
+
+      - name: Check generated code
+        run: git diff --exit-code -- src/lib/db.gen.ts worker-configuration.d.ts
+
+      - name: Check
+        run: pnpm check
+
+      - name: Check types
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  e2e:
+    name: E2E
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: ./.github/actions/setup-pnpm
+
+      - name: Setup Playwright
+        uses: ./.github/actions/setup-playwright
+
+      - name: Run E2E tests
+        run: pnpm test:e2e
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 30

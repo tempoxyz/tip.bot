@@ -1,0 +1,177 @@
+import { createDb } from '#/lib/db.ts'
+import {
+  createConnectUrl,
+  ensureWorkspace,
+  getSlackClient,
+  parseTipText,
+  verifySlackRequest,
+  type SlackEnv,
+} from '#/lib/slack.ts'
+import { handleTipRequest, type TipEnv } from '#/lib/tipEngine.ts'
+
+export async function handleSlackCommandRequest(env: TipEnv, request: Request) {
+  const rawBody = await request.text()
+  if (!(await verifySlackRequest(request, env, rawBody)))
+    return new Response('Invalid Slack signature.', { status: 401 })
+
+  const form = new URLSearchParams(rawBody)
+  const text = (form.get('text') ?? '').trim()
+  const teamId = form.get('team_id') ?? ''
+  const senderAccountId = form.get('user_id') ?? ''
+
+  if (text === 'connect')
+    return jsonSlack(
+      `Connect your Tempo Wallet: ${await createConnectUrl(request, env, { accountId: senderAccountId, teamId })}`,
+      true,
+    )
+
+  if (text.startsWith('config'))
+    return jsonSlack(await handleConfigCommand(env, teamId, senderAccountId, text), true)
+
+  const parsed = parseTipText(text)
+  if (!parsed) return jsonSlack('Usage: /tip @account or /tip connect', true)
+
+  const result = await handleTipRequest(env, request, {
+    idempotencyKey: `command:${teamId}:${form.get('trigger_id') ?? crypto.randomUUID()}`,
+    reason: parsed.reason,
+    recipientAccountId: parsed.recipientAccountId,
+    senderAccountId,
+    sourceType: 'command',
+    teamId,
+  })
+  return jsonSlack(result.text, !result.ok)
+}
+
+export async function handleSlackEventRequest(env: TipEnv, request: Request) {
+  const rawBody = await request.text()
+  if (!(await verifySlackRequest(request, env, rawBody)))
+    return new Response('Invalid Slack signature.', { status: 401 })
+
+  const json = JSON.parse(rawBody) as SlackEventEnvelope
+  if (json.type === 'url_verification') return new Response(json.challenge ?? '')
+  if (!json.event) return Response.json({ ok: true })
+
+  if (json.event.type === 'app_mention') await handleMention(env, request, json)
+  if (json.event.type === 'reaction_added') await handleReaction(env, request, json)
+
+  return Response.json({ ok: true })
+}
+
+async function handleConfigCommand(
+  env: SlackEnv,
+  teamId: string,
+  senderAccountId: string,
+  text: string,
+) {
+  if (!(await isAdmin(env, senderAccountId))) return 'Only Slack admins can change tip config.'
+
+  const workspace = await ensureWorkspace(env, teamId)
+  const parts = text.split(/\s+/)
+  const key = parts[1]
+  const value = parts[2]
+
+  if (!key || !value)
+    return `Current config: emoji ${workspace.tip_emoji}, amount ${workspace.tip_amount}, cap ${workspace.daily_cap}`
+
+  if (!['amount', 'cap', 'emoji'].includes(key)) return 'Config keys: emoji, amount, cap.'
+  await createDb(env.DB)
+    .updateTable('workspace')
+    .set({
+      ...(key === 'amount' ? { tip_amount: value } : {}),
+      ...(key === 'cap' ? { daily_cap: value } : {}),
+      ...(key === 'emoji' ? { tip_emoji: value.replaceAll(':', '') } : {}),
+      updated_at: new Date().toISOString(),
+    })
+    .where('id', '=', workspace.id)
+    .execute()
+
+  return `Updated ${key}.`
+}
+
+async function handleMention(env: TipEnv, request: Request, envelope: SlackEventEnvelope) {
+  const event = envelope.event!
+  if (!event.user || !event.text) return
+
+  const text = event.text.replace(/^<@[A-Z0-9]+>\s*/i, '').replace(/^tip\s+/i, '')
+  const parsed = parseTipText(text)
+  if (!parsed) return
+
+  const result = await handleTipRequest(env, request, {
+    idempotencyKey: `mention:${envelope.team_id}:${envelope.event_id}`,
+    reason: parsed.reason,
+    recipientAccountId: parsed.recipientAccountId,
+    senderAccountId: event.user,
+    sourceType: 'mention',
+    teamId: envelope.team_id,
+  })
+
+  await (
+    await getSlackClient(env)
+  ).chat.postMessage({
+    channel: event.channel!,
+    text: result.text,
+    thread_ts: event.thread_ts ?? event.ts,
+  })
+}
+
+async function handleReaction(env: TipEnv, request: Request, envelope: SlackEventEnvelope) {
+  const event = envelope.event!
+  if (!event.item?.channel || !event.item.ts || !event.reaction || !event.user) return
+
+  const workspace = await ensureWorkspace(env, envelope.team_id)
+  if (event.reaction !== workspace.tip_emoji) return
+
+  const client = await getSlackClient(env)
+  const history = await client.conversations.history({
+    channel: event.item.channel,
+    inclusive: true,
+    latest: event.item.ts,
+    limit: 1,
+  })
+  const message = history.messages?.[0]
+  if (!message?.user || message.user === event.user) return
+
+  const result = await handleTipRequest(env, request, {
+    idempotencyKey: `reaction:${envelope.team_id}:${event.item.channel}:${event.item.ts}:${event.user}:${event.reaction}`,
+    reason: 'reaction tip',
+    recipientAccountId: message.user,
+    senderAccountId: event.user,
+    sourceType: 'reaction',
+    teamId: envelope.team_id,
+  })
+
+  await client.chat.postMessage({
+    channel: event.item.channel,
+    text: result.text,
+    thread_ts: event.item.ts,
+  })
+}
+
+async function isAdmin(env: SlackEnv, accountId: string) {
+  const allowlist = (env.SLACK_ADMIN_ACCOUNT_IDS ?? '').split(',').map((id) => id.trim())
+  if (allowlist.includes(accountId)) return true
+
+  const info = await (await getSlackClient(env)).users.info({ user: accountId })
+  return Boolean(info.user?.is_admin || info.user?.is_owner)
+}
+
+function jsonSlack(text: string, ephemeral: boolean) {
+  return Response.json({ response_type: ephemeral ? 'ephemeral' : 'in_channel', text })
+}
+
+type SlackEventEnvelope = {
+  challenge?: string
+  event?: {
+    channel?: string
+    item?: { channel?: string; ts?: string; type?: string }
+    reaction?: string
+    text?: string
+    thread_ts?: string
+    ts?: string
+    type: string
+    user?: string
+  }
+  event_id: string
+  team_id: string
+  type: string
+}

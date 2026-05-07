@@ -1,0 +1,16 @@
+name: Pull Request
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+env:
+  WRANGLER_SEND_METRICS: false
+
+jobs:
+  check:
+    name: Check
+    uses: ./.github/workflows/check.yml
