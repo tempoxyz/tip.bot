@@ -12,9 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as RelayRouteImport } from './routes/relay'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as ApiSlackEventsRouteImport } from './routes/api/slack/events'
-import { Route as ApiSlackCommandsRouteImport } from './routes/api/slack/commands'
-import { Route as ApiConnectCompleteRouteImport } from './routes/api/connect/complete'
+import { Route as ApiSplatRouteImport } from './routes/api/$'
 
 const RelayRoute = RelayRouteImport.update({
   id: '/relay',
@@ -31,19 +29,9 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiSlackEventsRoute = ApiSlackEventsRouteImport.update({
-  id: '/api/slack/events',
-  path: '/api/slack/events',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiSlackCommandsRoute = ApiSlackCommandsRouteImport.update({
-  id: '/api/slack/commands',
-  path: '/api/slack/commands',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiConnectCompleteRoute = ApiConnectCompleteRouteImport.update({
-  id: '/api/connect/complete',
-  path: '/api/connect/complete',
+const ApiSplatRoute = ApiSplatRouteImport.update({
+  id: '/api/$',
+  path: '/api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -51,61 +39,34 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/connect': typeof ConnectRoute
   '/relay': typeof RelayRoute
-  '/api/connect/complete': typeof ApiConnectCompleteRoute
-  '/api/slack/commands': typeof ApiSlackCommandsRoute
-  '/api/slack/events': typeof ApiSlackEventsRoute
+  '/api/$': typeof ApiSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/connect': typeof ConnectRoute
   '/relay': typeof RelayRoute
-  '/api/connect/complete': typeof ApiConnectCompleteRoute
-  '/api/slack/commands': typeof ApiSlackCommandsRoute
-  '/api/slack/events': typeof ApiSlackEventsRoute
+  '/api/$': typeof ApiSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/connect': typeof ConnectRoute
   '/relay': typeof RelayRoute
-  '/api/connect/complete': typeof ApiConnectCompleteRoute
-  '/api/slack/commands': typeof ApiSlackCommandsRoute
-  '/api/slack/events': typeof ApiSlackEventsRoute
+  '/api/$': typeof ApiSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths:
-    | '/'
-    | '/connect'
-    | '/relay'
-    | '/api/connect/complete'
-    | '/api/slack/commands'
-    | '/api/slack/events'
+  fullPaths: '/' | '/connect' | '/relay' | '/api/$'
   fileRoutesByTo: FileRoutesByTo
-  to:
-    | '/'
-    | '/connect'
-    | '/relay'
-    | '/api/connect/complete'
-    | '/api/slack/commands'
-    | '/api/slack/events'
-  id:
-    | '__root__'
-    | '/'
-    | '/connect'
-    | '/relay'
-    | '/api/connect/complete'
-    | '/api/slack/commands'
-    | '/api/slack/events'
+  to: '/' | '/connect' | '/relay' | '/api/$'
+  id: '__root__' | '/' | '/connect' | '/relay' | '/api/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ConnectRoute: typeof ConnectRoute
   RelayRoute: typeof RelayRoute
-  ApiConnectCompleteRoute: typeof ApiConnectCompleteRoute
-  ApiSlackCommandsRoute: typeof ApiSlackCommandsRoute
-  ApiSlackEventsRoute: typeof ApiSlackEventsRoute
+  ApiSplatRoute: typeof ApiSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -131,25 +92,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/slack/events': {
-      id: '/api/slack/events'
-      path: '/api/slack/events'
-      fullPath: '/api/slack/events'
-      preLoaderRoute: typeof ApiSlackEventsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/slack/commands': {
-      id: '/api/slack/commands'
-      path: '/api/slack/commands'
-      fullPath: '/api/slack/commands'
-      preLoaderRoute: typeof ApiSlackCommandsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/connect/complete': {
-      id: '/api/connect/complete'
-      path: '/api/connect/complete'
-      fullPath: '/api/connect/complete'
-      preLoaderRoute: typeof ApiConnectCompleteRouteImport
+    '/api/$': {
+      id: '/api/$'
+      path: '/api/$'
+      fullPath: '/api/$'
+      preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -159,9 +106,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ConnectRoute: ConnectRoute,
   RelayRoute: RelayRoute,
-  ApiConnectCompleteRoute: ApiConnectCompleteRoute,
-  ApiSlackCommandsRoute: ApiSlackCommandsRoute,
-  ApiSlackEventsRoute: ApiSlackEventsRoute,
+  ApiSplatRoute: ApiSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

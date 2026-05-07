@@ -32,54 +32,33 @@ jobs:
       - name: Setup pnpm
         uses: ./.github/actions/setup-pnpm
 
-      - name: Setup production D1 binding
-        env:
-          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
-        run: |
-          test -n "$CLOUDFLARE_D1_DATABASE_ID"
-          node --input-type=module - <<'NODE'
-          import { readFileSync, writeFileSync } from 'node:fs'
-
-          const path = 'wrangler.jsonc'
-          const text = readFileSync(path, 'utf8')
-          const databaseId = process.env.CLOUDFLARE_D1_DATABASE_ID
-
-          writeFileSync(
-            path,
-            text.replace(
-              '"database_id": "00000000-0000-0000-0000-000000000000"',
-              `"database_id": "${databaseId}"`,
-            ),
-          )
-          NODE
-
       - name: Run migrations
-        run: pnpm exec wrangler d1 migrations apply tip --remote
+        run: pnpm exec wrangler d1 migrations apply tip --env production --remote
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
       - name: Build
         run: pnpm build
+        env:
+          CLOUDFLARE_ENV: production
 
       - name: Deploy to Production
         uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # v3.14.1
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy
-          vars: |
-            SLACK_ADMIN_ACCOUNT_IDS
-            TEMPO_CHAIN
+          command: deploy --env production
+          environment: production
           secrets: |
             ACCESS_KEY_ENCRYPTION_SECRET
             FEE_PAYER_PRIVATE_KEY
-            SLACK_BOT_TOKEN
+            SLACK_CLIENT_ID
+            SLACK_CLIENT_SECRET
             SLACK_SIGNING_SECRET
         env:
           ACCESS_KEY_ENCRYPTION_SECRET: ${{ secrets.ACCESS_KEY_ENCRYPTION_SECRET }}
           FEE_PAYER_PRIVATE_KEY: ${{ secrets.FEE_PAYER_PRIVATE_KEY }}
-          SLACK_ADMIN_ACCOUNT_IDS: ${{ vars.SLACK_ADMIN_ACCOUNT_IDS }}
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CLIENT_ID: ${{ secrets.SLACK_CLIENT_ID }}
+          SLACK_CLIENT_SECRET: ${{ secrets.SLACK_CLIENT_SECRET }}
           SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
-          TEMPO_CHAIN: ${{ vars.TEMPO_CHAIN }}

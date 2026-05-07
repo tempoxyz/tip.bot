@@ -7,6 +7,7 @@
 export {}
 declare global {
   const IconLucidePlug: typeof import('~icons/lucide/plug.jsx').default
+  const IconLucidePlus: typeof import('~icons/lucide/plus.jsx').default
   const IconLucideSend: typeof import('~icons/lucide/send.jsx').default
   const IconLucideSettings2: typeof import('~icons/lucide/settings2.jsx').default
   const IconLucideSmilePlus: typeof import('~icons/lucide/smile-plus.jsx').default

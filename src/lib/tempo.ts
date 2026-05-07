@@ -1,6 +1,6 @@
 import { Dialog, Provider, dialog } from 'accounts'
 
-export { defaultChain, pathUsd, pathUsdDecimals } from '#/lib/tempoConstants.ts'
+export { defaultChain, getTempoChain, pathUsd, pathUsdDecimals } from '#/lib/tempoConstants.ts'
 
 export const accessKeyTtlSeconds = 7 * 24 * 60 * 60 // 7 days
 export const connectTokenTtlMs = 15 * 60 * 1000 // 15 minutes

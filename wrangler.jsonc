@@ -17,13 +17,53 @@
       "binding": "DB",
       "database_name": "tip",
       // Local development uses each worktree's .wrangler/state directory.
-      // Replace this placeholder with a real D1 database UUID before deploying D1-backed code.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "1bbff49d-87b8-4f60-b048-cbf9fd1bcbed",
     },
   ],
   "vars": {
-    "SLACK_ADMIN_ACCOUNT_IDS": "",
-    "TEMPO_CHAIN": "tempoModerato",
+    "SLACK_APP_BASE_URL": "https://tip.bot",
+    "TEMPO_CHAIN": "testnet",
+  },
+  "secrets": {
+    "required": [
+      "ACCESS_KEY_ENCRYPTION_SECRET",
+      "FEE_PAYER_PRIVATE_KEY",
+      "SLACK_CLIENT_ID",
+      "SLACK_CLIENT_SECRET",
+      "SLACK_SIGNING_SECRET",
+    ],
+  },
+  "env": {
+    "production": {
+      "name": "tip",
+      "workers_dev": false,
+      "routes": [
+        {
+          "pattern": "tip.bot",
+          "custom_domain": true,
+        },
+      ],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "tip",
+          "database_id": "1bbff49d-87b8-4f60-b048-cbf9fd1bcbed",
+        },
+      ],
+      "vars": {
+        "SLACK_APP_BASE_URL": "https://tip.bot",
+        "TEMPO_CHAIN": "testnet",
+      },
+      "secrets": {
+        "required": [
+          "ACCESS_KEY_ENCRYPTION_SECRET",
+          "FEE_PAYER_PRIVATE_KEY",
+          "SLACK_CLIENT_ID",
+          "SLACK_CLIENT_SECRET",
+          "SLACK_SIGNING_SECRET",
+        ],
+      },
+    },
   },
   /**
    * Smart Placement
@@ -42,7 +82,6 @@
    * Note: Use secrets to store sensitive data.
    * https://developers.cloudflare.com/workers/configuration/secrets/
    */
-  // Required secrets: ACCESS_KEY_ENCRYPTION_SECRET, FEE_PAYER_PRIVATE_KEY, SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET.
   /**
    * Static Assets
    * https://developers.cloudflare.com/workers/static-assets/binding/

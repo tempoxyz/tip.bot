@@ -7,14 +7,10 @@ import { decryptSecret } from '#/lib/crypto.ts'
 import { createDb } from '#/lib/db.ts'
 import type { DB } from '#/lib/db.gen.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
-import { createConnectUrl, ensureWorkspace, type SlackEnv } from '#/lib/slack.ts'
-import { defaultChain, pathUsd, pathUsdDecimals, tipAttemptTtlMs } from '#/lib/tempo.ts'
+import { createConnectUrl, ensureWorkspace } from '#/lib/slack.ts'
+import { getTempoChain, pathUsd, pathUsdDecimals, tipAttemptTtlMs } from '#/lib/tempo.ts'
 
-export type TipEnv = SlackEnv & {
-  ACCESS_KEY_ENCRYPTION_SECRET?: string
-}
-
-export async function handleTipRequest(env: TipEnv, request: Request, input: TipInput) {
+export async function handleTipRequest(env: Env, request: Request, input: TipInput) {
   const workspace = await ensureWorkspace(env, input.teamId)
   const sender = await getAccount(env, workspace.id, input.senderAccountId)
   if (!sender?.tempo_address || !sender.access_key_ciphertext || !sender.access_key_authorization)
@@ -130,7 +126,7 @@ export type TipInput = {
   teamId: string
 }
 
-async function getAccount(env: TipEnv, workspaceId: string, platformAccountId: string) {
+async function getAccount(env: Env, workspaceId: string, platformAccountId: string) {
   return await createDb(env.DB)
     .selectFrom('account')
     .selectAll()
@@ -141,7 +137,7 @@ async function getAccount(env: TipEnv, workspaceId: string, platformAccountId: s
 }
 
 async function isDailyCapExceeded(
-  env: TipEnv,
+  env: Env,
   senderAccountId: string,
   dailyCap: string,
   amount: string,
@@ -160,7 +156,7 @@ async function isDailyCapExceeded(
 }
 
 async function submitTipTransaction(
-  env: TipEnv,
+  env: Env,
   request: Request,
   input: {
     amount: string
@@ -181,7 +177,7 @@ async function submitTipTransaction(
   const keyAuthorization = KeyAuthorization.fromRpc(
     JSON.parse(input.sender.access_key_authorization!),
   )
-  const client = createClient({ account, chain: defaultChain, transport: http() })
+  const client = createClient({ account, chain: getTempoChain(env.TEMPO_CHAIN), transport: http() })
   const receipt = await sendTransactionSync(client, {
     account,
     calls: [

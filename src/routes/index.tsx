@@ -25,11 +25,21 @@ function Home() {
           </p>
           <div className="flex flex-wrap gap-[10px]">
             <Button
+              icon={<IconLucidePlus className="size-4" />}
+              onClick={() => {
+                window.location.href = '/api/slack/install'
+              }}
+              size="large"
+              type="button"
+              variant="primary"
+            >
+              Add to Slack
+            </Button>
+            <Button
               icon={<IconLucidePlug className="size-4" />}
               onClick={() => void navigator.clipboard.writeText('/tip connect')}
               size="large"
               type="button"
-              variant="primary"
             >
               Copy /tip connect
             </Button>

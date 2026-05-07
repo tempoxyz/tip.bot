@@ -25,8 +25,15 @@ if (isTest) {
   }) as typeof process.stderr.write
 }
 
-const eventemitter3Entry = path.resolve('node_modules/.pnpm/node_modules/eventemitter3/index.mjs')
-const portlessTailscaleHost = getPortlessTailscaleHost()
+const portlessTailscaleHost = (() => {
+  const url = process.env.PORTLESS_TAILSCALE_URL
+  if (!url) return null
+  try {
+    return new URL(url).hostname
+  } catch {
+    return null
+  }
+})()
 
 export default defineConfig({
   staged: {
@@ -45,7 +52,7 @@ export default defineConfig({
       'src/auto-imports.d.ts',
       'src/lib/db.gen.ts',
       'src/routeTree.gen.ts',
-      'worker-configuration.d.ts',
+      'src/worker-configuration.d.ts',
     ],
     options: {
       typeAware: true,
@@ -79,9 +86,8 @@ export default defineConfig({
                   ACCESS_KEY_ENCRYPTION_SECRET: 'test-access-key-encryption-secret',
                   FEE_PAYER_PRIVATE_KEY:
                     '0x0000000000000000000000000000000000000000000000000000000000000001',
-                  SLACK_BOT_TOKEN: 'xoxb-test',
                   SLACK_SIGNING_SECRET: 'test-signing-secret',
-                  TEMPO_CHAIN: 'tempoModerato',
+                  TEMPO_CHAIN: 'testnet',
                 },
                 compatibilityDate: '2026-05-07',
                 compatibilityFlags: ['nodejs_compat'],
@@ -99,7 +105,9 @@ export default defineConfig({
     ],
   },
   resolve: {
-    alias: { eventemitter3: eventemitter3Entry },
+    alias: {
+      eventemitter3: path.resolve('node_modules/.pnpm/node_modules/eventemitter3/index.mjs'),
+    },
     tsconfigPaths: true,
   },
   server: {
@@ -135,14 +143,3 @@ export default defineConfig({
     viteReact(),
   ],
 })
-
-function getPortlessTailscaleHost() {
-  const url = process.env.PORTLESS_TAILSCALE_URL
-  if (!url) return null
-
-  try {
-    return new URL(url).hostname
-  } catch {
-    return null
-  }
-}

@@ -12,6 +12,7 @@ dist-ssr
 .vinxi
 __unconfig*
 todos.json
+slackManifest.json
 playwright-report
 test-results
 

@@ -5,11 +5,10 @@ import {
   getSlackClient,
   parseTipText,
   verifySlackRequest,
-  type SlackEnv,
 } from '#/lib/slack.ts'
-import { handleTipRequest, type TipEnv } from '#/lib/tipEngine.ts'
+import { handleTipRequest } from '#/lib/tipEngine.ts'
 
-export async function handleSlackCommandRequest(env: TipEnv, request: Request) {
+export async function handleSlackCommandRequest(env: Env, request: Request) {
   const rawBody = await request.text()
   if (!(await verifySlackRequest(request, env, rawBody)))
     return new Response('Invalid Slack signature.', { status: 401 })
@@ -42,7 +41,7 @@ export async function handleSlackCommandRequest(env: TipEnv, request: Request) {
   return jsonSlack(result.text, !result.ok)
 }
 
-export async function handleSlackEventRequest(env: TipEnv, request: Request) {
+export async function handleSlackEventRequest(env: Env, request: Request) {
   const rawBody = await request.text()
   if (!(await verifySlackRequest(request, env, rawBody)))
     return new Response('Invalid Slack signature.', { status: 401 })
@@ -57,38 +56,7 @@ export async function handleSlackEventRequest(env: TipEnv, request: Request) {
   return Response.json({ ok: true })
 }
 
-async function handleConfigCommand(
-  env: SlackEnv,
-  teamId: string,
-  senderAccountId: string,
-  text: string,
-) {
-  if (!(await isAdmin(env, senderAccountId))) return 'Only Slack admins can change tip config.'
-
-  const workspace = await ensureWorkspace(env, teamId)
-  const parts = text.split(/\s+/)
-  const key = parts[1]
-  const value = parts[2]
-
-  if (!key || !value)
-    return `Current config: emoji ${workspace.tip_emoji}, amount ${workspace.tip_amount}, cap ${workspace.daily_cap}`
-
-  if (!['amount', 'cap', 'emoji'].includes(key)) return 'Config keys: emoji, amount, cap.'
-  await createDb(env.DB)
-    .updateTable('workspace')
-    .set({
-      ...(key === 'amount' ? { tip_amount: value } : {}),
-      ...(key === 'cap' ? { daily_cap: value } : {}),
-      ...(key === 'emoji' ? { tip_emoji: value.replaceAll(':', '') } : {}),
-      updated_at: new Date().toISOString(),
-    })
-    .where('id', '=', workspace.id)
-    .execute()
-
-  return `Updated ${key}.`
-}
-
-async function handleMention(env: TipEnv, request: Request, envelope: SlackEventEnvelope) {
+async function handleMention(env: Env, request: Request, envelope: SlackEventEnvelope) {
   const event = envelope.event!
   if (!event.user || !event.text) return
 
@@ -106,7 +74,7 @@ async function handleMention(env: TipEnv, request: Request, envelope: SlackEvent
   })
 
   await (
-    await getSlackClient(env)
+    await getSlackClient(env, envelope.team_id)
   ).chat.postMessage({
     channel: event.channel!,
     text: result.text,
@@ -114,14 +82,14 @@ async function handleMention(env: TipEnv, request: Request, envelope: SlackEvent
   })
 }
 
-async function handleReaction(env: TipEnv, request: Request, envelope: SlackEventEnvelope) {
+async function handleReaction(env: Env, request: Request, envelope: SlackEventEnvelope) {
   const event = envelope.event!
   if (!event.item?.channel || !event.item.ts || !event.reaction || !event.user) return
 
   const workspace = await ensureWorkspace(env, envelope.team_id)
   if (event.reaction !== workspace.tip_emoji) return
 
-  const client = await getSlackClient(env)
+  const client = await getSlackClient(env, envelope.team_id)
   const history = await client.conversations.history({
     channel: event.item.channel,
     inclusive: true,
@@ -147,11 +115,40 @@ async function handleReaction(env: TipEnv, request: Request, envelope: SlackEven
   })
 }
 
-async function isAdmin(env: SlackEnv, accountId: string) {
-  const allowlist = (env.SLACK_ADMIN_ACCOUNT_IDS ?? '').split(',').map((id) => id.trim())
-  if (allowlist.includes(accountId)) return true
+async function handleConfigCommand(
+  env: Env,
+  teamId: string,
+  senderAccountId: string,
+  text: string,
+) {
+  if (!(await isAdmin(env, teamId, senderAccountId)))
+    return 'Only Slack admins can change tip config.'
 
-  const info = await (await getSlackClient(env)).users.info({ user: accountId })
+  const workspace = await ensureWorkspace(env, teamId)
+  const parts = text.split(/\s+/)
+  const key = parts[1]
+  const value = parts[2]
+
+  if (!key || !value)
+    return `Current config: emoji ${workspace.tip_emoji}, amount ${workspace.tip_amount}, cap ${workspace.daily_cap}`
+
+  if (!['amount', 'cap', 'emoji'].includes(key)) return 'Config keys: emoji, amount, cap.'
+  await createDb(env.DB)
+    .updateTable('workspace')
+    .set({
+      ...(key === 'amount' ? { tip_amount: value } : {}),
+      ...(key === 'cap' ? { daily_cap: value } : {}),
+      ...(key === 'emoji' ? { tip_emoji: value.replaceAll(':', '') } : {}),
+      updated_at: new Date().toISOString(),
+    })
+    .where('id', '=', workspace.id)
+    .execute()
+
+  return `Updated ${key}.`
+}
+
+async function isAdmin(env: Env, teamId: string, accountId: string) {
+  const info = await (await getSlackClient(env, teamId)).users.info({ user: accountId })
   return Boolean(info.user?.is_admin || info.user?.is_owner)
 }
 

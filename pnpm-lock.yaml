@@ -50,6 +50,9 @@ importers:
       accounts:
         specifier: 0.9.0
         version: 0.9.0(@types/react@19.2.14)(react@19.2.5)(typescript@6.0.3)(use-sync-external-store@1.6.0(react@19.2.5))(viem@2.48.8(typescript@6.0.3)(zod@4.4.3))
+      hono:
+        specifier: 4.12.17
+        version: 4.12.17
       kysely:
         specifier: 0.28.17
         version: 0.28.17
@@ -5878,6 +5881,7 @@ time:
   accounts@0.9.0: '2026-05-06T21:23:29.718Z'
   better-sqlite3@12.9.0: '2026-04-12T18:23:42.383Z'
   emulate@0.5.0: '2026-04-29T05:49:35.977Z'
+  hono@4.12.17: '2026-05-05T09:30:51.600Z'
   kysely@0.28.17: '2026-05-03T01:05:34.179Z'
   nanoid@5.1.11: '2026-04-30T22:06:42.984Z'
   ox@0.14.20: '2026-04-21T20:34:36.837Z'

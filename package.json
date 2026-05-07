@@ -7,13 +7,13 @@
   },
   "scripts": {
     "build": "vp build",
-    "cf-typegen": "wrangler types",
+    "cf-typegen": "wrangler types src/worker-configuration.d.ts",
     "check": "vp check",
     "db:codegen": "node --experimental-strip-types scripts/db-codegen.ts",
     "db:execute": "wrangler d1 execute tip --local",
     "db:migrate": "wrangler d1 migrations apply tip --local",
     "db:reset": "rm -rf .wrangler/state && pnpm run db:migrate",
-    "deploy": "vp build && wrangler deploy",
+    "deploy": "CLOUDFLARE_ENV=production vp build && wrangler deploy --env production",
     "dev": "PORTLESS_FUNNEL=1 PORTLESS_PORT=443 PORTLESS_HTTPS=1 portless run vp dev",
     "dev:app": "vp dev",
     "format": "vp fmt --write",
@@ -21,9 +21,13 @@
     "lint": "vp lint",
     "prepare": "vp config",
     "preview": "vp build && vp preview",
+    "slack:app:create": "node --experimental-strip-types scripts/slackApp.ts create",
+    "slack:app:manifest": "node --experimental-strip-types scripts/slackApp.ts manifest",
+    "slack:app:update": "node --experimental-strip-types scripts/slackApp.ts update",
+    "slack:app:validate": "node --experimental-strip-types scripts/slackApp.ts validate",
     "test": "vp test",
     "test:e2e": "playwright test --config test/playwright.config.ts --pass-with-no-tests",
-    "typecheck": "tsgo --noEmit"
+    "typecheck": "tsgo --noEmit && tsgo --noEmit -p tsconfig.node.json"
   },
   "dependencies": {
     "@base-ui/react": "1.4.1",
@@ -36,6 +40,7 @@
     "@tanstack/react-start": "1.167.64",
     "@tanstack/router-plugin": "1.167.34",
     "accounts": "0.9.0",
+    "hono": "4.12.17",
     "kysely": "0.28.17",
     "nanoid": "^5.1.11",
     "ox": "0.14.20",

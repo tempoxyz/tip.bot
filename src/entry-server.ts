@@ -6,16 +6,14 @@ import type { Register } from '@tanstack/react-start'
 const virtualClientEntry = '/@id/virtual:tanstack-start-client-entry'
 const explicitClientEntry = '/src/entry-client.tsx'
 
-type RequestContext = {
-  ctx: ExecutionContext
-  env: Env
-  request: Request
-}
-
 declare module '@tanstack/react-start' {
   interface Register {
     server: {
-      requestContext: RequestContext
+      requestContext: {
+        ctx: ExecutionContext
+        env: Env
+        request: Request
+      }
     }
   }
 }
