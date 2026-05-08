@@ -1,5 +1,5 @@
-import { createDb } from '#db/client.ts'
-import { decryptSecret, encryptSecret, hashValue } from '#/lib/crypto.ts'
+import { createClient } from '#db/client.ts'
+import { decryptSecret, hashValue } from '#/lib/crypto.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import { connectTokenTtlMs } from '#/lib/tempo.ts'
 
@@ -23,74 +23,6 @@ const slackBotScopes = [
 ]
 const slackOAuthStateTtlMs = 10 * 60 * 1000 // 10 minutes
 
-export async function completeSlackInstall(request: Request, env: SlackEnv) {
-  const url = new URL(request.url)
-  const error = url.searchParams.get('error')
-  if (error) throw new Error(`Slack install failed: ${error}`)
-
-  const code = url.searchParams.get('code')
-  const state = url.searchParams.get('state')
-  if (!code || !state) throw new Error('Slack install callback is missing code or state.')
-
-  const expectedRedirectUri = `${getSlackAppOrigin(request, env)}/api/slack/oauth/callback`
-  const stateData = await verifySlackOAuthState(env, state)
-  if (stateData.redirectUri !== expectedRedirectUri)
-    throw new Error('Slack install callback redirect URI does not match state.')
-
-  const oauth = await exchangeSlackOAuthCode(env, code, expectedRedirectUri)
-  if (!oauth.ok) throw new Error(oauth.error ?? 'Slack OAuth token exchange failed.')
-  if (!oauth.access_token) throw new Error('Slack OAuth response did not include a bot token.')
-  if (!oauth.team?.id) throw new Error('Slack OAuth response did not include a team ID.')
-  if (!env.ACCESS_KEY_ENCRYPTION_SECRET)
-    throw new Error('ACCESS_KEY_ENCRYPTION_SECRET is not configured.')
-
-  const teamId = oauth.team.id
-  const teamName = oauth.team.name ?? null
-  const workspace = await ensureWorkspace(env, teamId)
-  const now = new Date().toISOString()
-  const installationId = Nanoid.generate()
-  const botTokenCiphertext = await encryptSecret(
-    oauth.access_token,
-    env.ACCESS_KEY_ENCRYPTION_SECRET,
-  )
-
-  await createDb(env.DB)
-    .updateTable('workspace')
-    .set({ name: teamName, updated_at: now })
-    .where('id', '=', workspace.id)
-    .execute()
-  await createDb(env.DB)
-    .insertInto('slack_installation')
-    .values({
-      bot_token_ciphertext: botTokenCiphertext,
-      bot_user_id: oauth.bot_user_id ?? null,
-      created_at: now,
-      enterprise_id: oauth.enterprise?.id ?? null,
-      id: installationId,
-      installed_by: oauth.authed_user?.id ?? null,
-      scopes: oauth.scope ?? null,
-      team_id: teamId,
-      team_name: teamName,
-      updated_at: now,
-      workspace_id: workspace.id,
-    })
-    .onConflict((oc) =>
-      oc.column('team_id').doUpdateSet({
-        bot_token_ciphertext: botTokenCiphertext,
-        bot_user_id: oauth.bot_user_id ?? null,
-        enterprise_id: oauth.enterprise?.id ?? null,
-        installed_by: oauth.authed_user?.id ?? null,
-        scopes: oauth.scope ?? null,
-        team_name: teamName,
-        updated_at: now,
-        workspace_id: workspace.id,
-      }),
-    )
-    .execute()
-
-  return { teamId, teamName: teamName ?? teamId }
-}
-
 export async function createSlackInstallUrl(request: Request, env: SlackEnv) {
   if (!env.SLACK_CLIENT_ID) throw new Error('SLACK_CLIENT_ID is not configured.')
 
@@ -110,7 +42,7 @@ export async function createConnectUrl(request: Request, env: SlackEnv, data: Sl
   const expiresAt = new Date(now + connectTokenTtlMs).toISOString()
   const nowIso = new Date(now).toISOString()
 
-  await createDb(env.DB)
+  await createClient(env.DB)
     .insertInto('connect_token')
     .values({
       created_at: nowIso,
@@ -130,7 +62,7 @@ export async function createConnectUrl(request: Request, env: SlackEnv, data: Sl
 }
 
 export async function ensureWorkspace(env: SlackEnv, teamId: string) {
-  const existing = await createDb(env.DB)
+  const existing = await createClient(env.DB)
     .selectFrom('workspace')
     .selectAll()
     .where('platform', '=', 'slack')
@@ -139,7 +71,7 @@ export async function ensureWorkspace(env: SlackEnv, teamId: string) {
   if (existing) return existing
 
   const id = Nanoid.generate()
-  await createDb(env.DB)
+  await createClient(env.DB)
     .insertInto('workspace')
     .values({
       created_at: new Date().toISOString(),
@@ -152,7 +84,7 @@ export async function ensureWorkspace(env: SlackEnv, teamId: string) {
       updated_at: new Date().toISOString(),
     })
     .execute()
-  return await createDb(env.DB)
+  return await createClient(env.DB)
     .selectFrom('workspace')
     .selectAll()
     .where('id', '=', id)
@@ -161,7 +93,7 @@ export async function ensureWorkspace(env: SlackEnv, teamId: string) {
 
 export async function getConnectedAccount(env: SlackEnv, data: SlackAccountRef) {
   const workspace = await ensureWorkspace(env, data.teamId)
-  return await createDb(env.DB)
+  return await createClient(env.DB)
     .selectFrom('account')
     .selectAll()
     .where('workspace_id', '=', workspace.id)
@@ -235,7 +167,7 @@ async function createSlackOAuthState(env: SlackEnv, redirectUri: string) {
   return `${payload}.${await signSlackOAuthState(env, payload)}`
 }
 
-async function exchangeSlackOAuthCode(env: SlackEnv, code: string, redirectUri: string) {
+export async function exchangeSlackOAuthCode(env: SlackEnv, code: string, redirectUri: string) {
   if (!env.SLACK_CLIENT_ID) throw new Error('SLACK_CLIENT_ID is not configured.')
   if (!env.SLACK_CLIENT_SECRET) throw new Error('SLACK_CLIENT_SECRET is not configured.')
 
@@ -277,7 +209,7 @@ async function slackApi<T = SlackApiResponse>(
 
 async function getSlackBotToken(env: SlackEnv, teamId?: string) {
   if (teamId) {
-    const installation = await createDb(env.DB)
+    const installation = await createClient(env.DB)
       .selectFrom('slack_installation')
       .select('bot_token_ciphertext')
       .where('team_id', '=', teamId)
@@ -298,7 +230,7 @@ function getSlackApiUrl(env: SlackEnv) {
   return url.endsWith('/') ? url : `${url}/`
 }
 
-function getSlackAppOrigin(request: Request, env: SlackEnv) {
+export function getSlackAppOrigin(request: Request, env: SlackEnv) {
   if (env.HOST) return `https://${env.HOST.replace(/^https?:\/\//, '').replace(/\/+$/, '')}`
   return new URL(request.url).origin.replace(/\/+$/, '')
 }
@@ -317,7 +249,7 @@ async function signSlackOAuthState(env: SlackEnv, payload: string) {
   return bytesToHex(new Uint8Array(digest))
 }
 
-async function verifySlackOAuthState(env: SlackEnv, state: string) {
+export async function verifySlackOAuthState(env: SlackEnv, state: string) {
   const [payload, signature] = state.split('.')
   if (!payload || !signature) throw new Error('Slack install state is invalid.')
   if (!timingSafeEqual(signature, await signSlackOAuthState(env, payload)))
@@ -348,7 +280,7 @@ function timingSafeEqual(left: string, right: string) {
   return result === 0
 }
 
-type SlackOAuthAccessResponse = {
+export type SlackOAuthAccessResponse = {
   access_token?: string
   authed_user?: { id?: string }
   bot_user_id?: string
@@ -379,7 +311,7 @@ type SlackUsersInfoResponse = SlackApiResponse & {
   }
 }
 
-type SlackOAuthState = {
+export type SlackOAuthState = {
   expiresAt: number
   redirectUri: string
 }

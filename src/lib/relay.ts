@@ -2,7 +2,7 @@ import { Handler } from 'accounts/server'
 import { createClient, http, toHex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 
-import { createDb } from '#db/client.ts'
+import { createClient as createDb } from '#db/client.ts'
 import { getTempoChain, pathUsd } from '#/lib/tempo.ts'
 
 const sponsoredTempoGasFloor = 5_000_000n
@@ -28,7 +28,7 @@ export function handleRelay(request: Request, env: RelayEnv) {
         chains: [getTempoChain(env.TEMPO_CHAIN)],
         feePayer: {
           account: privateKeyToAccount(env.FEE_PAYER_PRIVATE_KEY) as never,
-          name: 'Tip',
+          name: 'Tipbot',
           validate: async (transaction: Record<string, unknown>) =>
             await shouldSponsor(env, transaction),
         },

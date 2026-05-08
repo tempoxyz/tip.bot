@@ -38,7 +38,11 @@ export default defineConfig({
     projects: [
       {
         test: {
-          exclude: ['test/e2e/**', 'test/**/*.workers.test.{ts,tsx}'],
+          exclude: [
+            'src/**/*.workers.test.{ts,tsx}',
+            'test/e2e/**',
+            'test/**/*.workers.test.{ts,tsx}',
+          ],
           include: [
             'src/**/*.test.{ts,tsx}',
             'src/**/*.spec.{ts,tsx}',
@@ -78,7 +82,7 @@ export default defineConfig({
           ]
         }),
         test: {
-          include: ['test/**/*.workers.test.{ts,tsx}'],
+          include: ['src/**/*.workers.test.{ts,tsx}', 'test/**/*.workers.test.{ts,tsx}'],
           name: 'workers',
           setupFiles: ['test/workers.setup.ts'],
         },
@@ -146,9 +150,7 @@ export default defineConfig({
           }),
         ],
       }),
-      tanstackStartModule.tanstackStart({
-        client: { entry: 'entry-client.tsx' },
-      }),
+      tanstackStartModule.tanstackStart(),
       viteReactModule.default(),
     ]
   }),

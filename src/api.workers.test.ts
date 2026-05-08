@@ -1,3 +1,6 @@
+// oxlint-disable-next-line typescript-eslint/triple-slash-reference: Workers pool module types are ambient.
+/// <reference path="./worker-configuration.d.ts" />
+
 import { exports } from 'cloudflare:workers'
 import { expect, test } from 'vitest'
 

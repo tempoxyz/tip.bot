@@ -10,14 +10,10 @@ import type {
 import { Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from 'kysely'
 import type { DB } from './types.gen.ts'
 
-export function createDb(database: D1Database | D1DatabaseSession) {
+export function createClient(database: D1Database | D1DatabaseSession) {
   return new Kysely<DB>({
     dialect: new D1Dialect({ database }),
   })
-}
-
-export function createReadDb(database: D1Database) {
-  return createDb(database.withSession('first-unconstrained'))
 }
 
 interface D1DialectConfig {

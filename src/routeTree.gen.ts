@@ -11,7 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as ApiSplatRouteImport } from './routes/api/$'
+import { Route as SlackInstallRouteImport } from './routes/slack/install'
 
 const ConnectRoute = ConnectRouteImport.update({
   id: '/connect',
@@ -23,40 +23,40 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiSplatRoute = ApiSplatRouteImport.update({
-  id: '/api/$',
-  path: '/api/$',
+const SlackInstallRoute = SlackInstallRouteImport.update({
+  id: '/slack/install',
+  path: '/slack/install',
   getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/connect': typeof ConnectRoute
-  '/api/$': typeof ApiSplatRoute
+  '/slack/install': typeof SlackInstallRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/connect': typeof ConnectRoute
-  '/api/$': typeof ApiSplatRoute
+  '/slack/install': typeof SlackInstallRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/connect': typeof ConnectRoute
-  '/api/$': typeof ApiSplatRoute
+  '/slack/install': typeof SlackInstallRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/connect' | '/api/$'
+  fullPaths: '/' | '/connect' | '/slack/install'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/connect' | '/api/$'
-  id: '__root__' | '/' | '/connect' | '/api/$'
+  to: '/' | '/connect' | '/slack/install'
+  id: '__root__' | '/' | '/connect' | '/slack/install'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ConnectRoute: typeof ConnectRoute
-  ApiSplatRoute: typeof ApiSplatRoute
+  SlackInstallRoute: typeof SlackInstallRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -75,11 +75,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/$': {
-      id: '/api/$'
-      path: '/api/$'
-      fullPath: '/api/$'
-      preLoaderRoute: typeof ApiSplatRouteImport
+    '/slack/install': {
+      id: '/slack/install'
+      path: '/slack/install'
+      fullPath: '/slack/install'
+      preLoaderRoute: typeof SlackInstallRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -88,7 +88,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ConnectRoute: ConnectRoute,
-  ApiSplatRoute: ApiSplatRoute,
+  SlackInstallRoute: SlackInstallRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

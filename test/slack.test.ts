@@ -7,10 +7,11 @@ import { createEmulator, type Emulator } from 'emulate'
 import { createClient } from 'viem'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 
-import { createDb } from '#db/client.ts'
-import { api } from '#/lib/api.ts'
+import { createClient as createDb } from '#db/client.ts'
+import { api } from '#/api.ts'
 import { encryptSecret } from '#/lib/crypto.ts'
 import { createRelayTransport } from '#/lib/relay.ts'
+import { createSlackInstallUrl } from '#/lib/slack.ts'
 import { handleSlackCommandRequest, handleSlackEventRequest } from '#/lib/slackHandlers.ts'
 import { getTempoChain } from '#/lib/tempo.ts'
 import { Env as TestEnv, type TestEnv as TestEnvironment } from './env.ts'
@@ -379,10 +380,9 @@ test('Slack OAuth install stores workspace bot token', async () => {
     SLACK_CLIENT_ID: '123.456',
     SLACK_CLIENT_SECRET: 'client-secret',
   })
-  const installResponse = await api.fetch(new Request('http://tip.test/api/slack/install'), env)
-  const installLocation = installResponse.headers.get('location')
-  const installUrl = new URL(installLocation ?? '')
-  expect(installResponse.status).toBe(302)
+  const installUrl = new URL(
+    await createSlackInstallUrl(new Request('http://tip.test/slack/install'), env),
+  )
   expect(installUrl.origin).toBe('https://slack.com')
   expect(installUrl.searchParams.get('client_id')).toBe('123.456')
   expect(installUrl.searchParams.get('redirect_uri')).toBe(

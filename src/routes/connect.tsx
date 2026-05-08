@@ -1,11 +1,21 @@
+import { createClient } from '#db/client.ts'
+import { createServerFn } from '@tanstack/react-start'
+import { env } from 'cloudflare:workers'
 import { createFileRoute } from '@tanstack/react-router'
 import { KeyAuthorization } from 'ox/tempo'
 import { useEffect, useState } from 'react'
-import { parseUnits, stringify, toHex } from 'viem'
+import { parseUnits, toHex } from 'viem'
 import { Account as TempoAccount, Secp256k1 } from 'viem/tempo'
+import { z } from 'zod'
 
+import { encryptSecret, hashValue } from '#/lib/crypto.ts'
+import * as Nanoid from '#/lib/nanoid.ts'
 import { getTempoChain, getTempoProvider, pathUsd, pathUsdDecimals } from '#/lib/tempo.ts'
 import type { TempoChain } from '#/lib/tempoConstants.ts'
+
+export const Route = createFileRoute('/connect')({
+  component: Connect,
+})
 
 function Connect() {
   const [connected, setConnected] = useState(false)
@@ -60,19 +70,16 @@ function Connect() {
       throw new Error(`Tempo Wallet must authorize ${chain.name}.`)
 
     setMessage('Saving encrypted tipping key.')
-    const response = await fetch('/api/connect/complete', {
-      body: stringify({
+    await completeConnect({
+      data: {
         accessKeyAddress: accessKey.address,
         accessKeyAuthorization: keyAuthorization,
         accessKeyExpiresAt: new Date(expiry * 1000).toISOString(),
         accessKeyPrivateKey: privateKey,
         tempoAddress: address,
         token,
-      }),
-      headers: { 'content-type': 'application/json' },
-      method: 'POST',
+      },
     })
-    if (!response.ok) throw new Error(await response.text())
     setConnected(true)
     setMessage('Connected. You can close this tab and tip from Slack.')
   }
@@ -145,10 +152,6 @@ function Connect() {
   )
 }
 
-export const Route = createFileRoute('/connect')({
-  component: Connect,
-})
-
 function SuccessPanel() {
   return (
     <div className="grid gap-5">
@@ -201,3 +204,79 @@ function getErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message
   return 'Connection failed.'
 }
+
+const completeConnect = createServerFn({ method: 'POST' })
+  .inputValidator((data) =>
+    z.parse(
+      z.object({
+        accessKeyAddress: z.string(),
+        accessKeyAuthorization: z.unknown(),
+        accessKeyExpiresAt: z.string(),
+        accessKeyPrivateKey: z.string(),
+        tempoAddress: z.string(),
+        token: z.string(),
+      }),
+      data,
+    ),
+  )
+  .handler(async (c) => {
+    if (!env.ACCESS_KEY_ENCRYPTION_SECRET)
+      throw new Error('ACCESS_KEY_ENCRYPTION_SECRET is not configured.')
+
+    const token = await createClient(env.DB)
+      .selectFrom('connect_token')
+      .selectAll()
+      .where('token_hash', '=', await hashValue(c.data.token))
+      .executeTakeFirst()
+    if (!token || token.used_at) throw new Error('Connect token is invalid.')
+    if (new Date(token.expires_at).getTime() <= Date.now())
+      throw new Error('Connect token expired. Run /tip connect again.')
+
+    const existing = await createClient(env.DB)
+      .selectFrom('account')
+      .select('id')
+      .where('workspace_id', '=', token.workspace_id)
+      .where('platform', '=', 'slack')
+      .where('platform_account_id', '=', token.platform_account_id)
+      .executeTakeFirst()
+    const accountId = existing?.id ?? Nanoid.generate()
+    const encrypted = await encryptSecret(
+      c.data.accessKeyPrivateKey,
+      env.ACCESS_KEY_ENCRYPTION_SECRET,
+    )
+    const now = new Date().toISOString()
+
+    await createClient(env.DB)
+      .insertInto('account')
+      .values({
+        access_key_address: c.data.accessKeyAddress,
+        access_key_authorization: JSON.stringify(c.data.accessKeyAuthorization),
+        access_key_ciphertext: encrypted,
+        access_key_expires_at: c.data.accessKeyExpiresAt,
+        created_at: now,
+        id: accountId,
+        platform: 'slack',
+        platform_account_id: token.platform_account_id,
+        tempo_address: c.data.tempoAddress.toLowerCase(),
+        updated_at: now,
+        workspace_id: token.workspace_id,
+      })
+      .onConflict((oc) =>
+        oc.columns(['workspace_id', 'platform', 'platform_account_id']).doUpdateSet({
+          access_key_address: c.data.accessKeyAddress,
+          access_key_authorization: JSON.stringify(c.data.accessKeyAuthorization),
+          access_key_ciphertext: encrypted,
+          access_key_expires_at: c.data.accessKeyExpiresAt,
+          tempo_address: c.data.tempoAddress.toLowerCase(),
+          updated_at: now,
+        }),
+      )
+      .execute()
+    await createClient(env.DB)
+      .updateTable('connect_token')
+      .set({ used_at: now })
+      .where('id', '=', token.id)
+      .execute()
+
+    return { ok: true }
+  })

@@ -3,7 +3,7 @@ import { createClient, parseUnits, type Hex } from 'viem'
 import { sendTransactionSync } from 'viem/actions'
 import { Account as TempoAccount, Actions } from 'viem/tempo'
 
-import { createDb } from '#db/client.ts'
+import { createClient as createDb } from '#db/client.ts'
 import type { DB } from '#db/types.gen.ts'
 import { decryptSecret } from '#/lib/crypto.ts'
 import * as Nanoid from '#/lib/nanoid.ts'

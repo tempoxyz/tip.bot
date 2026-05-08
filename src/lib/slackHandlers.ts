@@ -1,4 +1,4 @@
-import { createDb } from '#db/client.ts'
+import { createClient } from '#db/client.ts'
 import {
   createConnectUrl,
   ensureWorkspace,
@@ -157,7 +157,7 @@ async function handleConfigCommand(
     return 'Only Slack admins can change tip config.'
 
   if (!['amount', 'cap', 'emoji'].includes(key)) return 'Config keys: emoji, amount, cap.'
-  await createDb(env.DB)
+  await createClient(env.DB)
     .updateTable('workspace')
     .set({
       ...(key === 'amount' ? { tip_amount: value } : {}),
