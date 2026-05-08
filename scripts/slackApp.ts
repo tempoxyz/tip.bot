@@ -29,19 +29,18 @@ if (command === 'manifest') {
 }
 
 function createManifest() {
-  const appName =
-    process.env.SLACK_APP_NAME ?? (appEnv === 'production' ? 'tip.bot' : 'tip.bot tmm')
-  const botDisplayName = process.env.SLACK_BOT_DISPLAY_NAME ?? 'tip'
+  const appName = process.env.SLACK_APP_NAME ?? (appEnv === 'production' ? 'Tipbot' : 'Tipbot tmm')
+  const botDisplayName = process.env.SLACK_BOT_DISPLAY_NAME ?? 'Tipbot'
 
   return {
     display_information: {
       background_color: '#111111',
-      description: 'Chat-native stablecoin micropayments',
+      description: 'Sometime tipper, sometime messenger, always bot.',
       name: appName,
     },
     features: {
       bot_user: {
-        always_online: false,
+        always_online: true,
         display_name: botDisplayName,
       },
       slash_commands: [

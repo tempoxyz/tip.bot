@@ -60,8 +60,20 @@ async function handleMention(env: Env, request: Request, envelope: SlackEventEnv
   const event = envelope.event!
   if (!event.user || !event.text) return
 
-  const text = event.text.replace(/^<@[A-Z0-9]+>\s*/i, '').replace(/^tip\s+/i, '')
-  const parsed = parseTipText(text)
+  const text = event.text.replace(/^<@[A-Z0-9]+>\s*/i, '')
+  if (isIntroText(text)) {
+    await (
+      await getSlackClient(env, envelope.team_id)
+    ).chat.postMessage({
+      channel: event.channel!,
+      text: 'I’m Tipbot: sometime tipper, sometime messenger, always bot. Connect with `/tip connect`, then send stablecoins with `/tip @account for coffee`, `@Tipbot @account for coffee`, or a :money_with_wings: reaction.',
+      thread_ts: event.thread_ts ?? event.ts,
+    })
+    return
+  }
+
+  const tipText = text.replace(/^tip\s+/i, '')
+  const parsed = parseTipText(tipText)
   if (!parsed) return
 
   const result = await handleTipRequest(env, request, {
@@ -154,6 +166,12 @@ async function isAdmin(env: Env, teamId: string, accountId: string) {
 
 function jsonSlack(text: string, ephemeral: boolean) {
   return Response.json({ response_type: ephemeral ? 'ephemeral' : 'in_channel', text })
+}
+
+function isIntroText(text: string) {
+  return /^(?:hi|hello|hey|help|introduce yourself|intro|what do you do|who are you)\??$/i.test(
+    text.trim(),
+  )
 }
 
 type SlackEventEnvelope = {

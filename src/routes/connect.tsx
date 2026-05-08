@@ -81,14 +81,15 @@ function Connect() {
           <p className="label-13 text-foreground-secondary">Slack wallet binding</p>
           <h1 className="heading-32 text-foreground">Connect Tempo Wallet</h1>
           <p className="copy-14 text-foreground-secondary">
-            Authorize a scoped server key so Slack commands and reactions can submit PathUSD tips.
+            Authorize a scoped server key so Slack commands and reactions can submit stablecoin
+            tips.
           </p>
         </header>
 
         <Rows>
           <Row label="Access key">7 days</Row>
-          <Row label="Daily limit">1 PathUSD</Row>
-          <Row label="Scope">PathUSD transfers only</Row>
+          <Row label="Daily limit">1 stablecoin</Row>
+          <Row label="Scope">Stablecoin transfers only</Row>
         </Rows>
 
         <Button

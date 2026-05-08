@@ -1,123 +1,77 @@
 import { createFileRoute } from '@tanstack/react-router'
-import type { ReactNode } from 'react'
-import { Button, Info, Row, Rows, TokenIcon } from 'regen-ui'
-
-import { defaultChain, pathUsd } from '#/lib/tempoConstants.ts'
-
-export const Route = createFileRoute('/')({
-  component: Home,
-})
 
 function Home() {
   return (
-    <main
-      data-regen-color="blue"
-      data-regen-radius="large"
-      className="min-h-screen bg-background text-foreground"
-    >
-      <section className="mx-auto grid min-h-screen w-[min(100%,72rem)] content-center gap-[32px] px-[24px] py-[48px]">
-        <header className="grid max-w-[48rem] gap-[18px]">
-          <p className="label-13 text-foreground-secondary">Tempo Slack tipping</p>
-          <h1 className="heading-48 text-foreground">Tip teammates without leaving Slack.</h1>
-          <p className="copy-16 max-w-[42rem] text-foreground-secondary">
-            Connect a Tempo Wallet once, authorize a scoped PathUSD access key, then send fixed
-            micro-tips from slash commands, bot mentions, or the workspace reaction.
-          </p>
-          <div className="flex flex-wrap gap-[10px]">
-            <Button
-              icon={<IconLucidePlus className="size-4" />}
-              onClick={() => {
-                window.location.href = '/api/slack/install'
-              }}
-              size="large"
-              type="button"
-              variant="primary"
-            >
-              Add to Slack
-            </Button>
-            <Button
-              icon={<IconLucidePlug className="size-4" />}
-              onClick={() => void navigator.clipboard.writeText('/tip connect')}
-              size="large"
-              type="button"
-            >
-              Copy /tip connect
-            </Button>
-            <Button
-              icon={<IconLucideSend className="size-4" />}
-              onClick={() => void navigator.clipboard.writeText('/tip @account')}
-              size="large"
-              type="button"
-            >
-              Copy tip command
-            </Button>
+    <main className="min-h-screen bg-[#1d1c22] p-8 text-[#d1d2d3] sm:p-[33px]">
+      <section className="grid max-w-[75rem] gap-10">
+        <header className="flex items-center gap-6">
+          <img
+            alt="Tipbot"
+            className="size-[205px] rounded-[23px] object-cover"
+            height={205}
+            src="/tipbot.png"
+            width={205}
+          />
+          <div className="flex items-center gap-[18px] pt-3">
+            <h1 className="text-[34px] font-bold leading-none tracking-[-0.04em] text-[#d1d2d3]">
+              Tipbot
+            </h1>
+            <span className="rounded bg-[#2a2d33] px-1.5 py-1 text-xl font-bold leading-none tracking-[-0.04em] text-[#c9cbcf]">
+              APP
+            </span>
+            <span className="size-[18px] rounded-full bg-[#25c489]" />
           </div>
         </header>
 
-        <section className="grid gap-[16px] md:grid-cols-[1.05fr_0.95fr]">
-          <div className="grid gap-[16px] rounded-body border border-border bg-surface p-[18px]">
-            <div className="flex items-start gap-[12px]">
-              <TokenIcon
-                address={pathUsd}
-                chainId={defaultChain.id}
-                className="h-[40px] w-[40px]"
-              />
-              <div className="grid gap-[4px]">
-                <h2 className="heading-24 text-foreground">PathUSD tips on Tempo testnet</h2>
-                <p className="copy-14 text-foreground-secondary">
-                  Default amount is 0.0001 PathUSD with a 1 PathUSD daily cap per sender.
-                </p>
-              </div>
-            </div>
-            <Rows>
-              <Row label="Slash command">/tip @account</Row>
-              <Row label="Mention command">@tip tip @account</Row>
-              <Row label="Reaction">money_with_wings by default</Row>
-              <Row label="Admin config">/tip config amount, emoji, cap</Row>
-            </Rows>
-          </div>
+        <p className="text-[34px] font-normal leading-[1.3] tracking-[-0.035em] text-[#d1d2d3] sm:text-[36px]">
+          This is the very beginning of your direct message history with{' '}
+          <a
+            className="rounded-md bg-[#143247] px-1.5 py-0.5 text-[#25b8f2] no-underline"
+            href="/api/slack/install"
+          >
+            @Tipbot
+          </a>
+        </p>
 
-          <div className="grid content-start gap-[12px] rounded-body border border-border bg-surface p-[18px]">
-            <h2 className="heading-24 text-foreground">Slack-native flow</h2>
-            <Info message="Both sender and recipient must connect before a tip executes." />
-            <Info
-              message="Reaction tips post confirmation as a thread reply on the original message."
-              type="warning"
-            />
-            <div className="mt-[4px] grid gap-[10px]">
-              <Step
-                icon={<IconLucidePlug className="size-4" />}
-                label="Connect"
-                text="Slack issues a one-time wallet link."
-              />
-              <Step
-                icon={<IconLucideSettings2 className="size-4" />}
-                label="Authorize"
-                text="Tempo Wallet grants a 7-day key."
-              />
-              <Step
-                icon={<IconLucideSmilePlus className="size-4" />}
-                label="React"
-                text="Configured emoji triggers the same tip engine."
-              />
+        <article className="flex max-w-[58rem] gap-3 opacity-0" data-tipbot-message>
+          <img
+            alt=""
+            className="mt-1 size-11 rounded-xl object-cover"
+            height={44}
+            src="/tipbot.png"
+            width={44}
+          />
+          <div className="grid gap-1.5">
+            <div className="flex items-baseline gap-2">
+              <p className="text-[17px] font-bold leading-none text-[#f4f4f5]">Tipbot</p>
+              <p className="text-[13px] font-medium leading-none text-[#8d8e93]">just now</p>
             </div>
+            <div className="rounded-2xl rounded-ss-md bg-[#2a2d33] px-4 py-3 text-[18px] leading-7 text-[#e8e8ea] shadow-[0_1px_0_#00000033]">
+              <p>
+                Hey, I turn Slack into a tiny tipping lane. Run{' '}
+                <code className="rounded bg-[#1d1c22] px-1.5 py-0.5 text-[#25b8f2]">
+                  /tip connect
+                </code>{' '}
+                once to link Tempo Wallet, then send PathUSD with{' '}
+                <code className="rounded bg-[#1d1c22] px-1.5 py-0.5 text-[#25b8f2]">
+                  /tip @account
+                </code>{' '}
+                or your workspace reaction.
+              </p>
+            </div>
+            <a
+              className="mt-2 inline-flex h-9 w-fit items-center justify-center justify-self-center rounded-md bg-[#f8f8f8] px-3 text-sm font-bold leading-none text-[#1d1c22] no-underline shadow-[0_1px_0_#00000066] transition hover:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#25b8f2]"
+              href="/api/slack/install"
+            >
+              Add to Slack
+            </a>
           </div>
-        </section>
+        </article>
       </section>
     </main>
   )
 }
 
-function Step(props: { icon: ReactNode; label: string; text: string }) {
-  return (
-    <div className="grid grid-cols-[32px_1fr] gap-[10px] rounded-body bg-secondary p-[12px]">
-      <div className="grid h-[32px] w-[32px] place-items-center rounded-body bg-accent text-on-accent">
-        {props.icon}
-      </div>
-      <div className="grid gap-[2px]">
-        <p className="label-14 text-foreground">{props.label}</p>
-        <p className="copy-13 text-foreground-secondary">{props.text}</p>
-      </div>
-    </div>
-  )
-}
+export const Route = createFileRoute('/')({
+  component: Home,
+})

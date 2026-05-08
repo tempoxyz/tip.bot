@@ -135,7 +135,7 @@ test('/tip success is public and links the transaction', async () => {
   expect(response.status).toBe(200)
   expect(await response.json()).toEqual({
     response_type: 'in_channel',
-    text: `Already sent: <@U000000001> → <@U000000002> 0.0001 PathUSD for coffee. <https://explore.testnet.tempo.xyz/tx/${txHash}|Tx 0x1234…cdef>`,
+    text: `Already sent: <@U000000001> → <@U000000002> 0.0001 stablecoins for coffee. <https://explore.testnet.tempo.xyz/tx/${txHash}|Tx 0x1234…cdef>`,
   })
 })
 
@@ -178,6 +178,43 @@ test('app mention can tip without an extra tip verb', async () => {
   ).toBe(true)
 })
 
+test('app mention can introduce Tipbot', async () => {
+  const parent = await slackApi<{ ok: boolean; ts: string }>(slack.apiUrl, 'chat.postMessage', {
+    channel: 'C000000001',
+    text: '<@U000000001> ask Tipbot for help',
+  })
+  const body = JSON.stringify({
+    event: {
+      channel: 'C000000001',
+      text: '<@B000000001> introduce yourself',
+      ts: parent.ts,
+      type: 'app_mention',
+      user: 'U000000001',
+    },
+    event_id: 'Ev000000002',
+    team_id: 'T000000001',
+    type: 'event_callback',
+  })
+
+  const response = await handleSlackEventRequest(
+    await createEnv(slack.apiUrl),
+    createSlackRequest('/api/slack/events', body, 'application/json'),
+  )
+
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual({ ok: true })
+
+  const replies = await slackApi<{ messages: Array<{ text?: string }> }>(
+    slack.apiUrl,
+    'conversations.replies',
+    {
+      channel: 'C000000001',
+      ts: parent.ts,
+    },
+  )
+  expect(replies.messages.some((message) => message.text?.includes('I’m Tipbot'))).toBe(true)
+})
+
 test('invalid Slack signatures are rejected', async () => {
   const response = await handleSlackCommandRequest(
     await createEnv(slack.apiUrl),
@@ -193,6 +230,16 @@ test('invalid Slack signatures are rejected', async () => {
   )
 
   expect(response.status).toBe(401)
+})
+
+test('relay is served from the Hono API route', async () => {
+  const response = await api.fetch(new Request('http://tip.test/api/relay'), {
+    ...TestEnv.get(),
+    FEE_PAYER_PRIVATE_KEY: '',
+  } as unknown as Env)
+
+  expect(response.status).toBe(500)
+  expect(await response.text()).toBe('Fee payer is not configured.')
 })
 
 test('Slack OAuth install stores workspace bot token', async () => {

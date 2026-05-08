@@ -1,10 +1,17 @@
+import { Handler } from 'accounts/server'
 import { Hono } from 'hono'
+import { privateKeyToAccount } from 'viem/accounts'
 
 import { encryptSecret, hashValue } from '#/lib/crypto.ts'
 import { createDb } from '#/lib/db.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
-import { handleSlackCommandRequest, handleSlackEventRequest } from '#/lib/slackHandlers.ts'
 import { completeSlackInstall, createSlackInstallUrl } from '#/lib/slack.ts'
+import { handleSlackCommandRequest, handleSlackEventRequest } from '#/lib/slackHandlers.ts'
+import { pathUsd } from '#/lib/tempo.ts'
+
+type RelayEnv = Env & {
+  FEE_PAYER_PRIVATE_KEY?: `0x${string}`
+}
 
 export const api = new Hono<{ Bindings: Env }>().basePath('/api')
 
@@ -78,6 +85,12 @@ api
 
     return Response.json({ ok: true })
   })
+  .get('/relay', async (c) => {
+    return handleRelay(c.req.raw, c.env as RelayEnv)
+  })
+  .post('/relay', async (c) => {
+    return handleRelay(c.req.raw, c.env as RelayEnv)
+  })
   .post('/slack/commands', async (c) => {
     return await handleSlackCommandRequest(c.env, c.req.raw)
   })
@@ -106,4 +119,54 @@ api
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message
   return 'Request failed.'
+}
+
+function handleRelay(request: Request, env: RelayEnv) {
+  if (!env.FEE_PAYER_PRIVATE_KEY)
+    return new Response('Fee payer is not configured.', { status: 500 })
+
+  return Handler.relay({
+    feePayer: {
+      account: privateKeyToAccount(env.FEE_PAYER_PRIVATE_KEY) as never,
+      name: 'Tip',
+      validate: async (transaction: Record<string, unknown>) =>
+        await shouldSponsor(env, transaction),
+    },
+    path: '/api/relay',
+  } as never).fetch(request)
+}
+
+async function shouldSponsor(env: RelayEnv, transaction: Record<string, unknown>) {
+  const call = Array.isArray(transaction.calls)
+    ? (transaction.calls[0] as Call | undefined)
+    : undefined
+  const parsed = parseTransferCall(call)
+  const sender = typeof transaction.from === 'string' ? transaction.from.toLowerCase() : null
+  if (!sender || !parsed) return false
+
+  const attempt = await createDb(env.DB)
+    .selectFrom('tip_attempt')
+    .selectAll()
+    .where('sender_address', '=', sender)
+    .where('recipient_address', '=', parsed.to)
+    .where('amount', '=', parsed.amount)
+    .where('token_address', '=', pathUsd)
+    .where('expires_at', '>', new Date().toISOString())
+    .executeTakeFirst()
+
+  return Boolean(attempt)
+}
+
+type Call = {
+  data?: string
+  to?: string
+}
+
+function parseTransferCall(call: Call | undefined) {
+  if (!call?.data || call.to?.toLowerCase() !== pathUsd.toLowerCase()) return null
+  if (!call.data.startsWith('0xa9059cbb')) return null
+
+  const to = `0x${call.data.slice(34, 74)}`.toLowerCase()
+  const amount = BigInt(`0x${call.data.slice(74, 138)}`).toString()
+  return { amount, to }
 }

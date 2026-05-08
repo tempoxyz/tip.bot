@@ -48,7 +48,7 @@ export async function handleTipRequest(env: Env, request: Request, input: TipInp
   if (existing?.tx_hash)
     return {
       ok: true,
-      text: `Already sent: <@${input.senderAccountId}> → <@${input.recipientAccountId}> ${existing.amount} PathUSD${existing.reason ? ` for ${existing.reason}` : ''}. ${formatTxLink(env, existing.tx_hash)}`,
+      text: `Already sent: <@${input.senderAccountId}> → <@${input.recipientAccountId}> ${existing.amount} stablecoins${existing.reason ? ` for ${existing.reason}` : ''}. ${formatTxLink(env, existing.tx_hash)}`,
     }
   if (existing) return { ok: false, text: `Tip already recorded with status ${existing.status}.` }
 
@@ -104,7 +104,7 @@ export async function handleTipRequest(env: Env, request: Request, input: TipInp
       .execute()
     return {
       ok: true,
-      text: `Tip sent: <@${input.senderAccountId}> → <@${input.recipientAccountId}> ${amount} PathUSD${input.reason ? ` for ${input.reason}` : ''}. ${formatTxLink(env, txHash)}`,
+      text: `Tip sent: <@${input.senderAccountId}> → <@${input.recipientAccountId}> ${amount} stablecoins${input.reason ? ` for ${input.reason}` : ''}. ${formatTxLink(env, txHash)}`,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Tip submission failed.'
@@ -187,7 +187,7 @@ async function submitTipTransaction(
         token: pathUsd,
       }),
     ],
-    feePayer: `${new URL(request.url).origin}/relay`,
+    feePayer: `${new URL(request.url).origin}/api/relay`,
     keyAuthorization,
   } as never)
 
