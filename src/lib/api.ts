@@ -92,7 +92,11 @@ api
     return handleRelay(c.req.raw, c.env as RelayEnv)
   })
   .post('/slack/commands', async (c) => {
-    return await handleSlackCommandRequest(c.env, c.req.raw)
+    let ctx: Pick<ExecutionContext, 'waitUntil'> | undefined
+    try {
+      ctx = c.executionCtx
+    } catch {}
+    return await handleSlackCommandRequest(c.env, c.req.raw, ctx)
   })
   .post('/slack/events', async (c) => {
     return await handleSlackEventRequest(c.env, c.req.raw)

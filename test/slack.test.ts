@@ -95,34 +95,7 @@ test('/tip connect response is only visible to the command sender', async () => 
 
 test('/tip success is public and links the transaction', async () => {
   const env = await createEnv(slack.apiUrl)
-  const txHash = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
-  const factory = createFactory(createDb(env.DB))
-  const [sender, recipient] = await factory.account.insert(
-    {
-      access_key_address: '0x1111111111111111111111111111111111111111',
-      access_key_authorization: '{}',
-      access_key_ciphertext: await encryptSecret('0xprivate', env.ACCESS_KEY_ENCRYPTION_SECRET),
-      access_key_expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // 1 hour
-      platform_account_id: 'U000000001',
-      tempo_address: '0x1111111111111111111111111111111111111111',
-      workspace_id: 'workspace-test',
-    },
-    {
-      platform_account_id: 'U000000002',
-      tempo_address: '0x2222222222222222222222222222222222222222',
-      workspace_id: 'workspace-test',
-    },
-  )
-  await factory.tip.insert({
-    idempotency_key: 'command:T000000001:trigger-public',
-    reason: 'coffee',
-    recipient_account_id: recipient.id,
-    sender_account_id: sender.id,
-    status: 'confirmed',
-    token_address: '0x0000000000000000000000000000000000000000',
-    tx_hash: txHash,
-    workspace_id: 'workspace-test',
-  })
+  const txHash = await insertConfirmedTip(env, 'trigger-public')
   const body = new URLSearchParams({
     team_id: 'T000000001',
     text: '<@U000000002> for coffee',
@@ -140,6 +113,105 @@ test('/tip success is public and links the transaction', async () => {
     response_type: 'in_channel',
     text: `Already sent: <@U000000001> → <@U000000002> 0.001 stablecoins for coffee. <https://explore.testnet.tempo.xyz/tx/${txHash}|Tx 0x1234…cdef>`,
   })
+})
+
+test('/tip retries a previously failed idempotency key', async () => {
+  const env = await createEnv(slack.apiUrl)
+  const factory = createFactory(createDb(env.DB))
+  const [sender, recipient] = await factory.account.insert(
+    {
+      access_key_address: '0x1111111111111111111111111111111111111111',
+      access_key_authorization: '{}',
+      access_key_ciphertext: await encryptSecret(
+        '0x0000000000000000000000000000000000000000000000000000000000000001',
+        env.ACCESS_KEY_ENCRYPTION_SECRET,
+      ),
+      access_key_expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // 1 hour
+      platform_account_id: 'U000000001',
+      tempo_address: '0x1111111111111111111111111111111111111111',
+      workspace_id: 'workspace-test',
+    },
+    {
+      platform_account_id: 'U000000002',
+      tempo_address: '0x2222222222222222222222222222222222222222',
+      workspace_id: 'workspace-test',
+    },
+  )
+  const tip = await factory.tip.insert({
+    error: 'previous failure',
+    idempotency_key: 'command:T000000001:trigger-failed',
+    recipient_account_id: recipient.id,
+    sender_account_id: sender.id,
+    status: 'failed',
+    workspace_id: 'workspace-test',
+  })
+  const body = new URLSearchParams({
+    team_id: 'T000000001',
+    text: '<@U000000002> for coffee',
+    trigger_id: 'trigger-failed',
+    user_id: 'U000000001',
+  }).toString()
+
+  const response = await handleSlackCommandRequest(
+    env,
+    createSlackRequest('/api/slack/commands', body),
+  )
+
+  const retry = await createDb(env.DB)
+    .selectFrom('tip_attempt')
+    .select('id')
+    .where('tip_id', '=', tip.id)
+    .executeTakeFirst()
+  const stored = await createDb(env.DB)
+    .selectFrom('tip')
+    .select(['error', 'status'])
+    .where('id', '=', tip.id)
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(((await response.json()) as { text: string }).text).not.toContain(
+    'Tip already recorded with status failed.',
+  )
+  expect(retry?.id).toBeTruthy()
+  expect(stored.status).toBe('failed')
+  expect(stored.error).not.toBe('previous failure')
+})
+
+test('slash tip command returns before sending tip when execution context is available', async () => {
+  const env = await createEnv(slack.apiUrl)
+  const txHash = await insertConfirmedTip(env, 'trigger-async')
+  const waitUntil: Promise<unknown>[] = []
+  const fetchBefore = globalThis.fetch
+  globalThis.fetch = (async (input, init) => {
+    expect(String(input)).toBe('https://hooks.slack.test/response')
+    expect(JSON.parse(String(init?.body))).toEqual({
+      replace_original: true,
+      response_type: 'in_channel',
+      text: `Already sent: <@U000000001> → <@U000000002> 0.001 stablecoins for coffee. <https://explore.testnet.tempo.xyz/tx/${txHash}|Tx 0x1234…cdef>`,
+    })
+    return Response.json({ ok: true })
+  }) as typeof fetch
+  try {
+    const body = new URLSearchParams({
+      response_url: 'https://hooks.slack.test/response',
+      team_id: 'T000000001',
+      text: '<@U000000002> for coffee',
+      trigger_id: 'trigger-async',
+      user_id: 'U000000001',
+    }).toString()
+
+    const response = await handleSlackCommandRequest(
+      env,
+      createSlackRequest('/api/slack/commands', body),
+      { waitUntil: (promise) => waitUntil.push(promise) },
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ response_type: 'in_channel', text: 'Sending tip.' })
+    await Promise.all(waitUntil)
+  } finally {
+    globalThis.fetch = fetchBefore
+  }
 })
 
 test('app mention can tip without an extra tip verb', async () => {
@@ -419,6 +491,38 @@ async function installSlackTestApp(env: TestEnvironment) {
     team_name: 'Tip Test',
     workspace_id: workspace.id,
   })
+}
+
+async function insertConfirmedTip(env: Env & TestEnvironment, triggerId: string) {
+  const txHash = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
+  const factory = createFactory(createDb(env.DB))
+  const [sender, recipient] = await factory.account.insert(
+    {
+      access_key_address: '0x1111111111111111111111111111111111111111',
+      access_key_authorization: '{}',
+      access_key_ciphertext: await encryptSecret('0xprivate', env.ACCESS_KEY_ENCRYPTION_SECRET),
+      access_key_expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // 1 hour
+      platform_account_id: 'U000000001',
+      tempo_address: '0x1111111111111111111111111111111111111111',
+      workspace_id: 'workspace-test',
+    },
+    {
+      platform_account_id: 'U000000002',
+      tempo_address: '0x2222222222222222222222222222222222222222',
+      workspace_id: 'workspace-test',
+    },
+  )
+  await factory.tip.insert({
+    idempotency_key: `command:T000000001:${triggerId}`,
+    reason: 'coffee',
+    recipient_account_id: recipient.id,
+    sender_account_id: sender.id,
+    status: 'confirmed',
+    token_address: '0x0000000000000000000000000000000000000000',
+    tx_hash: txHash,
+    workspace_id: 'workspace-test',
+  })
+  return txHash
 }
 
 function createSlackRequest(

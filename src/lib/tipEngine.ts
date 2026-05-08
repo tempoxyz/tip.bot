@@ -51,33 +51,41 @@ export async function handleTipRequest(env: Env, request: Request, input: TipInp
       ok: true,
       text: `Already sent: <@${input.senderAccountId}> → <@${input.recipientAccountId}> ${existing.amount} stablecoins${existing.reason ? ` for ${existing.reason}` : ''}. ${formatTxLink(env, existing.tx_hash)}`,
     }
-  if (existing) return { ok: false, text: `Tip already recorded with status ${existing.status}.` }
+  if (existing && existing.status !== 'failed')
+    return { ok: false, text: `Tip already recorded with status ${existing.status}.` }
 
-  const tipId = Nanoid.generate()
+  const tipId = existing?.id ?? Nanoid.generate()
   const attemptId = Nanoid.generate()
-  const amount = workspace.tip_amount
+  const amount = existing?.amount ?? workspace.tip_amount
   const amountBaseUnits = parseUnits(amount, pathUsdDecimals).toString()
   const now = new Date()
   const nowIso = now.toISOString()
   const expiresAt = new Date(now.getTime() + tipAttemptTtlMs).toISOString()
 
-  await createDb(env.DB)
-    .insertInto('tip')
-    .values({
-      amount,
-      created_at: nowIso,
-      id: tipId,
-      idempotency_key: input.idempotencyKey,
-      reason: input.reason,
-      recipient_account_id: recipient.id,
-      sender_account_id: sender.id,
-      source_type: input.sourceType,
-      status: 'submitting',
-      token_address: pathUsd,
-      updated_at: nowIso,
-      workspace_id: workspace.id,
-    })
-    .execute()
+  if (existing)
+    await createDb(env.DB)
+      .updateTable('tip')
+      .set({ error: null, status: 'submitting', updated_at: nowIso })
+      .where('id', '=', tipId)
+      .execute()
+  else
+    await createDb(env.DB)
+      .insertInto('tip')
+      .values({
+        amount,
+        created_at: nowIso,
+        id: tipId,
+        idempotency_key: input.idempotencyKey,
+        reason: input.reason,
+        recipient_account_id: recipient.id,
+        sender_account_id: sender.id,
+        source_type: input.sourceType,
+        status: 'submitting',
+        token_address: pathUsd,
+        updated_at: nowIso,
+        workspace_id: workspace.id,
+      })
+      .execute()
   await createDb(env.DB)
     .insertInto('tip_attempt')
     .values({

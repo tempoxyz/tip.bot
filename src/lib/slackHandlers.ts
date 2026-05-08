@@ -8,7 +8,11 @@ import {
 } from '#/lib/slack.ts'
 import { handleTipRequest } from '#/lib/tipEngine.ts'
 
-export async function handleSlackCommandRequest(env: Env, request: Request) {
+export async function handleSlackCommandRequest(
+  env: Env,
+  request: Request,
+  ctx?: Pick<ExecutionContext, 'waitUntil'>,
+) {
   const rawBody = await request.text()
   if (!(await verifySlackRequest(request, env, rawBody)))
     return new Response('Invalid Slack signature.', { status: 401 })
@@ -31,7 +35,7 @@ export async function handleSlackCommandRequest(env: Env, request: Request) {
     const parsed = parseTipText(text)
     if (!parsed) return jsonSlack('Usage: /tip @account or /tip connect', true)
 
-    const result = await handleTipRequest(env, request, {
+    const tip = handleTipRequest(env, request, {
       idempotencyKey: `command:${teamId}:${form.get('trigger_id') ?? crypto.randomUUID()}`,
       reason: parsed.reason,
       recipientAccountId: parsed.recipientAccountId,
@@ -39,6 +43,12 @@ export async function handleSlackCommandRequest(env: Env, request: Request) {
       sourceType: 'command',
       teamId,
     })
+    if (ctx) {
+      ctx.waitUntil(postCommandTipResult(env, form, tip))
+      return jsonSlack('Sending tip.', false)
+    }
+
+    const result = await tip
     return jsonSlack(result.text, !result.ok)
   } catch (error) {
     return jsonSlack(getErrorMessage(error), true)
@@ -168,6 +178,33 @@ async function isAdmin(env: Env, teamId: string, accountId: string) {
 
 function jsonSlack(text: string, ephemeral: boolean) {
   return Response.json({ response_type: ephemeral ? 'ephemeral' : 'in_channel', text })
+}
+
+async function postCommandTipResult(
+  env: Env,
+  form: URLSearchParams,
+  tip: Promise<{ ok: boolean; text: string }>,
+) {
+  const result = await tip.catch((error) => ({ ok: false, text: getErrorMessage(error) }))
+  const responseUrl = form.get('response_url')
+  if (responseUrl) {
+    await fetch(responseUrl, {
+      body: JSON.stringify({
+        replace_original: true,
+        response_type: result.ok ? 'in_channel' : 'ephemeral',
+        text: result.text,
+      }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    })
+    return
+  }
+  await (
+    await getSlackClient(env, form.get('team_id') ?? '')
+  ).chat.postMessage({
+    channel: form.get('channel_id') ?? '',
+    text: result.text,
+  })
 }
 
 function getErrorMessage(error: unknown) {

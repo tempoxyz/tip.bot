@@ -6,17 +6,17 @@ import { api } from '#/lib/api.ts'
 export const Route = createFileRoute('/api/$')({
   server: {
     handlers: {
-      DELETE: ({ request }) => serveApi(request),
-      GET: ({ request }) => serveApi(request),
-      HEAD: ({ request }) => serveApi(request),
-      OPTIONS: ({ request }) => serveApi(request),
-      PATCH: ({ request }) => serveApi(request),
-      POST: ({ request }) => serveApi(request),
-      PUT: ({ request }) => serveApi(request),
+      DELETE: ({ context, request }) => serveApi(request, context.ctx),
+      GET: ({ context, request }) => serveApi(request, context.ctx),
+      HEAD: ({ context, request }) => serveApi(request, context.ctx),
+      OPTIONS: ({ context, request }) => serveApi(request, context.ctx),
+      PATCH: ({ context, request }) => serveApi(request, context.ctx),
+      POST: ({ context, request }) => serveApi(request, context.ctx),
+      PUT: ({ context, request }) => serveApi(request, context.ctx),
     },
   },
 })
 
-function serveApi(request: Request) {
-  return api.fetch(request, env)
+function serveApi(request: Request, ctx: ExecutionContext) {
+  return api.fetch(request, env, ctx)
 }
