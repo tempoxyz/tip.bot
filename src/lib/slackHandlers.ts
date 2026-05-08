@@ -24,21 +24,25 @@ export async function handleSlackCommandRequest(env: Env, request: Request) {
       true,
     )
 
-  if (text.startsWith('config'))
-    return jsonSlack(await handleConfigCommand(env, teamId, senderAccountId, text), true)
+  try {
+    if (text.startsWith('config'))
+      return jsonSlack(await handleConfigCommand(env, teamId, senderAccountId, text), true)
 
-  const parsed = parseTipText(text)
-  if (!parsed) return jsonSlack('Usage: /tip @account or /tip connect', true)
+    const parsed = parseTipText(text)
+    if (!parsed) return jsonSlack('Usage: /tip @account or /tip connect', true)
 
-  const result = await handleTipRequest(env, request, {
-    idempotencyKey: `command:${teamId}:${form.get('trigger_id') ?? crypto.randomUUID()}`,
-    reason: parsed.reason,
-    recipientAccountId: parsed.recipientAccountId,
-    senderAccountId,
-    sourceType: 'command',
-    teamId,
-  })
-  return jsonSlack(result.text, !result.ok)
+    const result = await handleTipRequest(env, request, {
+      idempotencyKey: `command:${teamId}:${form.get('trigger_id') ?? crypto.randomUUID()}`,
+      reason: parsed.reason,
+      recipientAccountId: parsed.recipientAccountId,
+      senderAccountId,
+      sourceType: 'command',
+      teamId,
+    })
+    return jsonSlack(result.text, !result.ok)
+  } catch (error) {
+    return jsonSlack(getErrorMessage(error), true)
+  }
 }
 
 export async function handleSlackEventRequest(env: Env, request: Request) {
@@ -89,7 +93,6 @@ async function handleMention(env: Env, request: Request, envelope: SlackEventEnv
   ).chat.postMessage({
     channel: event.channel!,
     text: result.text,
-    thread_ts: event.thread_ts ?? event.ts,
   })
 }
 
@@ -132,9 +135,6 @@ async function handleConfigCommand(
   senderAccountId: string,
   text: string,
 ) {
-  if (!(await isAdmin(env, teamId, senderAccountId)))
-    return 'Only Slack admins can change tip config.'
-
   const workspace = await ensureWorkspace(env, teamId)
   const parts = text.split(/\s+/)
   const key = parts[1]
@@ -142,6 +142,9 @@ async function handleConfigCommand(
 
   if (!key || !value)
     return `Current config: emoji ${workspace.tip_emoji}, amount ${workspace.tip_amount}, cap ${workspace.daily_cap}`
+
+  if (!(await isAdmin(env, teamId, senderAccountId)))
+    return 'Only Slack admins can change tip config.'
 
   if (!['amount', 'cap', 'emoji'].includes(key)) return 'Config keys: emoji, amount, cap.'
   await createDb(env.DB)
@@ -167,8 +170,13 @@ function jsonSlack(text: string, ephemeral: boolean) {
   return Response.json({ response_type: ephemeral ? 'ephemeral' : 'in_channel', text })
 }
 
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message
+  return 'Command failed.'
+}
+
 function isIntroText(text: string) {
-  return /^(?:hi|hello|hey|help|introduce yourself|intro|what do you do|who are you)\??$/i.test(
+  return /^(?:hi|hello|hey|help|introduce yourself\b.*|intro|what do you do|who are you)\??$/i.test(
     text.trim(),
   )
 }

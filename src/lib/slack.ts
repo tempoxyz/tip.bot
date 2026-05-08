@@ -144,7 +144,7 @@ export async function ensureWorkspace(env: SlackEnv, teamId: string) {
       id,
       platform: 'slack',
       platform_team_id: teamId,
-      tip_amount: '0.0001',
+      tip_amount: '0.001',
       tip_emoji: 'money_with_wings',
       updated_at: new Date().toISOString(),
     })

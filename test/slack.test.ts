@@ -24,7 +24,7 @@ afterAll(async () => {
   await slack?.stop()
 })
 
-test('slash config uses Emulate Slack admin lookup', async () => {
+test('slash config returns current workspace config', async () => {
   const body = new URLSearchParams({
     team_id: 'T000000001',
     text: 'config',
@@ -40,7 +40,29 @@ test('slash config uses Emulate Slack admin lookup', async () => {
   expect(response.status).toBe(200)
   expect(await response.json()).toEqual({
     response_type: 'ephemeral',
-    text: 'Current config: emoji money_with_wings, amount 0.0001, cap 1',
+    text: 'Current config: emoji money_with_wings, amount 0.001, cap 1',
+  })
+})
+
+test('slash config does not require Slack bot lookup for read-only config', async () => {
+  const env = await createEnv(slack.apiUrl)
+  await createDb(env.DB).deleteFrom('slack_installation').execute()
+  const body = new URLSearchParams({
+    team_id: 'T000000001',
+    text: 'config',
+    trigger_id: 'trigger-1',
+    user_id: 'U000000001',
+  }).toString()
+
+  const response = await handleSlackCommandRequest(
+    env,
+    createSlackRequest('/api/slack/commands', body),
+  )
+
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual({
+    response_type: 'ephemeral',
+    text: 'Current config: emoji money_with_wings, amount 0.001, cap 1',
   })
 })
 
@@ -105,7 +127,7 @@ test('/tip success is public and links the transaction', async () => {
   await createDb(env.DB)
     .insertInto('tip')
     .values({
-      amount: '0.0001',
+      amount: '0.001',
       created_at: now,
       id: 'tip-existing',
       idempotency_key: 'command:T000000001:trigger-public',
@@ -135,7 +157,7 @@ test('/tip success is public and links the transaction', async () => {
   expect(response.status).toBe(200)
   expect(await response.json()).toEqual({
     response_type: 'in_channel',
-    text: `Already sent: <@U000000001> → <@U000000002> 0.0001 stablecoins for coffee. <https://explore.testnet.tempo.xyz/tx/${txHash}|Tx 0x1234…cdef>`,
+    text: `Already sent: <@U000000001> → <@U000000002> 0.001 stablecoins for coffee. <https://explore.testnet.tempo.xyz/tx/${txHash}|Tx 0x1234…cdef>`,
   })
 })
 
@@ -175,6 +197,18 @@ test('app mention can tip without an extra tip verb', async () => {
   )
   expect(
     replies.messages.some((message) => message.text?.includes('connect your Tempo Wallet')),
+  ).toBe(false)
+
+  const history = await slackApi<{ messages: Array<{ text?: string }> }>(
+    slack.apiUrl,
+    'conversations.history',
+    {
+      channel: 'C000000001',
+      limit: '5',
+    },
+  )
+  expect(
+    history.messages.some((message) => message.text?.includes('connect your Tempo Wallet')),
   ).toBe(true)
 })
 
@@ -186,7 +220,7 @@ test('app mention can introduce Tipbot', async () => {
   const body = JSON.stringify({
     event: {
       channel: 'C000000001',
-      text: '<@B000000001> introduce yourself',
+      text: '<@B000000001> introduce yourself king!',
       ts: parent.ts,
       type: 'app_mention',
       user: 'U000000001',
@@ -366,7 +400,7 @@ async function installSlackTestApp(env: TestEnvironment) {
       id: 'workspace-test',
       platform: 'slack',
       platform_team_id: 'T000000001',
-      tip_amount: '0.0001',
+      tip_amount: '0.001',
       tip_emoji: 'money_with_wings',
       updated_at: now,
     })

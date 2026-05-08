@@ -174,10 +174,18 @@ async function submitTipTransaction(
   const account = TempoAccount.fromSecp256k1(privateKey, {
     access: input.sender.tempo_address as Hex,
   })
+  const chain = getTempoChain(env.TEMPO_CHAIN)
   const keyAuthorization = KeyAuthorization.fromRpc(
     JSON.parse(input.sender.access_key_authorization!),
   )
-  const client = createClient({ account, chain: getTempoChain(env.TEMPO_CHAIN), transport: http() })
+  if (keyAuthorization.chainId !== BigInt(chain.id))
+    throw new Error('Reconnect your Tempo Wallet so your tipping key matches this Tempo chain.')
+
+  const client = createClient({
+    account,
+    chain,
+    transport: http(`${new URL(request.url).origin}/api/relay`),
+  })
   const receipt = await sendTransactionSync(client, {
     account,
     calls: [
@@ -187,7 +195,7 @@ async function submitTipTransaction(
         token: pathUsd,
       }),
     ],
-    feePayer: `${new URL(request.url).origin}/api/relay`,
+    feePayer: true,
     keyAuthorization,
   } as never)
 
