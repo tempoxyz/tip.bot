@@ -19,6 +19,11 @@ export const Route = createRootRoute({
     ],
     links: [
       {
+        rel: 'icon',
+        href: '/tipbot.png',
+        type: 'image/png',
+      },
+      {
         rel: 'stylesheet',
         href: appCss,
       },

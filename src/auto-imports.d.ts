@@ -6,9 +6,11 @@
 // biome-ignore lint: disable
 export {}
 declare global {
+  const IconLucideCheck: typeof import('~icons/lucide/check.jsx').default
   const IconLucidePlug: typeof import('~icons/lucide/plug.jsx').default
   const IconLucidePlus: typeof import('~icons/lucide/plus.jsx').default
   const IconLucideSend: typeof import('~icons/lucide/send.jsx').default
   const IconLucideSettings2: typeof import('~icons/lucide/settings2.jsx').default
   const IconLucideSmilePlus: typeof import('~icons/lucide/smile-plus.jsx').default
+  const IconSimpleIconsSlack: typeof import('~icons/simple-icons/slack.jsx').default
 }

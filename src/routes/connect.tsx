@@ -1,16 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
-import { Button, Info, Row, Rows } from 'regen-ui'
 import { parseUnits, stringify, toHex } from 'viem'
 import { Account as TempoAccount, Secp256k1 } from 'viem/tempo'
 
 import { getTempoProvider, pathUsd, pathUsdDecimals } from '#/lib/tempo.ts'
 
-export const Route = createFileRoute('/connect')({
-  component: Connect,
-})
-
 function Connect() {
+  const [connected, setConnected] = useState(false)
   const [message, setMessage] = useState('Checking Slack connect link.')
   const [token, setToken] = useState<string | null>(null)
 
@@ -67,42 +63,127 @@ function Connect() {
       method: 'POST',
     })
     if (!response.ok) throw new Error(await response.text())
+    setConnected(true)
     setMessage('Connected. You can close this tab and tip from Slack.')
   }
 
   return (
     <main
-      data-regen-color="blue"
-      data-regen-radius="large"
-      className="grid min-h-screen place-items-center bg-background p-[24px] text-foreground"
+      className="grid min-h-screen place-items-center bg-[var(--tipbot-bg)] p-8 text-[var(--tipbot-text)]"
+      data-tipbot-home
     >
-      <section className="grid w-[min(100%,30rem)] gap-[16px] rounded-body border border-border bg-surface p-[20px]">
-        <header className="grid gap-[6px]">
-          <p className="label-13 text-foreground-secondary">Slack wallet binding</p>
-          <h1 className="heading-32 text-foreground">Connect Tempo Wallet</h1>
-          <p className="copy-14 text-foreground-secondary">
-            Authorize a scoped server key so Slack commands and reactions can submit stablecoin
-            tips.
-          </p>
+      <section className="grid w-[min(100%,28rem)] justify-items-center gap-5">
+        <header className="grid justify-items-center gap-5 text-center">
+          <img
+            alt="Tipbot"
+            className="size-24 rounded-[18px] object-cover shadow-[0_1px_0_#00000066]"
+            height={96}
+            src="/tipbot.png"
+            width={96}
+          />
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-bold leading-none tracking-[-0.04em] text-[var(--tipbot-text)]">
+              Tipbot
+            </h1>
+            <span className="rounded bg-[var(--tipbot-badge-bg)] px-1.5 py-1 text-base font-bold leading-none tracking-[-0.04em] text-[var(--tipbot-badge-text)]">
+              APP
+            </span>
+            <span aria-label="Online" className="size-4 rounded-full bg-[#25c489]" role="status" />
+          </div>
         </header>
 
-        <Rows>
-          <Row label="Access key">7 days</Row>
-          <Row label="Daily limit">1 stablecoin</Row>
-          <Row label="Scope">Stablecoin transfers only</Row>
-        </Rows>
+        <section className="grid w-full gap-5 rounded-2xl border border-[var(--tipbot-card-border)] bg-[var(--tipbot-card-bg)] p-5 shadow-[0_1px_0_#0000001f]">
+          {connected ? (
+            <SuccessPanel />
+          ) : (
+            <>
+              <div className="grid gap-2 text-center">
+                <p className="text-sm font-bold uppercase tracking-[0.12em] text-[var(--tipbot-muted)]">
+                  Slack wallet binding
+                </p>
+                <h2 className="text-2xl font-bold leading-tight tracking-[-0.04em] text-[var(--tipbot-text)]">
+                  Connect Tempo Wallet
+                </h2>
+                <p className="text-[15px] leading-6 text-[var(--tipbot-muted)]">
+                  Authorize a scoped server key so Slack commands and reactions can submit
+                  stablecoin tips.
+                </p>
+              </div>
 
-        <Button
-          onClick={() => void connect().catch((error) => setMessage(getErrorMessage(error)))}
-          size="large"
-          type="button"
-          variant="primary"
-        >
-          Connect wallet
-        </Button>
-        <Info message={message} />
+              <div className="grid overflow-hidden rounded-xl border border-[var(--tipbot-card-border)]">
+                <Row label="Access key" value="7 days" />
+                <Row label="Daily limit" value="1 stablecoin" />
+                <Row label="Scope" value="Stablecoin transfers only" />
+              </div>
+
+              <button
+                className="inline-flex h-12 items-center justify-center rounded-lg bg-[var(--tipbot-text)] px-4 text-base font-bold leading-none text-[var(--tipbot-bg)] transition hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#36c5f0]"
+                onClick={() => void connect().catch((error) => setMessage(getErrorMessage(error)))}
+                type="button"
+              >
+                Connect wallet
+              </button>
+
+              <p className="rounded-xl bg-[var(--tipbot-message-bg)] px-4 py-3 text-sm leading-5 text-[var(--tipbot-muted)]">
+                {message}
+              </p>
+            </>
+          )}
+        </section>
       </section>
     </main>
+  )
+}
+
+export const Route = createFileRoute('/connect')({
+  component: Connect,
+})
+
+function SuccessPanel() {
+  return (
+    <div className="grid gap-5">
+      <div className="grid gap-2 text-center">
+        <div className="mx-auto grid size-12 place-items-center rounded-full bg-[#25c489] text-[#1d1c22]">
+          <IconLucideCheck className="size-7" />
+        </div>
+        <p className="text-sm font-bold uppercase tracking-[0.12em] text-[var(--tipbot-muted)]">
+          Wallet connected
+        </p>
+        <h2 className="text-2xl font-bold leading-tight tracking-[-0.04em] text-[var(--tipbot-text)]">
+          You’re ready to tip from Slack.
+        </h2>
+        <p className="text-[15px] leading-6 text-[var(--tipbot-muted)]">
+          You can close this tab. Back in Slack, use Tipbot from messages, mentions, or reactions.
+        </p>
+      </div>
+
+      <div className="grid gap-3">
+        <GuideItem command="/tip @account" text="Send a stablecoin tip with the slash command." />
+        <GuideItem command="@tipbot tip @account" text="Mention Tipbot in a channel or thread." />
+        <GuideItem
+          command="reaction emoji"
+          text="React with your workspace’s configured emoji to tip."
+        />
+      </div>
+    </div>
+  )
+}
+
+function GuideItem(props: { command: string; text: string }) {
+  return (
+    <div className="grid gap-1 rounded-xl border border-[var(--tipbot-card-border)] bg-[var(--tipbot-message-bg)] px-4 py-3">
+      <code className="font-mono text-sm font-bold text-[var(--tipbot-text)]">{props.command}</code>
+      <p className="text-sm leading-5 text-[var(--tipbot-muted)]">{props.text}</p>
+    </div>
+  )
+}
+
+function Row(props: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-4 border-b border-[var(--tipbot-card-border)] px-4 py-3 last:border-b-0">
+      <span className="text-sm font-medium text-[var(--tipbot-muted)]">{props.label}</span>
+      <span className="text-sm font-bold text-[var(--tipbot-text)]">{props.value}</span>
+    </div>
   )
 }
 

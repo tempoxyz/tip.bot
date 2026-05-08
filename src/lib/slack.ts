@@ -1,5 +1,3 @@
-import type { WebClient } from '@slack/web-api'
-
 import { decryptSecret, encryptSecret, hashValue } from '#/lib/crypto.ts'
 import { createDb } from '#/lib/db.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
@@ -24,8 +22,6 @@ const slackBotScopes = [
   'users:read',
 ]
 const slackOAuthStateTtlMs = 10 * 60 * 1000 // 10 minutes
-
-let SlackWebClient: typeof WebClient | null = null
 
 export async function completeSlackInstall(request: Request, env: SlackEnv) {
   const url = new URL(request.url)
@@ -175,11 +171,19 @@ export async function getSlackClient(env: SlackEnv, teamId?: string) {
   const token = await getSlackBotToken(env, teamId)
   if (!token) throw new Error('Slack app is not installed for this workspace.')
 
-  SlackWebClient ??= (await import('@slack/web-api')).WebClient
-  return new SlackWebClient(
-    token,
-    env.SLACK_API_URL ? { slackApiUrl: env.SLACK_API_URL } : undefined,
-  )
+  return {
+    chat: {
+      postMessage: (params: SlackApiParams) => slackApi(env, token, 'chat.postMessage', params),
+    },
+    conversations: {
+      history: (params: SlackApiParams) =>
+        slackApi<SlackConversationsHistoryResponse>(env, token, 'conversations.history', params),
+    },
+    users: {
+      info: (params: SlackApiParams) =>
+        slackApi<SlackUsersInfoResponse>(env, token, 'users.info', params),
+    },
+  }
 }
 
 export function parseTipText(text: string) {
@@ -243,6 +247,29 @@ async function exchangeSlackOAuthCode(env: SlackEnv, code: string, redirectUri: 
     method: 'POST',
   })
   return (await response.json()) as SlackOAuthAccessResponse
+}
+
+async function slackApi<T = SlackApiResponse>(
+  env: SlackEnv,
+  token: string,
+  method: string,
+  params: SlackApiParams,
+) {
+  const body = new URLSearchParams()
+  for (const key of Object.keys(params).sort()) {
+    const value = params[key]
+    if (value !== undefined) body.set(key, String(value))
+  }
+
+  const response = await fetch(`${getSlackApiUrl(env)}${method}`, {
+    body,
+    headers: { authorization: `Bearer ${token}` },
+    method: 'POST',
+  })
+  const json = (await response.json()) as SlackApiResponse
+  if (json.ok) return json as T
+
+  throw new Error(json.error ?? `Slack API ${method} failed.`)
 }
 
 async function getSlackBotToken(env: SlackEnv, teamId?: string) {
@@ -327,6 +354,26 @@ type SlackOAuthAccessResponse = {
   ok: boolean
   scope?: string
   team?: { id?: string; name?: string }
+}
+
+type SlackApiParams = Record<string, boolean | number | string | undefined>
+
+type SlackApiResponse = {
+  error?: string
+  ok?: boolean
+}
+
+type SlackConversationsHistoryResponse = SlackApiResponse & {
+  messages?: Array<{
+    user?: string
+  }>
+}
+
+type SlackUsersInfoResponse = SlackApiResponse & {
+  user?: {
+    is_admin?: boolean
+    is_owner?: boolean
+  }
 }
 
 type SlackOAuthState = {
