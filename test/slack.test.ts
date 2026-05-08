@@ -14,6 +14,7 @@ import { createRelayTransport } from '#/lib/relay.ts'
 import { handleSlackCommandRequest, handleSlackEventRequest } from '#/lib/slackHandlers.ts'
 import { getTempoChain } from '#/lib/tempo.ts'
 import { Env as TestEnv, type TestEnv as TestEnvironment } from './env.ts'
+import { createFactory } from './factory.ts'
 
 const signingSecret = 'test-signing-secret'
 
@@ -94,57 +95,34 @@ test('/tip connect response is only visible to the command sender', async () => 
 
 test('/tip success is public and links the transaction', async () => {
   const env = await createEnv(slack.apiUrl)
-  const now = new Date().toISOString()
   const txHash = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
-  await createDb(env.DB)
-    .insertInto('account')
-    .values([
-      {
-        access_key_address: '0x1111111111111111111111111111111111111111',
-        access_key_authorization: '{}',
-        access_key_ciphertext: await encryptSecret('0xprivate', env.ACCESS_KEY_ENCRYPTION_SECRET),
-        access_key_expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // 1 hour
-        created_at: now,
-        id: 'account-sender',
-        platform: 'slack',
-        platform_account_id: 'U000000001',
-        tempo_address: '0x1111111111111111111111111111111111111111',
-        updated_at: now,
-        workspace_id: 'workspace-test',
-      },
-      {
-        access_key_address: null,
-        access_key_authorization: null,
-        access_key_ciphertext: null,
-        access_key_expires_at: null,
-        created_at: now,
-        id: 'account-recipient',
-        platform: 'slack',
-        platform_account_id: 'U000000002',
-        tempo_address: '0x2222222222222222222222222222222222222222',
-        updated_at: now,
-        workspace_id: 'workspace-test',
-      },
-    ])
-    .execute()
-  await createDb(env.DB)
-    .insertInto('tip')
-    .values({
-      amount: '0.001',
-      created_at: now,
-      id: 'tip-existing',
-      idempotency_key: 'command:T000000001:trigger-public',
-      reason: 'coffee',
-      recipient_account_id: 'account-recipient',
-      sender_account_id: 'account-sender',
-      source_type: 'command',
-      status: 'confirmed',
-      token_address: '0x0000000000000000000000000000000000000000',
-      tx_hash: txHash,
-      updated_at: now,
+  const factory = createFactory(createDb(env.DB))
+  const [sender, recipient] = await factory.account.insert(
+    {
+      access_key_address: '0x1111111111111111111111111111111111111111',
+      access_key_authorization: '{}',
+      access_key_ciphertext: await encryptSecret('0xprivate', env.ACCESS_KEY_ENCRYPTION_SECRET),
+      access_key_expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // 1 hour
+      platform_account_id: 'U000000001',
+      tempo_address: '0x1111111111111111111111111111111111111111',
       workspace_id: 'workspace-test',
-    })
-    .execute()
+    },
+    {
+      platform_account_id: 'U000000002',
+      tempo_address: '0x2222222222222222222222222222222222222222',
+      workspace_id: 'workspace-test',
+    },
+  )
+  await factory.tip.insert({
+    idempotency_key: 'command:T000000001:trigger-public',
+    reason: 'coffee',
+    recipient_account_id: recipient.id,
+    sender_account_id: sender.id,
+    status: 'confirmed',
+    token_address: '0x0000000000000000000000000000000000000000',
+    tx_hash: txHash,
+    workspace_id: 'workspace-test',
+  })
   const body = new URLSearchParams({
     team_id: 'T000000001',
     text: '<@U000000002> for coffee',
@@ -424,39 +402,23 @@ async function createEnv(apiUrl: string, overrides: Partial<TestEnvironment> = {
 }
 
 async function installSlackTestApp(env: TestEnvironment) {
-  const now = new Date().toISOString()
   if (!env.ACCESS_KEY_ENCRYPTION_SECRET)
     throw new Error('ACCESS_KEY_ENCRYPTION_SECRET is not configured.')
 
-  await createDb(env.DB)
-    .insertInto('workspace')
-    .values({
-      created_at: now,
-      daily_cap: '1',
-      id: 'workspace-test',
-      platform: 'slack',
-      platform_team_id: 'T000000001',
-      tip_amount: '0.001',
-      tip_emoji: 'money_with_wings',
-      updated_at: now,
-    })
-    .execute()
-  await createDb(env.DB)
-    .insertInto('slack_installation')
-    .values({
-      bot_token_ciphertext: await encryptSecret('xoxb-test', env.ACCESS_KEY_ENCRYPTION_SECRET),
-      bot_user_id: 'B000000001',
-      created_at: now,
-      enterprise_id: null,
-      id: 'slack-installation-test',
-      installed_by: 'U000000001',
-      scopes: 'commands,chat:write',
-      team_id: 'T000000001',
-      team_name: 'Tip Test',
-      updated_at: now,
-      workspace_id: 'workspace-test',
-    })
-    .execute()
+  const factory = createFactory(createDb(env.DB))
+  const workspace = await factory.workspace.insert({
+    id: 'workspace-test',
+    platform_team_id: 'T000000001',
+  })
+  await factory.slack_installation.insert({
+    bot_token_ciphertext: await encryptSecret('xoxb-test', env.ACCESS_KEY_ENCRYPTION_SECRET),
+    bot_user_id: 'B000000001',
+    id: 'slack-installation-test',
+    installed_by: 'U000000001',
+    team_id: 'T000000001',
+    team_name: 'Tip Test',
+    workspace_id: workspace.id,
+  })
 }
 
 function createSlackRequest(

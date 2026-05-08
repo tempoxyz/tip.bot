@@ -186,20 +186,30 @@ async function submitTipTransaction(
     chain,
     transport: createRelayTransport(env, chain.id),
   })
-  const receipt = await sendTransactionSync(client, {
-    account,
-    calls: [
-      Actions.token.transfer.call({
-        amount: parseUnits(input.amount, pathUsdDecimals),
-        to: input.recipientAddress,
-        token: pathUsd,
-      }),
-    ],
-    feePayer: true,
-    keyAuthorization,
-  } as never)
+  const send = (authorization: typeof keyAuthorization | undefined) =>
+    sendTransactionSync(client, {
+      account,
+      calls: [
+        Actions.token.transfer.call({
+          amount: parseUnits(input.amount, pathUsdDecimals),
+          to: input.recipientAddress,
+          token: pathUsd,
+        }),
+      ],
+      feePayer: true,
+      ...(authorization ? { keyAuthorization: authorization } : {}),
+    } as never)
+  const receipt = await send(keyAuthorization).catch(async (error) => {
+    if (isAccessKeyAlreadyAuthorizedError(error)) return await send(undefined)
+    throw error
+  })
 
   return (receipt as { transactionHash?: string }).transactionHash ?? JSON.stringify(receipt)
+}
+
+function isAccessKeyAlreadyAuthorizedError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes('KeyAlreadyExists')
 }
 
 function formatTxLink(env: Env, txHash: string) {
