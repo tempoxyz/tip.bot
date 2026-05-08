@@ -5,7 +5,9 @@ import type { DB } from '#db/types.gen.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import { pathUsd } from '#/lib/tempo.ts'
 
-export function createFactory(db: Kysely<DB>): Factory {
+export const Factory = { create }
+
+function create(db: Kysely<DB>): FactoryInstance {
   function factory(table: keyof DB) {
     return {
       attrs(...args: Record<string, unknown>[]) {
@@ -50,7 +52,7 @@ export function createFactory(db: Kysely<DB>): Factory {
       },
     }
   }
-  return new Proxy({} as Factory, {
+  return new Proxy({} as FactoryInstance, {
     get(_target, table) {
       return factory(table as keyof DB)
     },
@@ -160,7 +162,7 @@ const defaultConfig: Partial<{
   },
 }
 
-type Factory = {
+type FactoryInstance = {
   [K in keyof DB]: {
     attrs: <const V extends readonly Record<string, unknown>[]>(
       ...args: V & AttrsValidation<K, V>

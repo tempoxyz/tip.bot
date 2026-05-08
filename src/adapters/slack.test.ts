@@ -8,14 +8,13 @@ import { createClient } from 'viem'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 
 import { createClient as createDb } from '#db/client.ts'
+import * as Slack from '#/adapters/slack.ts'
 import { api } from '#/api.ts'
 import { encryptSecret } from '#/lib/crypto.ts'
 import { createRelayTransport } from '#/lib/relay.ts'
-import { createSlackInstallUrl } from '#/lib/slack.ts'
-import { handleSlackCommandRequest, handleSlackEventRequest } from '#/lib/slackHandlers.ts'
 import { getTempoChain } from '#/lib/tempo.ts'
-import { Env as TestEnv, type TestEnv as TestEnvironment } from './env.ts'
-import { createFactory } from './factory.ts'
+import { Env as TestEnv, type TestEnv as TestEnvironment } from '../../test/env.ts'
+import { Factory } from '../../test/factory.ts'
 
 const signingSecret = 'test-signing-secret'
 
@@ -37,7 +36,7 @@ test('slash config returns current workspace config', async () => {
     user_id: 'U000000001',
   }).toString()
 
-  const response = await handleSlackCommandRequest(
+  const response = await Slack.handleCommandRequest(
     await createEnv(slack.apiUrl),
     createSlackRequest('/api/slack/commands', body),
   )
@@ -59,7 +58,7 @@ test('slash config does not require Slack bot lookup for read-only config', asyn
     user_id: 'U000000001',
   }).toString()
 
-  const response = await handleSlackCommandRequest(
+  const response = await Slack.handleCommandRequest(
     env,
     createSlackRequest('/api/slack/commands', body),
   )
@@ -79,7 +78,7 @@ test('/tip connect response is only visible to the command sender', async () => 
     user_id: 'U000000001',
   }).toString()
 
-  const response = await handleSlackCommandRequest(
+  const response = await Slack.handleCommandRequest(
     await createEnv(slack.apiUrl),
     createSlackRequest('/api/slack/commands', body),
   )
@@ -104,7 +103,7 @@ test('/tip success is public and links the transaction', async () => {
     user_id: 'U000000001',
   }).toString()
 
-  const response = await handleSlackCommandRequest(
+  const response = await Slack.handleCommandRequest(
     env,
     createSlackRequest('/api/slack/commands', body),
   )
@@ -118,7 +117,7 @@ test('/tip success is public and links the transaction', async () => {
 
 test('/tip retries a previously failed idempotency key', async () => {
   const env = await createEnv(slack.apiUrl)
-  const factory = createFactory(createDb(env.DB))
+  const factory = Factory.create(createDb(env.DB))
   const [sender, recipient] = await factory.account.insert(
     {
       access_key_address: '0x1111111111111111111111111111111111111111',
@@ -153,7 +152,7 @@ test('/tip retries a previously failed idempotency key', async () => {
     user_id: 'U000000001',
   }).toString()
 
-  const response = await handleSlackCommandRequest(
+  const response = await Slack.handleCommandRequest(
     env,
     createSlackRequest('/api/slack/commands', body),
   )
@@ -201,7 +200,7 @@ test('slash tip command returns before sending tip when execution context is ava
       user_id: 'U000000001',
     }).toString()
 
-    const response = await handleSlackCommandRequest(
+    const response = await Slack.handleCommandRequest(
       env,
       createSlackRequest('/api/slack/commands', body),
       { waitUntil: (promise) => waitUntil.push(promise) },
@@ -233,7 +232,7 @@ test('app mention can tip without an extra tip verb', async () => {
     type: 'event_callback',
   })
 
-  const response = await handleSlackEventRequest(
+  const response = await Slack.handleEventRequest(
     await createEnv(slack.apiUrl),
     createSlackRequest('/api/slack/events', body, 'application/json'),
   )
@@ -284,7 +283,7 @@ test('app mention can introduce Tipbot', async () => {
     type: 'event_callback',
   })
 
-  const response = await handleSlackEventRequest(
+  const response = await Slack.handleEventRequest(
     await createEnv(slack.apiUrl),
     createSlackRequest('/api/slack/events', body, 'application/json'),
   )
@@ -314,7 +313,7 @@ test('app mention can introduce Tipbot', async () => {
 })
 
 test('invalid Slack signatures are rejected', async () => {
-  const response = await handleSlackCommandRequest(
+  const response = await Slack.handleCommandRequest(
     await createEnv(slack.apiUrl),
     new Request('http://tip.test/api/slack/commands', {
       body: 'text=config',
@@ -381,7 +380,7 @@ test('Slack OAuth install stores workspace bot token', async () => {
     SLACK_CLIENT_SECRET: 'client-secret',
   })
   const installUrl = new URL(
-    await createSlackInstallUrl(new Request('http://tip.test/slack/install'), env),
+    await Slack.createInstallUrl(new Request('http://tip.test/slack/install'), env),
   )
   expect(installUrl.origin).toBe('https://slack.com')
   expect(installUrl.searchParams.get('client_id')).toBe('123.456')
@@ -477,7 +476,7 @@ async function installSlackTestApp(env: TestEnvironment) {
   if (!env.ACCESS_KEY_ENCRYPTION_SECRET)
     throw new Error('ACCESS_KEY_ENCRYPTION_SECRET is not configured.')
 
-  const factory = createFactory(createDb(env.DB))
+  const factory = Factory.create(createDb(env.DB))
   const workspace = await factory.workspace.insert({
     id: 'workspace-test',
     platform_team_id: 'T000000001',
@@ -495,7 +494,7 @@ async function installSlackTestApp(env: TestEnvironment) {
 
 async function insertConfirmedTip(env: Env & TestEnvironment, triggerId: string) {
   const txHash = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
-  const factory = createFactory(createDb(env.DB))
+  const factory = Factory.create(createDb(env.DB))
   const [sender, recipient] = await factory.account.insert(
     {
       access_key_address: '0x1111111111111111111111111111111111111111',

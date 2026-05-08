@@ -2,6 +2,7 @@
   "extends": "./tsconfig.app.json",
   "include": [
     "./importMeta.d.ts",
+    "../src/**/*.workers.test.ts",
     "../test/**/*.workers.test.ts",
     "../test/worker.ts",
     "../test/workers.setup.ts",

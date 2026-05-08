@@ -3,7 +3,7 @@ import { createServerFn } from '@tanstack/react-start'
 import { getRequest } from '@tanstack/react-start/server'
 import { env } from 'cloudflare:workers'
 
-import { createSlackInstallUrl } from '#/lib/slack.ts'
+import * as Slack from '#/adapters/slack.ts'
 
 export const Route = createFileRoute('/slack/install')({
   async beforeLoad() {
@@ -12,5 +12,5 @@ export const Route = createFileRoute('/slack/install')({
 })
 
 const getSlackInstallUrl = createServerFn({ method: 'GET' }).handler(async () => {
-  return await createSlackInstallUrl(getRequest(), env)
+  return await Slack.createInstallUrl(getRequest(), env)
 })

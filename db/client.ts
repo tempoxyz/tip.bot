@@ -10,6 +10,8 @@ import type {
 import { Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from 'kysely'
 import type { DB } from './types.gen.ts'
 
+export type Database = Kysely<DB>
+
 export function createClient(database: D1Database | D1DatabaseSession) {
   return new Kysely<DB>({
     dialect: new D1Dialect({ database }),

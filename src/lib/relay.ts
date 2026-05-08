@@ -13,30 +13,41 @@ export type RelayEnv = Env & {
 
 export function createRelayTransport(env: Env, chainId: number) {
   return http(`https://tip.bot.internal/api/relay/${chainId}`, {
-    fetchFn: async (input, init) => handleRelay(new Request(input, init), env as RelayEnv),
+    fetchFn: async (input, init) =>
+      createRelayHandler(env as RelayEnv).fetch(new Request(input, init)),
   })
 }
 
-export function handleRelay(request: Request, env: RelayEnv) {
-  if (!env.FEE_PAYER_PRIVATE_KEY)
-    return new Response('Fee payer is not configured.', { status: 500 })
+export function createRelayHandler(env: RelayEnv) {
+  if (!env.FEE_PAYER_PRIVATE_KEY) {
+    const handler = Handler.from()
+    handler.all(
+      '/api/relay/:chainId?',
+      () => new Response('Fee payer is not configured.', { status: 500 }),
+    )
+    return handler
+  }
 
-  return handleRelayResponse(
-    request,
-    Promise.resolve(
-      Handler.relay({
-        chains: [getTempoChain(env.TEMPO_CHAIN)],
-        feePayer: {
-          account: privateKeyToAccount(env.FEE_PAYER_PRIVATE_KEY) as never,
-          name: 'Tipbot',
-          validate: async (transaction: Record<string, unknown>) =>
-            await shouldSponsor(env, transaction),
-        },
-        path: '/api/relay',
-      } as never).fetch(request.clone() as Request),
-    ),
-    env,
+  const handler = Handler.from()
+  handler.use('/api/relay/:chainId?', async (c, next) => {
+    const request = c.req.raw.clone() as Request
+    await next()
+    c.res = await handleRelayResponse(request, c.res, env)
+  })
+  handler.route(
+    '/',
+    Handler.relay({
+      chains: [getTempoChain(env.TEMPO_CHAIN)],
+      feePayer: {
+        account: privateKeyToAccount(env.FEE_PAYER_PRIVATE_KEY) as never,
+        name: 'Tipbot',
+        validate: async (transaction: Record<string, unknown>) =>
+          await shouldSponsor(env, transaction),
+      },
+      path: '/api/relay',
+    } as never),
   )
+  return handler
 }
 
 type Call = {
@@ -44,8 +55,7 @@ type Call = {
   to?: string
 }
 
-async function handleRelayResponse(request: Request, responsePromise: Promise<Response>, env: Env) {
-  const response = await responsePromise
+async function handleRelayResponse(request: Request, response: Response, env: Env) {
   if (request.method !== 'POST') return response
 
   const body = (await request.json().catch(() => null as unknown)) as

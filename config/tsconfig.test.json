@@ -1,6 +1,17 @@
 {
-  "include": ["./importMeta.d.ts", "../test/**/*.ts", "../test/**/*.tsx"],
-  "exclude": ["../test/**/*.workers.test.ts", "../test/workers.setup.ts", "../test/worker.ts"],
+  "include": [
+    "./importMeta.d.ts",
+    "../src/**/*.test.ts",
+    "../src/**/*.test.tsx",
+    "../test/**/*.ts",
+    "../test/**/*.tsx"
+  ],
+  "exclude": [
+    "../src/**/*.workers.test.ts",
+    "../test/**/*.workers.test.ts",
+    "../test/workers.setup.ts",
+    "../test/worker.ts"
+  ],
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",

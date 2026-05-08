@@ -1,40 +1,33 @@
 import { Hono } from 'hono'
-
-import { createClient } from '#db/client.ts'
+import { createClient, type Database } from '#db/client.ts'
+import * as Slack from '#/adapters/slack.ts'
 import { encryptSecret } from '#/lib/crypto.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
-import { handleRelay, type RelayEnv } from '#/lib/relay.ts'
-import {
-  ensureWorkspace,
-  exchangeSlackOAuthCode,
-  getSlackAppOrigin,
-  verifySlackOAuthState,
-} from '#/lib/slack.ts'
-import { handleSlackCommandRequest, handleSlackEventRequest } from '#/lib/slackHandlers.ts'
+import { createRelayHandler, type RelayEnv } from '#/lib/relay.ts'
 
-export const api = new Hono<{ Bindings: Env }>()
+export const api = new Hono<{
+  Bindings: Env
+  Variables: {
+    db: Database
+  }
+}>()
 
 api
-  .get('/api/relay', async (c) => {
-    return handleRelay(c.req.raw, c.env as RelayEnv)
+  .use(async (c, next) => {
+    c.set('db', createClient(c.env.DB))
+    await next()
   })
-  .get('/api/relay/:chainId', async (c) => {
-    return handleRelay(c.req.raw, c.env as RelayEnv)
-  })
-  .post('/api/relay', async (c) => {
-    return handleRelay(c.req.raw, c.env as RelayEnv)
-  })
-  .post('/api/relay/:chainId', async (c) => {
-    return handleRelay(c.req.raw, c.env as RelayEnv)
+  .all('/api/relay/:chainId?', async (c) => {
+    return createRelayHandler(c.env as RelayEnv).fetch(c.req.raw)
   })
   .post('/api/slack/commands', async (c) => {
     let ctx: Pick<ExecutionContext, 'waitUntil'> | undefined
     try {
       ctx = c.executionCtx
     } catch {}
-    return handleSlackCommandRequest(c.env, c.req.raw, ctx)
+    return Slack.handleCommandRequest(c.env, c.req.raw, ctx)
   })
-  .post('/api/slack/events', (c) => handleSlackEventRequest(c.env, c.req.raw))
+  .post('/api/slack/events', (c) => Slack.handleEventRequest(c.env, c.req.raw))
   .get('/api/slack/oauth/callback', async (c) => {
     try {
       const url = new URL(c.req.url)
@@ -45,12 +38,12 @@ api
       const state = url.searchParams.get('state')
       if (!code || !state) throw new Error('Slack install callback is missing code or state.')
 
-      const expectedRedirectUri = `${getSlackAppOrigin(c.req.raw, c.env)}/api/slack/oauth/callback`
-      const stateData = await verifySlackOAuthState(c.env, state)
+      const expectedRedirectUri = `${Slack.getAppOrigin(c.req.raw, c.env)}/api/slack/oauth/callback`
+      const stateData = await Slack.verifyOAuthState(c.env, state)
       if (stateData.redirectUri !== expectedRedirectUri)
         throw new Error('Slack install callback redirect URI does not match state.')
 
-      const oauth = await exchangeSlackOAuthCode(c.env, code, expectedRedirectUri)
+      const oauth = await Slack.exchangeOAuthCode(c.env, code, expectedRedirectUri)
       if (!oauth.ok) throw new Error(oauth.error ?? 'Slack OAuth token exchange failed.')
       if (!oauth.access_token) throw new Error('Slack OAuth response did not include a bot token.')
       if (!oauth.team?.id) throw new Error('Slack OAuth response did not include a team ID.')
@@ -59,7 +52,7 @@ api
 
       const teamId = oauth.team.id
       const teamName = oauth.team.name ?? null
-      const workspace = await ensureWorkspace(c.env, teamId)
+      const workspace = await Slack.ensureWorkspace(c.env, teamId)
       const now = new Date().toISOString()
       const botTokenCiphertext = await encryptSecret(
         oauth.access_token,

@@ -23,6 +23,8 @@ export default defineConfig({
       'db/schemas.gen.ts',
       'db/types.gen.ts',
       'dist/**',
+      'src/**/*.test.ts',
+      'src/**/*.test.tsx',
       'test/**',
       'src/auto-imports.d.ts',
       'src/routeTree.gen.ts',

@@ -1,5 +1,5 @@
 {
-  "exclude": ["../src/**/*.workers.test.ts", "../src/**/*.workers.test.tsx"],
+  "exclude": ["../src/**/*.test.ts", "../src/**/*.test.tsx"],
   "include": ["../src/**/*.ts", "../src/**/*.tsx"],
   "compilerOptions": {
     "target": "ES2022",

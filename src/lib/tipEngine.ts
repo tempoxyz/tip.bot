@@ -5,19 +5,19 @@ import { Account as TempoAccount, Actions } from 'viem/tempo'
 
 import { createClient as createDb } from '#db/client.ts'
 import type { DB } from '#db/types.gen.ts'
+import * as Slack from '#/adapters/slack.ts'
 import { decryptSecret } from '#/lib/crypto.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import { createRelayTransport } from '#/lib/relay.ts'
-import { createConnectUrl, ensureWorkspace } from '#/lib/slack.ts'
 import { getTempoChain, pathUsd, pathUsdDecimals, tipAttemptTtlMs } from '#/lib/tempo.ts'
 
 export async function handleTipRequest(env: Env, request: Request, input: TipInput) {
-  const workspace = await ensureWorkspace(env, input.teamId)
+  const workspace = await Slack.ensureWorkspace(env, input.teamId)
   const sender = await getAccount(env, workspace.id, input.senderAccountId)
   if (!sender?.tempo_address || !sender.access_key_ciphertext || !sender.access_key_authorization)
     return {
       ok: false,
-      text: `<@${input.senderAccountId}> connect your Tempo Wallet before sending tips: ${await createConnectUrl(request, env, { accountId: input.senderAccountId, teamId: input.teamId })}`,
+      text: `<@${input.senderAccountId}> connect your Tempo Wallet before sending tips: ${await Slack.createConnectUrl(request, env, { accountId: input.senderAccountId, teamId: input.teamId })}`,
     }
 
   if (
@@ -26,14 +26,14 @@ export async function handleTipRequest(env: Env, request: Request, input: TipInp
   )
     return {
       ok: false,
-      text: `<@${input.senderAccountId}> reconnect your Tempo Wallet to refresh your tipping key: ${await createConnectUrl(request, env, { accountId: input.senderAccountId, teamId: input.teamId })}`,
+      text: `<@${input.senderAccountId}> reconnect your Tempo Wallet to refresh your tipping key: ${await Slack.createConnectUrl(request, env, { accountId: input.senderAccountId, teamId: input.teamId })}`,
     }
 
   const recipient = await getAccount(env, workspace.id, input.recipientAccountId)
   if (!recipient?.tempo_address)
     return {
       ok: false,
-      text: `<@${input.recipientAccountId}> connect your Tempo Wallet to receive tips: ${await createConnectUrl(request, env, { accountId: input.recipientAccountId, teamId: input.teamId })}`,
+      text: `<@${input.recipientAccountId}> connect your Tempo Wallet to receive tips: ${await Slack.createConnectUrl(request, env, { accountId: input.recipientAccountId, teamId: input.teamId })}`,
     }
 
   if (sender.id === recipient.id) return { ok: false, text: 'You cannot tip yourself.' }

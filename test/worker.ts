@@ -4,7 +4,7 @@ import { createClient as createDb } from '#db/client.ts'
 import { api } from '#/api.ts'
 import { createRelayTransport } from '#/lib/relay.ts'
 import { getTempoChain, pathUsd } from '#/lib/tempo.ts'
-import { createFactory } from './factory.ts'
+import { Factory } from './factory.ts'
 
 export default {
   async fetch(request: Request, env: Env) {
@@ -124,7 +124,7 @@ function transferCall() {
 }
 
 async function insertRelayFillTipAttempt(env: Env) {
-  const factory = createFactory(createDb(env.DB))
+  const factory = Factory.create(createDb(env.DB))
   const workspace = await factory.workspace.insert({ platform_team_id: 'TRELAYER' })
   const [sender, recipient] = await factory.account.insert(
     {
