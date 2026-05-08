@@ -4,12 +4,15 @@ import { createServer } from 'node:net'
 import { resolve } from 'node:path'
 import Database from 'better-sqlite3'
 import { createEmulator, type Emulator } from 'emulate'
+import { createClient } from 'viem'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 
 import { api } from '#/lib/api.ts'
 import { encryptSecret } from '#/lib/crypto.ts'
 import { createDb } from '#/lib/db.ts'
+import { createRelayTransport } from '#/lib/relay.ts'
 import { handleSlackCommandRequest, handleSlackEventRequest } from '#/lib/slackHandlers.ts'
+import { getTempoChain } from '#/lib/tempo.ts'
 import { Env as TestEnv, type TestEnv as TestEnvironment } from './env.ts'
 
 const signingSecret = 'test-signing-secret'
@@ -294,6 +297,29 @@ test('relay chain route is served from the Hono API route', async () => {
 
   expect(response.status).toBe(500)
   expect(await response.text()).toBe('Fee payer is not configured.')
+})
+
+test('server relay transport calls the relay in process', async () => {
+  const fetchBefore = globalThis.fetch
+  globalThis.fetch = async () => {
+    throw new Error('global fetch should not be called')
+  }
+  try {
+    const chain = getTempoChain('testnet')
+    const client = createClient({
+      chain,
+      transport: createRelayTransport(
+        { ...TestEnv.get(), FEE_PAYER_PRIVATE_KEY: '' } as unknown as Env,
+        chain.id,
+      ),
+    })
+
+    await expect(
+      client.request({ method: 'eth_getBlockByNumber', params: ['latest', false] }),
+    ).rejects.toThrow('Fee payer is not configured.')
+  } finally {
+    globalThis.fetch = fetchBefore
+  }
 })
 
 test('Slack OAuth install stores workspace bot token', async () => {

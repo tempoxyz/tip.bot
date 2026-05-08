@@ -1,5 +1,5 @@
 import { KeyAuthorization } from 'ox/tempo'
-import { createClient, http, parseUnits, type Hex } from 'viem'
+import { createClient, parseUnits, type Hex } from 'viem'
 import { sendTransactionSync } from 'viem/actions'
 import { Account as TempoAccount, Actions } from 'viem/tempo'
 
@@ -7,6 +7,7 @@ import { decryptSecret } from '#/lib/crypto.ts'
 import { createDb } from '#/lib/db.ts'
 import type { DB } from '#/lib/db.gen.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
+import { createRelayTransport } from '#/lib/relay.ts'
 import { createConnectUrl, ensureWorkspace } from '#/lib/slack.ts'
 import { getTempoChain, pathUsd, pathUsdDecimals, tipAttemptTtlMs } from '#/lib/tempo.ts'
 
@@ -92,7 +93,7 @@ export async function handleTipRequest(env: Env, request: Request, input: TipInp
     .execute()
 
   try {
-    const txHash = await submitTipTransaction(env, request, {
+    const txHash = await submitTipTransaction(env, {
       amount,
       recipientAddress: recipient.tempo_address as Hex,
       sender,
@@ -157,7 +158,6 @@ async function isDailyCapExceeded(
 
 async function submitTipTransaction(
   env: Env,
-  request: Request,
   input: {
     amount: string
     recipientAddress: Hex
@@ -184,7 +184,7 @@ async function submitTipTransaction(
   const client = createClient({
     account,
     chain,
-    transport: http(`${new URL(request.url).origin}/api/relay/${chain.id}`),
+    transport: createRelayTransport(env, chain.id),
   })
   const receipt = await sendTransactionSync(client, {
     account,
