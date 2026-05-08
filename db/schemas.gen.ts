@@ -28,20 +28,6 @@ export const connect_token = z.object({
   workspace_id: z.string(),
 })
 
-export const slack_installation = z.object({
-  bot_token_ciphertext: z.string(),
-  bot_user_id: z.string().nullable(),
-  created_at: z.string(),
-  enterprise_id: z.string().nullable(),
-  id: z.string(),
-  installed_by: z.string().nullable(),
-  scopes: z.string().nullable(),
-  team_id: z.string(),
-  team_name: z.string().nullable(),
-  updated_at: z.string(),
-  workspace_id: z.string(),
-})
-
 export const tip = z.object({
   amount: z.string(),
   created_at: z.string(),
@@ -85,7 +71,6 @@ export const workspace = z.object({
 export const db = {
   account: account,
   connect_token: connect_token,
-  slack_installation: slack_installation,
   tip: tip,
   tip_attempt: tip_attempt,
   workspace: workspace,

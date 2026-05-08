@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 test('home page opens Slack install flow', async ({ page }) => {
-  await page.route('**/slack/install', async (route) => {
+  await page.route('**/install/slack', async (route) => {
     await route.fulfill({
       body: 'Slack install started',
       contentType: 'text/plain',
@@ -15,10 +15,10 @@ test('home page opens Slack install flow', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Tipbot' })).toBeVisible()
 
   const addToSlack = page.getByRole('link', { name: 'Add to Slack' })
-  await expect(addToSlack).toHaveAttribute('href', '/slack/install')
+  await expect(addToSlack).toHaveAttribute('href', '/install/slack')
 
   await addToSlack.click()
 
-  await expect(page).toHaveURL('/slack/install')
+  await expect(page).toHaveURL('/install/slack')
   await expect(page.getByText('Slack install started')).toBeVisible()
 })

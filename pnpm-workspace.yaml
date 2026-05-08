@@ -42,16 +42,17 @@ minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   # Exact-version exception for the npm accounts package replacing the local link.
   - 'accounts@0.9.0'
-  # Exact-version exceptions for Cloudflare's worker-pool test runtime.
-  - '@cloudflare/vitest-pool-workers@0.16.1'
+  # Exact-version exceptions for Cloudflare's local runtime packages.
+  - '@cloudflare/vite-plugin@1.36.3'
+  - '@cloudflare/vitest-pool-workers@0.16.3'
   - '@cloudflare/workerd-darwin-64@1.20260507.1'
   - '@cloudflare/workerd-darwin-arm64@1.20260507.1'
   - '@cloudflare/workerd-linux-64@1.20260507.1'
   - '@cloudflare/workerd-linux-arm64@1.20260507.1'
   - '@cloudflare/workerd-windows-64@1.20260507.1'
-  - 'miniflare@4.20260507.0'
+  - 'miniflare@4.20260507.1'
   - 'workerd@1.20260507.1'
-  - 'wrangler@4.89.0'
+  - 'wrangler@4.90.0'
   # Exact-version exceptions for Cloudflare's locked workerd platform packages;
   # pnpm 11 currently flags these during resolution even though the lockfile is pinned.
   - '@cloudflare/workerd-darwin-64@1.20260504.1'

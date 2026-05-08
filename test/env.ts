@@ -10,26 +10,24 @@ declare module 'vitest' {
 }
 
 const schema = z.object({
-  ACCESS_KEY_ENCRYPTION_SECRET: z.string(),
-  FEE_PAYER_PRIVATE_KEY: z.string(),
   HOST: z.string(),
+  SECRET_KEY: z.string(),
+  SLACK_API_URL: z.string(),
   SLACK_CLIENT_ID: z.string(),
   SLACK_CLIENT_SECRET: z.string(),
   SLACK_SIGNING_SECRET: z.string(),
-  TEMPO_CHAIN: z.literal('testnet'),
 })
 
 type Input = z.infer<typeof schema>
 export const Env = {
   get(overrides: Partial<Input> = {}) {
     return {
-      ACCESS_KEY_ENCRYPTION_SECRET: 'test-encryption-secret',
-      FEE_PAYER_PRIVATE_KEY: '0x0000000000000000000000000000000000000000000000000000000000000001',
       HOST: 'tip.bot',
+      SECRET_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=',
+      SLACK_API_URL: 'https://slack.com/api/',
       SLACK_CLIENT_ID: '123.456',
       SLACK_CLIENT_SECRET: 'test-client-secret',
       SLACK_SIGNING_SECRET: 'test-signing-secret',
-      TEMPO_CHAIN: 'testnet',
       ...overrides,
     } satisfies Input
   },
@@ -39,7 +37,4 @@ export const Env = {
   schema,
 }
 
-export type TestEnv = Omit<Cloudflare.Env, keyof Input> &
-  Input & {
-    SLACK_API_URL?: string
-  }
+export type TestEnv = Omit<Cloudflare.Env, keyof Input> & Input

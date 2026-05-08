@@ -48,20 +48,23 @@ function createManifest() {
           description: 'Tip teammates',
           should_escape: true,
           usage_hint: 'connect | @account | config',
-          url: `${baseUrl}/api/slack/commands`,
+          url: `${baseUrl}/api/chat/slack`,
         },
       ],
     },
     oauth_config: {
-      redirect_urls: [`${baseUrl}/api/slack/oauth/callback`],
+      redirect_urls: [`${baseUrl}/api/chat/slack/oauth/callback`],
       scopes: {
         bot: [
           'app_mentions:read',
           'channels:history',
+          'channels:read',
           'chat:write',
           'commands',
           'groups:history',
+          'groups:read',
           'reactions:read',
+          'reactions:write',
           'users:read',
         ],
       },
@@ -69,10 +72,11 @@ function createManifest() {
     settings: {
       event_subscriptions: {
         bot_events: ['app_mention', 'reaction_added'],
-        request_url: `${baseUrl}/api/slack/events`,
+        request_url: `${baseUrl}/api/chat/slack`,
       },
       interactivity: {
-        is_enabled: false,
+        is_enabled: true,
+        request_url: `${baseUrl}/api/chat/slack`,
       },
       org_deploy_enabled: false,
       socket_mode_enabled: false,

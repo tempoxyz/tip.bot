@@ -14,7 +14,7 @@ test('Slack URL verification reaches the Worker API route', async () => {
     type: 'url_verification',
   })
 
-  const response = await worker.fetch('https://tip.test/api/slack/events', {
+  const response = await worker.fetch('https://tip.test/api/chat/slack', {
     body,
     headers: {
       ...(await createSlackHeaders(body)),
@@ -24,11 +24,11 @@ test('Slack URL verification reaches the Worker API route', async () => {
   })
 
   expect(response.status).toBe(200)
-  expect(await response.text()).toBe('slack-challenge')
+  expect(await response.json()).toEqual({ challenge: 'slack-challenge' })
 })
 
 test('invalid Slack signatures are rejected by the Worker API route', async () => {
-  const response = await worker.fetch('https://tip.test/api/slack/events', {
+  const response = await worker.fetch('https://tip.test/api/chat/slack', {
     body: '{}',
     headers: {
       'content-type': 'application/json',
@@ -39,24 +39,6 @@ test('invalid Slack signatures are rejected by the Worker API route', async () =
   })
 
   expect(response.status).toBe(401)
-})
-
-test('server relay transport does not fetch the public Worker from the Worker runtime', async () => {
-  const response = await worker.fetch('https://tip.test/__test/serverRelayTransport')
-
-  expect(response.status).toBe(200)
-  expect(await response.json()).toEqual({ ok: true })
-})
-
-test('relay fill response adds missing Tempo fee caps before signing', async () => {
-  const response = await worker.fetch('https://tip.test/__test/relayFillAddsFeeCaps')
-
-  expect(response.status).toBe(200)
-  expect(await response.json()).toEqual({
-    gas: '0x4c4b40',
-    maxFeePerGas: '0xcb',
-    maxPriorityFeePerGas: '0x3',
-  })
 })
 
 const worker = exports.default as { fetch: typeof fetch }

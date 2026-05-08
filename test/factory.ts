@@ -1,9 +1,8 @@
 import { createQueryId, type Insertable, type Kysely, type Selectable } from 'kysely'
-import { Address, Hex, Secp256k1 } from 'ox'
 
 import type { DB } from '#db/types.gen.ts'
+import { mockTokenAddress } from '#/lib/mockTips.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
-import { pathUsd } from '#/lib/tempo.ts'
 
 export const Factory = { create }
 
@@ -78,8 +77,6 @@ const defaultConfig: Partial<{
   [K in keyof DB]: () => Partial<Insertable<DB[K]>>
 }> = {
   account() {
-    const privateKey = Secp256k1.randomPrivateKey()
-    const publicKey = Secp256k1.getPublicKey({ privateKey })
     const now = new Date().toISOString()
     return {
       access_key_address: null,
@@ -90,7 +87,7 @@ const defaultConfig: Partial<{
       display_name: null,
       platform: 'slack',
       platform_account_id: `U${Nanoid.generate()}`,
-      tempo_address: Address.fromPublicKey(publicKey),
+      tempo_address: null,
       updated_at: now,
     }
   },
@@ -100,22 +97,8 @@ const defaultConfig: Partial<{
       expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(), // 15 minutes
       platform: 'slack',
       platform_account_id: `U${Nanoid.generate()}`,
-      token_hash: Hex.fromBytes(crypto.getRandomValues(new Uint8Array(32))),
+      token_hash: Nanoid.generate(),
       used_at: null,
-    }
-  },
-  slack_installation() {
-    const now = new Date().toISOString()
-    return {
-      bot_token_ciphertext: 'xoxb-test',
-      bot_user_id: `B${Nanoid.generate()}`,
-      created_at: now,
-      enterprise_id: null,
-      installed_by: null,
-      scopes: 'commands,chat:write',
-      team_id: `T${Nanoid.generate()}`,
-      team_name: 'Tip Test',
-      updated_at: now,
     }
   },
   tip() {
@@ -128,7 +111,7 @@ const defaultConfig: Partial<{
       reason: null,
       source_type: 'command',
       status: 'submitting',
-      token_address: pathUsd,
+      token_address: mockTokenAddress,
       tx_hash: null,
       updated_at: now,
     }
@@ -138,13 +121,9 @@ const defaultConfig: Partial<{
       amount: '1000',
       created_at: new Date().toISOString(),
       expires_at: new Date(Date.now() + 60 * 1000).toISOString(), // 1 minute
-      recipient_address: Address.fromPublicKey(
-        Secp256k1.getPublicKey({ privateKey: Secp256k1.randomPrivateKey() }),
-      ),
-      sender_address: Address.fromPublicKey(
-        Secp256k1.getPublicKey({ privateKey: Secp256k1.randomPrivateKey() }),
-      ),
-      token_address: pathUsd,
+      recipient_address: 'mock-recipient',
+      sender_address: 'mock-sender',
+      token_address: mockTokenAddress,
     }
   },
   workspace() {

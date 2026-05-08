@@ -16,7 +16,7 @@ const env = z.parse(
   process.env,
 )
 
-const databaseName = 'tip'
+const databaseName = 'tipbot'
 const schemaResult = JSON.parse(
   execFileSync(
     'pnpm',

@@ -5,7 +5,6 @@ import type * as k from 'kysely'
 export interface DB {
   account: Account
   connect_token: ConnectToken
-  slack_installation: SlackInstallation
   tip: Tip
   tip_attempt: TipAttempt
   workspace: Workspace
@@ -34,20 +33,6 @@ type ConnectToken = {
   platform_account_id: string
   token_hash: string
   used_at: string | null
-  workspace_id: string
-}
-
-type SlackInstallation = {
-  bot_token_ciphertext: string
-  bot_user_id: string | null
-  created_at: k.Generated<string>
-  enterprise_id: string | null
-  id: k.Generated<string>
-  installed_by: string | null
-  scopes: string | null
-  team_id: string
-  team_name: string | null
-  updated_at: k.Generated<string>
   workspace_id: string
 }
 
@@ -94,7 +79,6 @@ type Workspace = {
 export declare namespace DB {
   type Account = k.Selectable<DB['account']>
   type ConnectToken = k.Selectable<DB['connect_token']>
-  type SlackInstallation = k.Selectable<DB['slack_installation']>
   type Tip = k.Selectable<DB['tip']>
   type TipAttempt = k.Selectable<DB['tip_attempt']>
   type Workspace = k.Selectable<DB['workspace']>
@@ -102,7 +86,6 @@ export declare namespace DB {
   export namespace Insertable {
     type Account = k.Insertable<DB['account']>
     type ConnectToken = k.Insertable<DB['connect_token']>
-    type SlackInstallation = k.Insertable<DB['slack_installation']>
     type Tip = k.Insertable<DB['tip']>
     type TipAttempt = k.Insertable<DB['tip_attempt']>
     type Workspace = k.Insertable<DB['workspace']>
@@ -111,7 +94,6 @@ export declare namespace DB {
   export namespace Selectable {
     type Account = k.Selectable<DB['account']>
     type ConnectToken = k.Selectable<DB['connect_token']>
-    type SlackInstallation = k.Selectable<DB['slack_installation']>
     type Tip = k.Selectable<DB['tip']>
     type TipAttempt = k.Selectable<DB['tip_attempt']>
     type Workspace = k.Selectable<DB['workspace']>
@@ -120,7 +102,6 @@ export declare namespace DB {
   export namespace Updateable {
     type Account = k.Updateable<DB['account']>
     type ConnectToken = k.Updateable<DB['connect_token']>
-    type SlackInstallation = k.Updateable<DB['slack_installation']>
     type Tip = k.Updateable<DB['tip']>
     type TipAttempt = k.Updateable<DB['tip_attempt']>
     type Workspace = k.Updateable<DB['workspace']>

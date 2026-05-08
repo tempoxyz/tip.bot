@@ -33,7 +33,7 @@ jobs:
         uses: ./.github/actions/setup-pnpm
 
       - name: Run migrations
-        run: pnpm exec wrangler d1 migrations apply tip --env production --remote
+        run: pnpm exec wrangler d1 migrations apply tipbot --env production --remote
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -51,14 +51,14 @@ jobs:
           command: deploy --env production
           environment: production
           secrets: |
-            ACCESS_KEY_ENCRYPTION_SECRET
             FEE_PAYER_PRIVATE_KEY
+            SECRET_KEY
             SLACK_CLIENT_ID
             SLACK_CLIENT_SECRET
             SLACK_SIGNING_SECRET
         env:
-          ACCESS_KEY_ENCRYPTION_SECRET: ${{ secrets.ACCESS_KEY_ENCRYPTION_SECRET }}
           FEE_PAYER_PRIVATE_KEY: ${{ secrets.FEE_PAYER_PRIVATE_KEY }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
           SLACK_CLIENT_ID: ${{ secrets.SLACK_CLIENT_ID }}
           SLACK_CLIENT_SECRET: ${{ secrets.SLACK_CLIENT_SECRET }}
           SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}

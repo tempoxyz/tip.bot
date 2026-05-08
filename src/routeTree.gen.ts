@@ -9,65 +9,48 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as SlackInstallRouteImport } from './routes/slack/install'
+import { Route as InstallSlackRouteImport } from './routes/install/slack'
 
-const ConnectRoute = ConnectRouteImport.update({
-  id: '/connect',
-  path: '/connect',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SlackInstallRoute = SlackInstallRouteImport.update({
-  id: '/slack/install',
-  path: '/slack/install',
+const InstallSlackRoute = InstallSlackRouteImport.update({
+  id: '/install/slack',
+  path: '/install/slack',
   getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/connect': typeof ConnectRoute
-  '/slack/install': typeof SlackInstallRoute
+  '/install/slack': typeof InstallSlackRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/connect': typeof ConnectRoute
-  '/slack/install': typeof SlackInstallRoute
+  '/install/slack': typeof InstallSlackRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/connect': typeof ConnectRoute
-  '/slack/install': typeof SlackInstallRoute
+  '/install/slack': typeof InstallSlackRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/connect' | '/slack/install'
+  fullPaths: '/' | '/install/slack'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/connect' | '/slack/install'
-  id: '__root__' | '/' | '/connect' | '/slack/install'
+  to: '/' | '/install/slack'
+  id: '__root__' | '/' | '/install/slack'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  ConnectRoute: typeof ConnectRoute
-  SlackInstallRoute: typeof SlackInstallRoute
+  InstallSlackRoute: typeof InstallSlackRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/connect': {
-      id: '/connect'
-      path: '/connect'
-      fullPath: '/connect'
-      preLoaderRoute: typeof ConnectRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/': {
       id: '/'
       path: '/'
@@ -75,11 +58,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/slack/install': {
-      id: '/slack/install'
-      path: '/slack/install'
-      fullPath: '/slack/install'
-      preLoaderRoute: typeof SlackInstallRouteImport
+    '/install/slack': {
+      id: '/install/slack'
+      path: '/install/slack'
+      fullPath: '/install/slack'
+      preLoaderRoute: typeof InstallSlackRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -87,8 +70,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  ConnectRoute: ConnectRoute,
-  SlackInstallRoute: SlackInstallRoute,
+  InstallSlackRoute: InstallSlackRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

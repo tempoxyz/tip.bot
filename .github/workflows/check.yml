@@ -36,13 +36,14 @@ jobs:
           pnpm run db:codegen
           pnpm run gen:types
         env:
-          ACCESS_KEY_ENCRYPTION_SECRET: ci-placeholder
           FEE_PAYER_PRIVATE_KEY: 0x0000000000000000000000000000000000000000000000000000000000000000
-          SLACK_BOT_TOKEN: ci-placeholder
+          SECRET_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+          SLACK_CLIENT_ID: ci-placeholder
+          SLACK_CLIENT_SECRET: ci-placeholder
           SLACK_SIGNING_SECRET: ci-placeholder
 
       - name: Check generated code
-        run: git diff --exit-code -- src/lib/db.gen.ts src/lib/db.schemas.gen.ts src/worker-configuration.d.ts
+        run: git diff --exit-code -- db/types.gen.ts db/schemas.gen.ts src/worker-configuration.d.ts
 
       - name: Check
         run: pnpm check

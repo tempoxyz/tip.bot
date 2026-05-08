@@ -4,6 +4,8 @@ import { jsx } from 'react/jsx-runtime'
 import type { Register } from '@tanstack/react-start'
 import { api } from '#/api.ts'
 
+export { ChatStateDO } from '#/lib/chatState.ts'
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url)

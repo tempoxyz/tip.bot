@@ -11,8 +11,8 @@
     "check": "vp check",
     "check:types": "tsgo -b",
     "db:codegen": "node --experimental-strip-types db/codegen.ts",
-    "db:execute": "wrangler d1 execute tip --local",
-    "db:migrate": "wrangler d1 migrations apply tip --local",
+    "db:execute": "wrangler d1 execute tipbot --local",
+    "db:migrate": "wrangler d1 migrations apply tipbot --local",
     "db:reset": "rm -rf .wrangler/state && pnpm run db:migrate",
     "deps": "pnpx taze -r",
     "deps:ci": "pnpx actions-up --dir .github",
@@ -30,22 +30,22 @@
   },
   "dependencies": {
     "@base-ui/react": "1.4.1",
-    "@cloudflare/vite-plugin": "1.36.0",
+    "@chat-adapter/slack": "4.27.0",
+    "@cloudflare/vite-plugin": "1.36.3",
     "@tanstack/react-router": "1.169.2",
     "@tanstack/react-start": "1.167.64",
     "@tanstack/router-plugin": "1.167.34",
-    "accounts": "0.9.0",
+    "chat": "4.27.0",
     "hono": "4.12.17",
     "kysely": "0.28.17",
     "nanoid": "^5.1.11",
     "ox": "0.14.20",
     "react": "19.2.5",
     "react-dom": "19.2.5",
-    "viem": "2.48.8",
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "0.16.1",
+    "@cloudflare/vitest-pool-workers": "0.16.3",
     "@iconify/json": "2.2.467",
     "@playwright/test": "1.59.1",
     "@svgr/core": "8.1.0",
@@ -62,13 +62,14 @@
     "emulate": "0.5.0",
     "portless": "0.12.0",
     "tailwindcss": "4.2.4",
+    "tiny-jsonc": "1.0.2",
     "typescript": "6.0.3",
     "unplugin-auto-import": "21.0.0",
     "unplugin-icons": "23.0.1",
     "vite": "catalog:",
     "vite-plus": "catalog:",
     "vitest": "catalog:",
-    "wrangler": "4.88.0"
+    "wrangler": "4.90.0"
   },
   "devEngines": {
     "runtime": {
