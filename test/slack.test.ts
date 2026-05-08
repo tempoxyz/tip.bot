@@ -212,7 +212,17 @@ test('app mention can introduce Tipbot', async () => {
       ts: parent.ts,
     },
   )
-  expect(replies.messages.some((message) => message.text?.includes('I’m Tipbot'))).toBe(true)
+  expect(replies.messages.some((message) => message.text?.includes('I’m Tipbot'))).toBe(false)
+
+  const history = await slackApi<{ messages: Array<{ text?: string }> }>(
+    slack.apiUrl,
+    'conversations.history',
+    {
+      channel: 'C000000001',
+      limit: '5',
+    },
+  )
+  expect(history.messages.some((message) => message.text?.includes('I’m Tipbot'))).toBe(true)
 })
 
 test('invalid Slack signatures are rejected', async () => {

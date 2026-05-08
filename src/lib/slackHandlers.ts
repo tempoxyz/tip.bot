@@ -66,8 +66,7 @@ async function handleMention(env: Env, request: Request, envelope: SlackEventEnv
       await getSlackClient(env, envelope.team_id)
     ).chat.postMessage({
       channel: event.channel!,
-      text: 'I’m Tipbot: sometime tipper, sometime messenger, always bot. Connect with `/tip connect`, then send stablecoins with `/tip @account for coffee`, `@Tipbot @account for coffee`, or a :money_with_wings: reaction.',
-      thread_ts: event.thread_ts ?? event.ts,
+      text: 'I’m Tipbot: sometime tipper, sometime messenger, always bot.\nConnect with `/tip connect`, then send stablecoins with `/tip @account for coffee`, `@Tipbot @account for coffee`, or a :money_with_wings: reaction.',
     })
     return
   }
