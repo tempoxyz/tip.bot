@@ -184,7 +184,7 @@ async function submitTipTransaction(
   const client = createClient({
     account,
     chain,
-    transport: http(`${new URL(request.url).origin}/api/relay`),
+    transport: http(`${new URL(request.url).origin}/api/relay/${chain.id}`),
   })
   const receipt = await sendTransactionSync(client, {
     account,

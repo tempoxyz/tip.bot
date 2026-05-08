@@ -286,6 +286,16 @@ test('relay is served from the Hono API route', async () => {
   expect(await response.text()).toBe('Fee payer is not configured.')
 })
 
+test('relay chain route is served from the Hono API route', async () => {
+  const response = await api.fetch(new Request('http://tip.test/api/relay/919'), {
+    ...TestEnv.get(),
+    FEE_PAYER_PRIVATE_KEY: '',
+  } as unknown as Env)
+
+  expect(response.status).toBe(500)
+  expect(await response.text()).toBe('Fee payer is not configured.')
+})
+
 test('Slack OAuth install stores workspace bot token', async () => {
   const env = await createEnv(slack.apiUrl, {
     ACCESS_KEY_ENCRYPTION_SECRET: 'oauth-test-secret',

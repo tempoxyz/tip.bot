@@ -1,3 +1,5 @@
+<img src="../public/tipbot.png" alt="tip.bot" width="240" />
+
 # tip.bot
 
 Chat-native stablecoin micropayments

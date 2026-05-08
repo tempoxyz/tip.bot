@@ -7,7 +7,7 @@ import { createDb } from '#/lib/db.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import { completeSlackInstall, createSlackInstallUrl } from '#/lib/slack.ts'
 import { handleSlackCommandRequest, handleSlackEventRequest } from '#/lib/slackHandlers.ts'
-import { pathUsd } from '#/lib/tempo.ts'
+import { getTempoChain, pathUsd } from '#/lib/tempo.ts'
 
 type RelayEnv = Env & {
   FEE_PAYER_PRIVATE_KEY?: `0x${string}`
@@ -88,7 +88,13 @@ api
   .get('/relay', async (c) => {
     return handleRelay(c.req.raw, c.env as RelayEnv)
   })
+  .get('/relay/:chainId', async (c) => {
+    return handleRelay(c.req.raw, c.env as RelayEnv)
+  })
   .post('/relay', async (c) => {
+    return handleRelay(c.req.raw, c.env as RelayEnv)
+  })
+  .post('/relay/:chainId', async (c) => {
     return handleRelay(c.req.raw, c.env as RelayEnv)
   })
   .post('/slack/commands', async (c) => {
@@ -126,6 +132,7 @@ function handleRelay(request: Request, env: RelayEnv) {
     return new Response('Fee payer is not configured.', { status: 500 })
 
   return Handler.relay({
+    chains: [getTempoChain(env.TEMPO_CHAIN)],
     feePayer: {
       account: privateKeyToAccount(env.FEE_PAYER_PRIVATE_KEY) as never,
       name: 'Tip',
