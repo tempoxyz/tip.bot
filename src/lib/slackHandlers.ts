@@ -1,4 +1,4 @@
-import { createDb } from '#/lib/db.ts'
+import { createDb } from '#db/client.ts'
 import {
   createConnectUrl,
   ensureWorkspace,

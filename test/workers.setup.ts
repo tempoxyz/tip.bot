@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers'
 import { applyD1Migrations, reset } from 'cloudflare:test'
-import initialMigration from '../migrations/0001_initial.sql?raw'
-import slackInstallationMigration from '../migrations/0002_slack_installation.sql?raw'
+import initialMigration from '../db/migrations/0001_initial.sql?raw'
+import slackInstallationMigration from '../db/migrations/0002_slack_installation.sql?raw'
 import { beforeEach } from 'vitest'
 
 const migrations = [

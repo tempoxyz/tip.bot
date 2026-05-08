@@ -1,7 +1,7 @@
 import { createClient } from 'viem'
 
+import { createDb } from '#db/client.ts'
 import { api } from '#/lib/api.ts'
-import { createDb } from '#/lib/db.ts'
 import { createRelayTransport } from '#/lib/relay.ts'
 import { getTempoChain, pathUsd } from '#/lib/tempo.ts'
 import { createFactory } from './factory.ts'

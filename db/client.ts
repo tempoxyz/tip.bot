@@ -8,7 +8,7 @@ import type {
   QueryResult,
 } from 'kysely'
 import { Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from 'kysely'
-import type { DB } from './db.gen'
+import type { DB } from './types.gen.ts'
 
 export function createDb(database: D1Database | D1DatabaseSession) {
   return new Kysely<DB>({

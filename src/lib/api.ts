@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 
+import { createDb } from '#db/client.ts'
 import { encryptSecret, hashValue } from '#/lib/crypto.ts'
-import { createDb } from '#/lib/db.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import { handleRelay, type RelayEnv } from '#/lib/relay.ts'
 import { completeSlackInstall, createSlackInstallUrl } from '#/lib/slack.ts'

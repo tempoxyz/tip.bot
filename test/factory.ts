@@ -1,7 +1,7 @@
 import { createQueryId, type Insertable, type Kysely, type Selectable } from 'kysely'
 import { Address, Hex, Secp256k1 } from 'ox'
 
-import type { DB } from '#/lib/db.gen.ts'
+import type { DB } from '#db/types.gen.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import { pathUsd } from '#/lib/tempo.ts'
 

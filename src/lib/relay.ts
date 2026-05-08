@@ -2,7 +2,7 @@ import { Handler } from 'accounts/server'
 import { createClient, http, toHex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 
-import { createDb } from '#/lib/db.ts'
+import { createDb } from '#db/client.ts'
 import { getTempoChain, pathUsd } from '#/lib/tempo.ts'
 
 const sponsoredTempoGasFloor = 5_000_000n

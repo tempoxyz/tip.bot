@@ -44,18 +44,21 @@ function Root() {
 function NotFound() {
   return (
     <main
-      data-regen-color="blue"
-      data-regen-radius="large"
-      className="grid min-h-screen place-items-center bg-background p-[24px] text-foreground"
+      className="grid min-h-screen place-items-center bg-[var(--tipbot-bg)] p-8 text-[var(--tipbot-text)]"
+      data-tipbot-home
     >
-      <section className="grid w-[min(100%,28rem)] gap-[14px] rounded-body border border-border bg-surface p-[24px]">
-        <p className="label-13 text-foreground-secondary">404</p>
-        <h1 className="heading-32 text-foreground">Page not found.</h1>
-        <p className="copy-14 text-foreground-secondary">
+      <section className="grid w-[min(100%,28rem)] gap-4 rounded-2xl border border-[var(--tipbot-card-border)] bg-[var(--tipbot-card-bg)] p-6 shadow-[0_1px_0_#0000001f]">
+        <p className="text-sm font-bold uppercase tracking-[0.12em] text-[var(--tipbot-muted)]">
+          404
+        </p>
+        <h1 className="text-3xl font-bold leading-tight tracking-[-0.04em] text-[var(--tipbot-text)]">
+          Page not found.
+        </h1>
+        <p className="text-[15px] leading-6 text-[var(--tipbot-muted)]">
           The page you’re looking for doesn’t exist.
         </p>
         <Link
-          className="button-14 inline-flex h-[40px] w-fit items-center justify-center rounded-button bg-accent px-[16px] text-on-accent no-underline hover:bg-accent-hover active:bg-accent-active focus-visible:outline focus-visible:outline-[2px] focus-visible:outline-offset-[2px] focus-visible:outline-focus"
+          className="inline-flex h-10 w-fit items-center justify-center rounded-lg bg-[var(--tipbot-text)] px-4 text-sm font-bold leading-none text-[var(--tipbot-bg)] no-underline transition hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#36c5f0]"
           to="/"
         >
           Go home
@@ -67,7 +70,7 @@ function NotFound() {
 
 function RootDocument(props: React.PropsWithChildren) {
   return (
-    <html data-regen-color="blue" data-regen-radius="large" lang="en" suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <head>
         <HeadContent />
       </head>

@@ -7,7 +7,7 @@ const isTest = process.env.NODE_ENV === 'test' || process.env.VITEST !== undefin
 export default defineConfig({
   staged: {
     '*': 'vp check --fix',
-    '*.{ts,tsx}': "bash -c 'pnpm typecheck'",
+    '*.{ts,tsx}': "bash -c 'pnpm check:types'",
   },
   fmt: {
     ignorePatterns: [
@@ -20,11 +20,11 @@ export default defineConfig({
   },
   lint: {
     ignorePatterns: [
+      'db/schemas.gen.ts',
+      'db/types.gen.ts',
       'dist/**',
       'test/**',
       'src/auto-imports.d.ts',
-      'src/lib/db.gen.ts',
-      'src/lib/db.schemas.gen.ts',
       'src/routeTree.gen.ts',
       'src/worker-configuration.d.ts',
     ],
@@ -111,7 +111,6 @@ export default defineConfig({
       devtoolsModule,
       iconsModule,
       iconsResolverModule,
-      regenModule,
       tailwindcssModule,
       tanstackStartModule,
       viteReactModule,
@@ -120,7 +119,6 @@ export default defineConfig({
       import('@tanstack/devtools-vite'),
       import('unplugin-icons/vite'),
       import('unplugin-icons/resolver'),
-      import('regen-ui/vite'),
       import('@tailwindcss/vite'),
       import('@tanstack/react-start/plugin/vite'),
       import('@vitejs/plugin-react'),
@@ -128,7 +126,6 @@ export default defineConfig({
 
     return [
       devtoolsModule.devtools(),
-      regenModule.default({ tailwindPlugin: false }),
       !isTest &&
         (await import('@cloudflare/vite-plugin')).cloudflare({
           viteEnvironment: { name: 'ssr' },

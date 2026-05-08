@@ -1,5 +1,4 @@
 @import 'tailwindcss';
-@import 'regen-ui/tailwind.css';
 
 @theme {
   --color-amber1: light-dark(hsl(39 100% 95%), hsl(35 100% 8%));

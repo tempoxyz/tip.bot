@@ -6,6 +6,7 @@
     "module": "ESNext",
     "paths": {
       "#/*": ["../src/*"],
+      "#db/*": ["../db/*"],
       "@/*": ["../src/*"]
     },
     "lib": ["ES2022"],
@@ -16,11 +17,13 @@
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
     "noEmit": true,
 
     /* Linting */
     "skipLibCheck": true,
     "strict": true,
+    "erasableSyntaxOnly": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,

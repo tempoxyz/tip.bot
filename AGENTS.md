@@ -1,16 +1,51 @@
+# AGENTS.md
+
 > **Communication Style**: Be brief, concise. Maximize information density, minimize tokens. Incomplete sentences acceptable when clear. Remove filler words. Prioritize clarity over grammar.
 
-<!-- intent-skills:start -->
+## Commands
 
-## Skill Loading
+Prefer package scripts over ad-hoc `npx`. Use `pnpm`/`pnpx` for binaries.
 
-Before substantial work:
+- `pnpm check` - Lint and format with Vite+
+- `pnpm db:codegen` - Generate Kysely database types and schemas
+- `pnpm db:execute -- <SQL-or-flags>` - Run SQL against local D1
+- `pnpm db:migrate` - Apply local D1 migrations
+- `pnpm db:reset` - Reset local D1 state and re-run migrations
+- `pnpm deps` - Check dependency updates with Taze
+- `pnpm deps:ci` - Check GitHub Action updates with actions-up
+- `pnpm gen:types` - Generate Cloudflare Worker binding types
+- `pnpm slack:app:manifest` - Generate Slack app manifest
+- `pnpm slack:app:validate` - Validate Slack app manifest
+- `pnpm test` - Run Vitest projects
+- `pnpm test:e2e` - Run Playwright E2E tests
+- `pnpm check:types` - Type check all TS projects
 
-- Skill check: run `npx @tanstack/intent@latest list`, or use skills already listed in context.
-- Skill guidance: if one local skill clearly matches the task, run `npx @tanstack/intent@latest load <package>#<skill>` and follow the returned `SKILL.md`.
-- Monorepos: when working across packages, run the skill check from the workspace root and prefer the local skill for the package being changed.
-- Multiple matches: prefer the most specific local skill for the package or concern you are changing; load additional skills only when the task spans multiple packages or concerns.
-<!-- intent-skills:end -->
+## Debugging
+
+- `pnpm dev` starts the app through Portless/Funnel for Slack callbacks.
+- `pnpm dev:app` starts the app directly without Portless.
+- Local D1 state lives in `.wrangler/state`; use `pnpm db:reset` when migrations or generated DB types drift.
+- Use `pnpm db:execute -- --command "SQL"` for focused local D1 inspection.
+- After changing Slack app configuration, run `pnpm slack:app:validate` before updating production.
+
+## API
+
+- Always specify explicit status codes in `c.json()` responses (e.g. `c.json({ error: 'not_found' }, 404)`, `c.json({ data }, 200)`).
+- Use string literal error codes in API responses for type-safe client matching.
+- Prefer route-level error responses over global middleware errors so RPC types stay precise per endpoint.
+
+## Cloudflare Workers
+
+- Follow Workers best practices: https://developers.cloudflare.com/workers/best-practices/workers-best-practices/index.md
+- Keep local binding state worktree-local unless explicitly sharing state.
+
+## Database
+
+- Run `pnpm db:codegen` after changing migrations.
+- Use generated `DB` and schema types from `db/types.gen.ts` and `db/schemas.gen.ts` instead of hand-written record types.
+- Use singular snake_case table and column names.
+- Prefer timestamps like `deleted_at` over boolean lifecycle fields like `deleted`.
+- Use CHECK constraints for enum-like text values where SQLite/D1 supports the invariant.
 
 ## Git Worktrees
 

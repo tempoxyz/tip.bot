@@ -1,12 +1,12 @@
+import { createDb } from '#db/client.ts'
 import { decryptSecret, encryptSecret, hashValue } from '#/lib/crypto.ts'
-import { createDb } from '#/lib/db.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import { connectTokenTtlMs } from '#/lib/tempo.ts'
 
 export type SlackEnv = Env & {
   ACCESS_KEY_ENCRYPTION_SECRET?: string
+  HOST?: string
   SLACK_API_URL?: string
-  SLACK_APP_BASE_URL?: string
   SLACK_CLIENT_ID?: string
   SLACK_CLIENT_SECRET?: string
   SLACK_SIGNING_SECRET?: string
@@ -299,8 +299,8 @@ function getSlackApiUrl(env: SlackEnv) {
 }
 
 function getSlackAppOrigin(request: Request, env: SlackEnv) {
-  const url = env.SLACK_APP_BASE_URL ?? new URL(request.url).origin
-  return url.replace(/\/+$/, '')
+  if (env.HOST) return `https://${env.HOST.replace(/^https?:\/\//, '').replace(/\/+$/, '')}`
+  return new URL(request.url).origin.replace(/\/+$/, '')
 }
 
 async function signSlackOAuthState(env: SlackEnv, payload: string) {

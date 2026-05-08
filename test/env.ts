@@ -12,7 +12,7 @@ declare module 'vitest' {
 const schema = z.object({
   ACCESS_KEY_ENCRYPTION_SECRET: z.string(),
   FEE_PAYER_PRIVATE_KEY: z.string(),
-  SLACK_APP_BASE_URL: z.string(),
+  HOST: z.string(),
   SLACK_CLIENT_ID: z.string(),
   SLACK_CLIENT_SECRET: z.string(),
   SLACK_SIGNING_SECRET: z.string(),
@@ -25,7 +25,7 @@ export const Env = {
     return {
       ACCESS_KEY_ENCRYPTION_SECRET: 'test-encryption-secret',
       FEE_PAYER_PRIVATE_KEY: '0x0000000000000000000000000000000000000000000000000000000000000001',
-      SLACK_APP_BASE_URL: 'https://tip.bot',
+      HOST: 'tip.bot',
       SLACK_CLIENT_ID: '123.456',
       SLACK_CLIENT_SECRET: 'test-client-secret',
       SLACK_SIGNING_SECRET: 'test-signing-secret',

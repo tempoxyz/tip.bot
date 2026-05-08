@@ -7,9 +7,9 @@ import { createEmulator, type Emulator } from 'emulate'
 import { createClient } from 'viem'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 
+import { createDb } from '#db/client.ts'
 import { api } from '#/lib/api.ts'
 import { encryptSecret } from '#/lib/crypto.ts'
-import { createDb } from '#/lib/db.ts'
 import { createRelayTransport } from '#/lib/relay.ts'
 import { handleSlackCommandRequest, handleSlackEventRequest } from '#/lib/slackHandlers.ts'
 import { getTempoChain } from '#/lib/tempo.ts'
@@ -375,7 +375,7 @@ test('server relay transport calls the relay in process', async () => {
 test('Slack OAuth install stores workspace bot token', async () => {
   const env = await createEnv(slack.apiUrl, {
     ACCESS_KEY_ENCRYPTION_SECRET: 'oauth-test-secret',
-    SLACK_APP_BASE_URL: 'https://tip-public.test',
+    HOST: 'tip-public.test',
     SLACK_CLIENT_ID: '123.456',
     SLACK_CLIENT_SECRET: 'client-secret',
   })
@@ -546,8 +546,8 @@ function createSlackRequest(
 
 function createTestDatabase() {
   const sqlite = new Database(':memory:')
-  for (const migration of readdirSync(resolve('migrations')).sort())
-    sqlite.exec(readFileSync(resolve('migrations', migration), 'utf8'))
+  for (const migration of readdirSync(resolve('db/migrations')).sort())
+    sqlite.exec(readFileSync(resolve('db/migrations', migration), 'utf8'))
   return {
     prepare(sql: string) {
       let parameters: unknown[] = []

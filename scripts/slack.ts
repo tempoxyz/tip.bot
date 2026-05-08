@@ -1,17 +1,16 @@
 const args = process.argv.slice(2).filter((arg) => arg !== '--')
 const command = args[0]
 const appEnv = args[1] ?? process.env.SLACK_APP_ENV
-const baseUrl = trimTrailingSlash(
-  args[2] ??
-    process.env.SLACK_APP_BASE_URL ??
-    (appEnv === 'production' ? 'https://tip.bot' : undefined),
+const host = normalizeHost(
+  args[2] ?? process.env.HOST ?? (appEnv === 'production' ? 'tip.bot' : undefined),
 )
+const baseUrl = host ? `https://${host}` : undefined
 const appId = args[3] ?? appIdFromEnv()
 
 if (!command || !['create', 'manifest', 'update', 'validate'].includes(command)) usage()
 if (!appEnv || !['local', 'production'].includes(appEnv))
   usage('Expected app env: local or production')
-if (!baseUrl?.startsWith('https://')) usage('Expected an https base URL')
+if (!baseUrl) usage('Expected a host')
 if (['update'].includes(command) && !appId) usage('Expected Slack app ID')
 
 const manifest = createManifest()
@@ -99,7 +98,7 @@ function printCreateResult(result: Record<string, unknown>) {
   console.log(`SLACK_CLIENT_ID=${credentials.client_id}`)
   console.log(`SLACK_CLIENT_SECRET=${credentials.client_secret}`)
   console.log(`SLACK_SIGNING_SECRET=${credentials.signing_secret}`)
-  console.log(`SLACK_APP_BASE_URL=${baseUrl}`)
+  console.log(`HOST=${host}`)
   console.log(`SLACK_${appEnv.toUpperCase()}_APP_ID=${String(result.app_id)}`)
 }
 
@@ -137,8 +136,8 @@ function requiredConfigToken() {
   process.exit(1)
 }
 
-function trimTrailingSlash(value?: string) {
-  return value?.replace(/\/+$/, '')
+function normalizeHost(value?: string) {
+  return value?.replace(/^https?:\/\//, '').replace(/\/+$/, '')
 }
 
 function usage(message?: string): never {
@@ -146,18 +145,18 @@ function usage(message?: string): never {
 
   console.error(`
 Usage:
-  pnpm run slack:app:manifest -- <local|production> <baseUrl>
-  pnpm run slack:app:validate -- <local|production> <baseUrl>
-  pnpm run slack:app:create -- <local|production> <baseUrl>
-  pnpm run slack:app:update -- <local|production> <baseUrl> <appId>
+  pnpm slack:app:manifest -- <local|production> <host>
+  pnpm slack:app:validate -- <local|production> <host>
+  pnpm slack:app:create -- <local|production> <host>
+  pnpm slack:app:update -- <local|production> <host> <appId>
 
 Environment:
   SLACK_CONFIG_TOKEN     Slack app configuration token from https://api.slack.com/apps
   SLACK_APP_NAME         Optional manifest app name override
   SLACK_BOT_DISPLAY_NAME Optional bot mention display name override
-  SLACK_APP_ID           Optional app ID for update
-  SLACK_LOCAL_APP_ID     Optional local app ID for update
-  SLACK_PRODUCTION_APP_ID Optional production app ID for update
+  SLACK_APP_ID           Optional app ID for updates
+  SLACK_LOCAL_APP_ID     Optional local app ID for updates
+  SLACK_PRODUCTION_APP_ID Optional production app ID for updates
 `)
   process.exit(1)
 }
