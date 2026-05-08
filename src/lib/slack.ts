@@ -123,7 +123,10 @@ export async function createConnectUrl(request: Request, env: SlackEnv, data: Sl
     })
     .execute()
 
-  return `${new URL(request.url).origin}/connect?token=${encodeURIComponent(token)}`
+  const url = new URL('/connect', new URL(request.url).origin)
+  url.searchParams.set('chain', env.TEMPO_CHAIN)
+  url.searchParams.set('token', token)
+  return url.toString()
 }
 
 export async function ensureWorkspace(env: SlackEnv, teamId: string) {

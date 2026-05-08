@@ -1,17 +1,22 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { KeyAuthorization } from 'ox/tempo'
 import { useEffect, useState } from 'react'
 import { parseUnits, stringify, toHex } from 'viem'
 import { Account as TempoAccount, Secp256k1 } from 'viem/tempo'
 
-import { getTempoProvider, pathUsd, pathUsdDecimals } from '#/lib/tempo.ts'
+import { getTempoChain, getTempoProvider, pathUsd, pathUsdDecimals } from '#/lib/tempo.ts'
+import type { TempoChain } from '#/lib/tempoConstants.ts'
 
 function Connect() {
   const [connected, setConnected] = useState(false)
   const [message, setMessage] = useState('Checking Slack connect link.')
+  const [tempoChain, setTempoChain] = useState<TempoChain>('testnet')
   const [token, setToken] = useState<string | null>(null)
 
   useEffect(() => {
-    setToken(new URL(window.location.href).searchParams.get('token'))
+    const url = new URL(window.location.href)
+    setTempoChain(url.searchParams.get('chain') === 'mainnet' ? 'mainnet' : 'testnet')
+    setToken(url.searchParams.get('token'))
   }, [])
 
   async function connect() {
@@ -21,7 +26,8 @@ function Connect() {
     }
 
     setMessage('Opening Tempo Wallet.')
-    const provider = getTempoProvider()
+    const chain = getTempoChain(tempoChain)
+    const provider = getTempoProvider(tempoChain)
     const privateKey = Secp256k1.randomPrivateKey()
     const accessKey = TempoAccount.fromSecp256k1(privateKey)
     const expiry = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60 // 7 days
@@ -30,8 +36,10 @@ function Connect() {
       method: 'wallet_connect',
       params: [
         {
+          chainId: toHex(chain.id),
           capabilities: {
             authorizeAccessKey: {
+              chainId: toHex(chain.id),
               expiry,
               keyType: 'secp256k1',
               limits: [{ limit: toHex(parseUnits('1', pathUsdDecimals)), period, token: pathUsd }],
@@ -48,6 +56,8 @@ function Connect() {
     const address = result.accounts[0]?.address
     const keyAuthorization = result.accounts[0]?.capabilities.keyAuthorization
     if (!address || !keyAuthorization) throw new Error('Tempo Wallet did not authorize key.')
+    if (KeyAuthorization.fromRpc(keyAuthorization).chainId !== BigInt(chain.id))
+      throw new Error(`Tempo Wallet must authorize ${chain.name}.`)
 
     setMessage('Saving encrypted tipping key.')
     const response = await fetch('/api/connect/complete', {
