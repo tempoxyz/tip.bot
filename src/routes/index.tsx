@@ -1,4 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { rpc } from '#/lib/rpc.ts'
 
 export const Route = createFileRoute('/')({
   head: () => ({
@@ -31,7 +32,7 @@ function Component() {
         </div>
         <a
           className="mt-4 inline-flex h-14 items-center gap-3 rounded-lg border-2 px-4 text-xl font-bold leading-none tracking-[-0.035em] no-underline transition focus-visible:outline-offset-4 focus-visible:outline-[#36c5f0] sm:h-16 sm:gap-3.5 sm:px-5 sm:text-2xl"
-          href="/install/slack"
+          href={rpc.api.chat.slack.install.$url().pathname}
         >
           <IconSimpleIconsSlack aria-hidden="true" className="size-8 sm:size-10" />
           Add to Slack

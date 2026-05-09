@@ -1,8 +1,10 @@
 import * as DB from '#db/client.ts'
+import { Base64, Hex } from 'ox'
+import type { TipbotChatStateDO } from '#/objects/chatState.ts'
+import { createCloudflareState } from '#/vendor/chatStateCloudflareDO.ts'
 import { createSlackAdapter, type SlackEvent, type SlackReactionEvent } from '@chat-adapter/slack'
 import { env } from 'cloudflare:workers'
 import { Chat, type Message, type ReactionEvent, type SlashCommandEvent, type Thread } from 'chat'
-import { createChatState } from '#/lib/chatState.ts'
 import {
   ensureWorkspace,
   formatTxLink,
@@ -10,7 +12,7 @@ import {
   type Platform,
   type TipInput,
   type TipResult,
-} from '#/lib/mockTips.ts'
+} from '#/lib/tips'
 
 const slackEventContexts = new Map<string, { eventId: string; teamId: string; timestamp: number }>()
 
@@ -38,7 +40,7 @@ bot.onReaction(async (event) => {
   await handleReaction(event as ReactionEvent<SlackReactionEvent>)
 })
 
-export function parseTipText(text: string) {
+function parseTipText(text: string) {
   const mention = text.match(/<@([A-Z0-9]+)(?:\|[^>]+)?>/)
   if (!mention) return null
 
@@ -350,4 +352,56 @@ function slackMessageContextKey(event: Pick<SlackEvent, 'channel' | 'ts'>) {
 
 function slackReactionContextKey(event: SlackReactionEvent) {
   return `reaction:${event.item.channel}:${event.item.ts}:${event.user}:${event.reaction}`
+}
+
+function createChatState(env: { CHAT_STATE: DurableObjectNamespace<TipbotChatStateDO> }) {
+  return createCloudflareState({
+    namespace: env.CHAT_STATE,
+    name: 'tipbot',
+    shardKey: getChatStateShardKey,
+  })
+}
+
+function getChatStateShardKey(threadId: string) {
+  return threadId.split(':', 1)[0] || 'default'
+}
+
+export async function createOAuthState(env: Pick<Env, 'SECRET_KEY'>, redirectUri: string) {
+  const payload = Base64.fromString(
+    JSON.stringify({ expiresAt: Date.now() + 10 * 60 * 1000, redirectUri }), // 10 minutes
+    { pad: false, url: true },
+  )
+  return `${payload}.${await signOAuthState(env, payload)}`
+}
+
+export async function verifyOAuthState(env: Pick<Env, 'SECRET_KEY'>, state: string) {
+  const [payload, signature] = state.split('.')
+  if (!payload || !signature) throw new Error('Slack install state is invalid.')
+  if (!timingSafeEqual(signature, await signOAuthState(env, payload)))
+    throw new Error('Slack install state signature is invalid.')
+
+  const data = JSON.parse(Base64.toString(payload)) as { expiresAt: number; redirectUri: string }
+  if (Date.now() > data.expiresAt) throw new Error('Slack install state expired.')
+  return data
+}
+
+async function signOAuthState(env: Pick<Env, 'SECRET_KEY'>, payload: string) {
+  if (!env.SECRET_KEY) throw new Error('SECRET_KEY is not configured.')
+
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(env.SECRET_KEY),
+    { hash: 'SHA-256', name: 'HMAC' },
+    false,
+    ['sign'],
+  )
+  const digest = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload))
+  return Hex.fromBytes(new Uint8Array(digest))
+}
+
+function timingSafeEqual(left: string, right: string) {
+  if (left.length !== right.length) return false
+  let result = 0
+  for (let i = 0; i < left.length; i += 1) result |= left.charCodeAt(i) ^ right.charCodeAt(i)
+  return result === 0
 }

@@ -1,6 +1,6 @@
 import { createQueryId, type Insertable, type Kysely, type Selectable } from 'kysely'
 import type { DB } from '#db/types.gen.ts'
-import { mockTokenAddress } from '#/lib/mockTips.ts'
+import { mockTokenAddress } from '#/lib/tips.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 
 export function create(db: Kysely<DB>): FactoryInstance {

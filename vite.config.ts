@@ -35,13 +35,13 @@ export default defineConfig({
     ? await (async () => {
         const { getWranglerVar } = await import('./config/wrangler')
         const host = getWranglerVar('HOST')
-        const sentryEnvironment = (() => {
-          if (host === 'curl.local') return 'development'
-          if (host === 'curl.md') return 'production'
-          return 'preview'
+        const environment = (() => {
+          if (host === 'tip.bot') return 'production'
+          if (host === 'tip.localhost') return 'development'
+          return 'development'
         })()
         return {
-          __ENV__: JSON.stringify(sentryEnvironment),
+          __ENV__: JSON.stringify(environment),
           __HOST__: JSON.stringify(host),
           __ORIGIN__: process.env.PLAYWRIGHT
             ? `(typeof window !== 'undefined' ? window.location.origin : 'https://${host}')`
@@ -64,6 +64,23 @@ export default defineConfig({
         cloudflare({
           viteEnvironment: { name: 'ssr' },
           persistState: { path: process.env.CLOUDFLARE_PERSIST_STATE_PATH ?? '.wrangler/state' },
+          ...(process.env.PLAYWRIGHT
+            ? {
+                remoteBindings: false,
+                config(config) {
+                  config.vars = {
+                    ...config.vars,
+                    HOST: process.env.HOST ?? config.vars?.HOST,
+                    SECRET_KEY: process.env.SECRET_KEY ?? '',
+                    SLACK_API_URL: process.env.SLACK_API_URL ?? config.vars?.SLACK_API_URL,
+                    SLACK_CLIENT_ID: process.env.SLACK_CLIENT_ID ?? '',
+                    SLACK_CLIENT_SECRET: process.env.SLACK_CLIENT_SECRET ?? '',
+                    SLACK_SIGNING_SECRET: process.env.SLACK_SIGNING_SECRET ?? '',
+                  }
+                  delete config.secrets
+                },
+              }
+            : {}),
         }),
       tailwindcss.default(),
       icons.default({
@@ -125,7 +142,7 @@ export default defineConfig({
             cloudflareTest(async (config) => {
               const env = envMod.Env.parse(config.inject('env'))
               return {
-                main: 'test/worker.ts',
+                main: 'src/entry-server.ts',
                 wrangler: { configPath: 'wrangler.jsonc' },
                 miniflare: {
                   bindings: env,
@@ -136,7 +153,7 @@ export default defineConfig({
                   d1Databases: ['DB'],
                   durableObjects: {
                     CHAT_STATE: {
-                      className: 'ChatStateDO',
+                      className: 'TipbotChatStateDO',
                       useSQLite: true,
                     },
                   },

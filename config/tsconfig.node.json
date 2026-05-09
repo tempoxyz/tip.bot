@@ -39,7 +39,6 @@
   "exclude": [
     "../test/**/*.workers.test.ts",
     "../test/**/*.workers.test.tsx",
-    "../test/worker.ts",
     "../test/workers.setup.ts"
   ]
 }

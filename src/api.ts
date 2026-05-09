@@ -1,8 +1,7 @@
 import { Hono } from 'hono'
-import { Base64, Hex } from 'ox'
 import * as DB from '#db/client.ts'
 import * as Chat from '#/chat.ts'
-import { ensureWorkspace } from '#/lib/mockTips.ts'
+import { ensureWorkspace } from '#/lib/tips'
 
 export const api = new Hono<{
   Bindings: Env
@@ -35,7 +34,7 @@ export const api = new Hono<{
   })
   .get('/api/chat/slack/install', async (c) => {
     const redirectUri = `https://${c.env.HOST}/api/chat/slack/oauth/callback`
-    const url = new URL('https://slack.com/oauth/v2/authorize')
+    const url = new URL('/oauth/v2/authorize', c.env.SLACK_API_URL)
     url.searchParams.set('client_id', c.env.SLACK_CLIENT_ID)
     url.searchParams.set('redirect_uri', redirectUri)
     url.searchParams.set(
@@ -53,7 +52,7 @@ export const api = new Hono<{
         'users:read',
       ].join(','),
     )
-    url.searchParams.set('state', await createOAuthState(c.env, redirectUri))
+    url.searchParams.set('state', await Chat.createOAuthState(c.env, redirectUri))
     return Response.redirect(url.toString(), 302)
   })
   .get('/api/chat/slack/oauth/callback', async (c) => {
@@ -67,7 +66,7 @@ export const api = new Hono<{
       if (!code || !state) throw new Error('Slack install callback is missing code or state.')
 
       const redirectUri = `https://${c.env.HOST}/api/chat/slack/oauth/callback`
-      const stateData = await verifyOAuthState(c.env, state)
+      const stateData = await Chat.verifyOAuthState(c.env, state)
       if (stateData.redirectUri !== redirectUri)
         throw new Error('Slack install callback redirect URI does not match state.')
 
@@ -90,43 +89,3 @@ export const api = new Hono<{
       })
     }
   })
-
-async function createOAuthState(env: Pick<Env, 'SECRET_KEY'>, redirectUri: string) {
-  const payload = Base64.fromString(
-    JSON.stringify({ expiresAt: Date.now() + 10 * 60 * 1000, redirectUri }), // 10 minutes
-    { pad: false, url: true },
-  )
-  return `${payload}.${await signOAuthState(env, payload)}`
-}
-
-async function verifyOAuthState(env: Pick<Env, 'SECRET_KEY'>, state: string) {
-  const [payload, signature] = state.split('.')
-  if (!payload || !signature) throw new Error('Slack install state is invalid.')
-  if (!timingSafeEqual(signature, await signOAuthState(env, payload)))
-    throw new Error('Slack install state signature is invalid.')
-
-  const data = JSON.parse(Base64.toString(payload)) as { expiresAt: number; redirectUri: string }
-  if (Date.now() > data.expiresAt) throw new Error('Slack install state expired.')
-  return data
-}
-
-async function signOAuthState(env: Pick<Env, 'SECRET_KEY'>, payload: string) {
-  if (!env.SECRET_KEY) throw new Error('SECRET_KEY is not configured.')
-
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(env.SECRET_KEY),
-    { hash: 'SHA-256', name: 'HMAC' },
-    false,
-    ['sign'],
-  )
-  const digest = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload))
-  return Hex.fromBytes(new Uint8Array(digest))
-}
-
-function timingSafeEqual(left: string, right: string) {
-  if (left.length !== right.length) return false
-  let result = 0
-  for (let i = 0; i < left.length; i += 1) result |= left.charCodeAt(i) ^ right.charCodeAt(i)
-  return result === 0
-}

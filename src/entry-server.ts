@@ -4,8 +4,6 @@ import { jsx } from 'react/jsx-runtime'
 import type { Register } from '@tanstack/react-start'
 import { api } from '#/api.ts'
 
-export { ChatStateDO } from '#/lib/chatState.ts'
-
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url)
@@ -25,6 +23,8 @@ declare module '@tanstack/react-start' {
     }
   }
 }
+
+export { TipbotChatStateDO } from '#/objects/chatState.ts'
 
 // TODO: Runtime import HMR workaround
 // https://github.com/TanStack/router/issues/7285
