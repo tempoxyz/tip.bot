@@ -26,9 +26,6 @@ importers:
       '@chat-adapter/slack':
         specifier: 4.27.0
         version: 4.27.0
-      '@cloudflare/vite-plugin':
-        specifier: 1.36.3
-        version: 1.36.3(@voidzero-dev/vite-plus-core@0.1.20)(workerd@1.20260507.1)(wrangler@4.90.0)
       '@tanstack/react-router':
         specifier: 1.169.2
         version: 1.169.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -63,6 +60,9 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
     devDependencies:
+      '@cloudflare/vite-plugin':
+        specifier: 1.36.3
+        version: 1.36.3(@voidzero-dev/vite-plus-core@0.1.20)(workerd@1.20260507.1)(wrangler@4.90.0)
       '@cloudflare/vitest-pool-workers':
         specifier: 0.16.3
         version: 0.16.3(@vitest/runner@4.1.5)(@vitest/snapshot@4.1.5)(@voidzero-dev/vite-plus-test@0.1.20(@types/node@22.19.17)(@voidzero-dev/vite-plus-core@0.1.20)(esbuild@0.27.3)(jiti@2.7.0)(typescript@6.0.3)(yaml@2.8.4))

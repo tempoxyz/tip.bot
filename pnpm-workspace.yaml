@@ -1,15 +1,23 @@
-packages:
-  - .
-
-# Workspace layout.
-enableGlobalVirtualStore: true
-linkWorkspacePackages: false
-
-# Vite+ dependency aliases.
+allowBuilds:
+  better-sqlite3@12.9.0: true
+  esbuild@0.27.3: true
+  lightningcss@1.32.0: true
+  sharp@0.34.5: true
+  workerd@1.20260426.1: true
+  workerd@1.20260504.1: true
+  workerd@1.20260507.1: true
+blockExoticSubdeps: true
 catalog:
+  # Vite+ dependency aliases.
   vite: npm:@voidzero-dev/vite-plus-core@0.1.20
   vite-plus: 0.1.20
   vitest: npm:@voidzero-dev/vite-plus-test@0.1.20
+dangerouslyAllowAllBuilds: false
+enableGlobalVirtualStore: true
+engineStrict: true
+linkWorkspacePackages: false
+minimumReleaseAge: 1440
+minimumReleaseAgeStrict: true
 overrides:
   vite: 'catalog:'
   vitest: 'catalog:'
@@ -33,68 +41,9 @@ peerDependencyRules:
   allowedVersions:
     vite: '*'
     vitest: '*'
-
-# Security hardening defaults for pnpm 11.x.
-blockExoticSubdeps: true
-dangerouslyAllowAllBuilds: false
-engineStrict: true
-minimumReleaseAge: 1440
-minimumReleaseAgeExclude:
-  # Exact-version exception for the npm accounts package replacing the local link.
-  - 'accounts@0.9.0'
-  # Exact-version exceptions for Cloudflare's local runtime packages.
-  - '@cloudflare/vite-plugin@1.36.3'
-  - '@cloudflare/vitest-pool-workers@0.16.3'
-  - '@cloudflare/workerd-darwin-64@1.20260507.1'
-  - '@cloudflare/workerd-darwin-arm64@1.20260507.1'
-  - '@cloudflare/workerd-linux-64@1.20260507.1'
-  - '@cloudflare/workerd-linux-arm64@1.20260507.1'
-  - '@cloudflare/workerd-windows-64@1.20260507.1'
-  - 'miniflare@4.20260507.1'
-  - 'workerd@1.20260507.1'
-  - 'wrangler@4.90.0'
-  # Exact-version exceptions for Cloudflare's locked workerd platform packages;
-  # pnpm 11 currently flags these during resolution even though the lockfile is pinned.
-  - '@cloudflare/workerd-darwin-64@1.20260504.1'
-  - '@cloudflare/workerd-darwin-arm64@1.20260504.1'
-  - '@cloudflare/workerd-linux-64@1.20260504.1'
-  - '@cloudflare/workerd-linux-arm64@1.20260504.1'
-  - '@cloudflare/workerd-windows-64@1.20260504.1'
-  - 'workerd@1.20260504.1'
-  # Exact-version exceptions for locked TanStack packages pulled by Start.
-  - '@tanstack/query-core@5.100.9'
-  - '@tanstack/react-query@5.100.9'
-  - '@tanstack/router-core@1.169.2'
-  # Exact-version exceptions for locked Vite-related helper packages.
-  - '@tybys/wasm-util@0.10.2'
-  - 'jiti@2.7.0'
-  # Temporary package-family exceptions for the vite-plus/oxlint/oxfmt toolchain
-  # while that setup is being finalized in a separate thread. Prefer narrowing
-  # these to exact versions once the toolchain versions settle.
-  - '@oxfmt/*'
-  - '@oxlint/*'
-  - '@oxlint-tsgolint/*'
-  - '@voidzero-dev/*'
-  - oxfmt
-  - oxlint
-  - oxlint-tsgolint
-  - vite-plus
-minimumReleaseAgeStrict: true
 pmOnFail: error
 resolutionMode: time-based
 saveExact: true
 strictDepBuilds: true
 strictPeerDependencies: true
 verifyDepsBeforeRun: error
-
-# Dependency lifecycle scripts are denied by default. Allow only reviewed,
-# version-pinned native toolchain packages required by this app's build and
-# Cloudflare local runtime.
-allowBuilds:
-  better-sqlite3@12.9.0: true
-  esbuild@0.27.3: true
-  lightningcss@1.32.0: true
-  sharp@0.34.5: true
-  workerd@1.20260426.1: true
-  workerd@1.20260504.1: true
-  workerd@1.20260507.1: true

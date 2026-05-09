@@ -1,17 +1,17 @@
 import { Hono } from 'hono'
 import { Base64, Hex } from 'ox'
-import { createClient, type Database } from '#db/client.ts'
+import * as DB from '#db/client.ts'
 import * as Chat from '#/chat.ts'
 import { ensureWorkspace } from '#/lib/mockTips.ts'
 
 export const api = new Hono<{
   Bindings: Env
   Variables: {
-    db: Database
+    db: DB.Type
   }
 }>()
   .use(async (c, next) => {
-    c.set('db', createClient(c.env.DB))
+    c.set('db', DB.create(c.env.DB))
     await next()
   })
   .post('/api/chat/slack', async (c) => {
@@ -74,7 +74,7 @@ export const api = new Hono<{
       await Chat.bot.initialize()
       const result = await Chat.slack.handleOAuthCallback(c.req.raw, { redirectUri })
       const workspace = await ensureWorkspace(c.env, 'slack', result.teamId)
-      await createClient(c.env.DB)
+      await DB.create(c.env.DB)
         .updateTable('workspace')
         .set({ name: result.installation.teamName ?? null, updated_at: new Date().toISOString() })
         .where('id', '=', workspace.id)

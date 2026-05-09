@@ -9,9 +9,10 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-  reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'html',
+  reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'list',
   retries: process.env.CI ? 2 : 0,
   testDir: './e2e',
+  testMatch: '**/*.test.ts',
   use: {
     baseURL: 'http://127.0.0.1:5173',
     trace: 'on-first-retry',

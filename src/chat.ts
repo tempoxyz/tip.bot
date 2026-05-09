@@ -1,4 +1,4 @@
-import { createClient } from '#db/client.ts'
+import * as DB from '#db/client.ts'
 import { createSlackAdapter, type SlackEvent, type SlackReactionEvent } from '@chat-adapter/slack'
 import { env } from 'cloudflare:workers'
 import { Chat, type Message, type ReactionEvent, type SlashCommandEvent, type Thread } from 'chat'
@@ -15,7 +15,7 @@ import {
 const slackEventContexts = new Map<string, { eventId: string; teamId: string; timestamp: number }>()
 
 export const slack = createSlackAdapter({
-  apiUrl: env.SLACK_API_URL,
+  apiUrl: `${env.SLACK_API_URL}/`,
   clientId: env.SLACK_CLIENT_ID,
   clientSecret: env.SLACK_CLIENT_SECRET,
   encryptionKey: env.SECRET_KEY,
@@ -198,7 +198,7 @@ async function handleConfigCommand(teamId: string, senderAccountId: string, text
     if (error) return error
   }
 
-  await createClient(env.DB)
+  await DB.create(env.DB)
     .updateTable('workspace')
     .set({
       ...(key === 'amount' ? { tip_amount: value } : {}),
@@ -250,7 +250,7 @@ async function slackApi<T>(
   }
 
   const response = await slack.withBotToken(installation.botToken, () =>
-    fetch(`${env.SLACK_API_URL}${method}`, {
+    fetch(`${env.SLACK_API_URL}/${method}`, {
       body,
       headers: { authorization: `Bearer ${installation.botToken}` },
       method: 'POST',

@@ -149,10 +149,10 @@ function usage(message?: string): never {
 
   console.error(`
 Usage:
-  pnpm slack:app:manifest -- <local|production> <host>
-  pnpm slack:app:validate -- <local|production> <host>
-  pnpm slack:app:create -- <local|production> <host>
-  pnpm slack:app:update -- <local|production> <host> <appId>
+  pnpm slack:app manifest <local|production> <host>
+  pnpm slack:app validate <local|production> <host>
+  pnpm slack:app create <local|production> <host>
+  pnpm slack:app update <local|production> <host> <appId>
 
 Environment:
   SLACK_CONFIG_TOKEN     Slack app configuration token from https://api.slack.com/apps

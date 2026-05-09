@@ -8,24 +8,22 @@ import type {
   QueryResult,
 } from 'kysely'
 import { Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from 'kysely'
-import type { DB } from './types.gen.ts'
+import type { DB as DB_gen } from './types.gen.ts'
 
-export type Database = Kysely<DB>
-
-export function createClient(database: D1Database | D1DatabaseSession) {
-  return new Kysely<DB>({
+export function create(database: D1Database | D1DatabaseSession) {
+  return new Kysely<DB_gen>({
     dialect: new D1Dialect({ database }),
   })
 }
 
-interface D1DialectConfig {
-  database: D1Database | D1DatabaseSession
-}
+export type Type = Kysely<DB_gen>
+
+////////////////////////////////////////////////////////////////////////
 
 class D1Dialect implements Dialect {
-  #config: D1DialectConfig
+  #config: D1Dialect.Config
 
-  constructor(config: D1DialectConfig) {
+  constructor(config: D1Dialect.Config) {
     this.#config = config
   }
 
@@ -46,10 +44,16 @@ class D1Dialect implements Dialect {
   }
 }
 
-class D1Driver implements Driver {
-  #config: D1DialectConfig
+namespace D1Dialect {
+  export interface Config {
+    database: D1Database | D1DatabaseSession
+  }
+}
 
-  constructor(config: D1DialectConfig) {
+class D1Driver implements Driver {
+  #config: D1Dialect.Config
+
+  constructor(config: D1Dialect.Config) {
     this.#config = config
   }
 
@@ -77,9 +81,9 @@ class D1Driver implements Driver {
 }
 
 class D1Connection implements DatabaseConnection {
-  #config: D1DialectConfig
+  #config: D1Dialect.Config
 
-  constructor(config: D1DialectConfig) {
+  constructor(config: D1Dialect.Config) {
     this.#config = config
   }
 

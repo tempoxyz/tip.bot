@@ -14,8 +14,8 @@ Prefer package scripts over ad-hoc `npx`. Use `pnpm`/`pnpx` for binaries.
 - `pnpm deps` - Check dependency updates with Taze
 - `pnpm deps:ci` - Check GitHub Action updates with actions-up
 - `pnpm gen:types` - Generate Cloudflare Worker binding types
-- `pnpm slack:app:manifest` - Generate Slack app manifest
-- `pnpm slack:app:validate` - Validate Slack app manifest
+- `pnpm slack:app manifest` - Generate Slack app manifest
+- `pnpm slack:app validate` - Validate Slack app manifest
 - `pnpm test` - Run Vitest projects
 - `pnpm test:e2e` - Run Playwright E2E tests
 - `pnpm check:types` - Type check all TS projects
@@ -26,7 +26,7 @@ Prefer package scripts over ad-hoc `npx`. Use `pnpm`/`pnpx` for binaries.
 - `pnpm dev:app` starts the app directly without Portless.
 - Local D1 state lives in `.wrangler/state`; use `pnpm db:reset` when migrations or generated DB types drift.
 - Use `pnpm db:execute -- --command "SQL"` for focused local D1 inspection.
-- After changing Slack app configuration, run `pnpm slack:app:validate` before updating production.
+- After changing Slack app configuration, run `pnpm slack:app validate` before updating production.
 
 ## API
 

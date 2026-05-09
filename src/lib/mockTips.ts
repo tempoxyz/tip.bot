@@ -1,4 +1,4 @@
-import { createClient } from '#db/client.ts'
+import * as DB from '#db/client.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 
 export const mockTokenAddress = 'mock:stablecoin'
@@ -33,7 +33,7 @@ export type TipResult =
     }
 
 export async function ensureWorkspace(env: Env, platform: Platform, platformTeamId: string) {
-  const existing = await createClient(env.DB)
+  const existing = await DB.create(env.DB)
     .selectFrom('workspace')
     .selectAll()
     .where('platform', '=', platform)
@@ -43,7 +43,7 @@ export async function ensureWorkspace(env: Env, platform: Platform, platformTeam
 
   const id = Nanoid.generate()
   const now = new Date().toISOString()
-  await createClient(env.DB)
+  await DB.create(env.DB)
     .insertInto('workspace')
     .values({
       created_at: now,
@@ -56,7 +56,7 @@ export async function ensureWorkspace(env: Env, platform: Platform, platformTeam
       updated_at: now,
     })
     .execute()
-  return await createClient(env.DB)
+  return await DB.create(env.DB)
     .selectFrom('workspace')
     .selectAll()
     .where('id', '=', id)
@@ -69,7 +69,7 @@ export async function handleTipRequest(env: Env, input: TipInput): Promise<TipRe
   const recipient = await ensureAccount(env, workspace.id, input.recipientAccountId)
   if (sender.id === recipient.id) return { code: 'self_tip', ok: false }
 
-  const existing = await createClient(env.DB)
+  const existing = await DB.create(env.DB)
     .selectFrom('tip')
     .selectAll()
     .where('idempotency_key', '=', input.idempotencyKey)
@@ -97,7 +97,7 @@ export async function handleTipRequest(env: Env, input: TipInput): Promise<TipRe
   const id = Nanoid.generate()
   const txHash = `mock-${id}`
   const now = new Date().toISOString()
-  await createClient(env.DB)
+  await DB.create(env.DB)
     .insertInto('tip')
     .values({
       amount: workspace.tip_amount,
@@ -132,7 +132,7 @@ export function formatTxLink(_env: Env, txHash: string) {
 }
 
 async function ensureAccount(env: Env, workspaceId: string, platformAccountId: string) {
-  const existing = await createClient(env.DB)
+  const existing = await DB.create(env.DB)
     .selectFrom('account')
     .selectAll()
     .where('workspace_id', '=', workspaceId)
@@ -143,7 +143,7 @@ async function ensureAccount(env: Env, workspaceId: string, platformAccountId: s
 
   const id = Nanoid.generate()
   const now = new Date().toISOString()
-  await createClient(env.DB)
+  await DB.create(env.DB)
     .insertInto('account')
     .values({
       created_at: now,
@@ -155,7 +155,7 @@ async function ensureAccount(env: Env, workspaceId: string, platformAccountId: s
       workspace_id: workspaceId,
     })
     .execute()
-  return await createClient(env.DB)
+  return await DB.create(env.DB)
     .selectFrom('account')
     .selectAll()
     .where('id', '=', id)
@@ -170,7 +170,7 @@ async function isDailyCapExceeded(
 ) {
   const start = new Date()
   start.setUTCHours(0, 0, 0, 0)
-  const tips = await createClient(env.DB)
+  const tips = await DB.create(env.DB)
     .selectFrom('tip')
     .select('amount')
     .where('sender_account_id', '=', senderAccountId)

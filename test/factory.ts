@@ -1,12 +1,9 @@
 import { createQueryId, type Insertable, type Kysely, type Selectable } from 'kysely'
-
 import type { DB } from '#db/types.gen.ts'
 import { mockTokenAddress } from '#/lib/mockTips.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 
-export const Factory = { create }
-
-function create(db: Kysely<DB>): FactoryInstance {
+export function create(db: Kysely<DB>): FactoryInstance {
   function factory(table: keyof DB) {
     return {
       attrs(...args: Record<string, unknown>[]) {

@@ -4,7 +4,8 @@
     "module": "ESNext",
     "paths": {
       "#/*": ["../src/*"],
-      "#db/*": ["../db/*"]
+      "#db/*": ["../db/*"],
+      "#test/*": ["../test/*"]
     },
     "lib": ["ES2022"],
     "types": ["node", "vite/client"],
@@ -27,10 +28,18 @@
     "noUncheckedSideEffectImports": true
   },
   "include": [
+    "../src/worker-configuration.d.ts",
     "../db/**/*.ts",
     "../config/wrangler.ts",
     "../scripts/**/*.ts",
-    "../test/env.ts",
+    "../test/**/*.ts",
+    "../test/**/*.tsx",
     "../vite.config.ts"
+  ],
+  "exclude": [
+    "../test/**/*.workers.test.ts",
+    "../test/**/*.workers.test.tsx",
+    "../test/worker.ts",
+    "../test/workers.setup.ts"
   ]
 }

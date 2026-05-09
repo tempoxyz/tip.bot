@@ -1,9 +1,9 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "tipbot",
+  "main": "src/entry-server.ts",
   "compatibility_date": "2026-05-07",
   "compatibility_flags": ["nodejs_compat"],
-  "main": "src/entry-server.ts",
   "preview_urls": false,
   "upload_source_maps": true,
   "version_metadata": {
@@ -31,36 +31,16 @@
       "new_sqlite_classes": ["ChatStateDO"],
     },
   ],
-  "vars": {
-    "HOST": "tip.localhost",
-    "SLACK_API_URL": "https://slack.com/api/",
-  },
   "secrets": {
     "required": ["SECRET_KEY", "SLACK_CLIENT_ID", "SLACK_CLIENT_SECRET", "SLACK_SIGNING_SECRET"],
+  },
+  "vars": {
+    "HOST": "tip.localhost",
+    "SLACK_API_URL": "https://slack.com/api",
   },
   "env": {
     "production": {
       "name": "tipbot",
-      "observability": {
-        "enabled": true,
-        "logs": {
-          "head_sampling_rate": 1,
-        },
-        "traces": {
-          "enabled": true,
-          "head_sampling_rate": 0.01,
-        },
-      },
-      "version_metadata": {
-        "binding": "CF_VERSION_METADATA",
-      },
-      "workers_dev": false,
-      "routes": [
-        {
-          "pattern": "tip.bot",
-          "custom_domain": true,
-        },
-      ],
       "d1_databases": [
         {
           "binding": "DB",
@@ -77,10 +57,22 @@
           },
         ],
       },
-      "vars": {
-        "HOST": "tip.bot",
-        "SLACK_API_URL": "https://slack.com/api/",
+      "observability": {
+        "enabled": true,
+        "logs": {
+          "head_sampling_rate": 1,
+        },
+        "traces": {
+          "enabled": true,
+          "head_sampling_rate": 0.01,
+        },
       },
+      "routes": [
+        {
+          "pattern": "tip.bot",
+          "custom_domain": true,
+        },
+      ],
       "secrets": {
         "required": [
           "SECRET_KEY",
@@ -89,6 +81,14 @@
           "SLACK_SIGNING_SECRET",
         ],
       },
+      "vars": {
+        "HOST": "tip.bot",
+        "SLACK_API_URL": "https://slack.com/api",
+      },
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA",
+      },
+      "workers_dev": false,
     },
   },
 }

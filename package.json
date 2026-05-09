@@ -4,7 +4,8 @@
   "type": "module",
   "imports": {
     "#/*": "./src/*",
-    "#db/*": "./db/*"
+    "#db/*": "./db/*",
+    "#test/*": "./test/*"
   },
   "scripts": {
     "build": "vp build",
@@ -13,7 +14,6 @@
     "db:codegen": "node --experimental-strip-types db/codegen.ts",
     "db:execute": "wrangler d1 execute tipbot --local",
     "db:migrate": "wrangler d1 migrations apply tipbot --local",
-    "db:reset": "rm -rf .wrangler/state && pnpm run db:migrate",
     "deps": "pnpx taze -r",
     "deps:ci": "pnpx actions-up --dir .github",
     "dev": "PORTLESS_FUNNEL=1 PORTLESS_PORT=443 PORTLESS_HTTPS=1 portless run vp dev",
@@ -21,17 +21,13 @@
     "gen:types": "cp -n .env.example .env 2>/dev/null; wrangler types src/worker-configuration.d.ts",
     "prepare": "vp config",
     "preview": "vp build && vp preview",
-    "slack:app:create": "node --experimental-strip-types scripts/slack.ts create",
-    "slack:app:manifest": "node --experimental-strip-types scripts/slack.ts manifest",
-    "slack:app:update": "node --experimental-strip-types scripts/slack.ts update",
-    "slack:app:validate": "node --experimental-strip-types scripts/slack.ts validate",
+    "slack:app": "node --experimental-strip-types scripts/slack.ts",
     "test": "vp test",
-    "test:e2e": "playwright test --config test/playwright.config.ts"
+    "test:e2e": "playwright test --config test/e2e.config.ts"
   },
   "dependencies": {
     "@base-ui/react": "1.4.1",
     "@chat-adapter/slack": "4.27.0",
-    "@cloudflare/vite-plugin": "1.36.3",
     "@tanstack/react-router": "1.169.2",
     "@tanstack/react-start": "1.167.64",
     "@tanstack/router-plugin": "1.167.34",
@@ -45,6 +41,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "1.36.3",
     "@cloudflare/vitest-pool-workers": "0.16.3",
     "@iconify/json": "2.2.467",
     "@playwright/test": "1.59.1",

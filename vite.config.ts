@@ -109,40 +109,46 @@ export default defineConfig({
 
           // @cloudflare/vitest-pool-workers currently forwards this harmless workerd shutdown log.
           const writeStdout = process.stdout.write.bind(process.stdout)
-          const writeStderr = process.stderr.write.bind(process.stderr)
-          process.stdout.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
+          process.stdout.write = (chunk, ...args) => {
             if (String(chunk).includes('disconnected: WebSocket peer disconnected')) return true
             return writeStdout(chunk, ...(args as [BufferEncoding?, (() => void)?]))
-          }) as typeof process.stdout.write
-          process.stderr.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
+          }
+          const writeStderr = process.stderr.write.bind(process.stderr)
+          process.stderr.write = (chunk, ...args) => {
             if (String(chunk).includes('disconnected: WebSocket peer disconnected')) return true
             return writeStderr(chunk, ...(args as [BufferEncoding?, (() => void)?]))
-          }) as typeof process.stderr.write
+          }
 
-          const envMod = await import('./test/env.ts')
           const { cloudflareTest } = await import('@cloudflare/vitest-pool-workers')
+          const envMod = await import('./test/env.ts')
           return [
-            cloudflareTest({
-              main: 'test/worker.ts',
-              wrangler: { configPath: 'wrangler.jsonc' },
-              miniflare: {
-                bindings: envMod.Env.get(),
-                compatibilityDate: '2026-05-07',
-                compatibilityFlags: ['nodejs_compat'],
-                d1Databases: ['DB'],
-                durableObjects: {
-                  CHAT_STATE: {
-                    className: 'ChatStateDO',
-                    useSQLite: true,
+            cloudflareTest(async (config) => {
+              const env = envMod.Env.parse(config.inject('env'))
+              return {
+                main: 'test/worker.ts',
+                wrangler: { configPath: 'wrangler.jsonc' },
+                miniflare: {
+                  bindings: env,
+                  compatibilityDate: '2026-05-07',
+                  // TODO: Remove once configurable log level is supported
+                  // https://github.com/cloudflare/workers-sdk/issues/12014
+                  compatibilityFlags: ['nodejs_compat'],
+                  d1Databases: ['DB'],
+                  durableObjects: {
+                    CHAT_STATE: {
+                      className: 'ChatStateDO',
+                      useSQLite: true,
+                    },
                   },
                 },
-              },
+              }
             }),
           ]
         }),
         test: {
-          include: ['src/**/*.workers.test.{ts,tsx}', 'test/**/*.workers.test.{ts,tsx}'],
+          include: ['src/**/*.workers.test.ts'],
           name: 'workers',
+          globalSetup: ['test/workers.global.setup.ts'],
           setupFiles: ['test/workers.setup.ts'],
         },
       },
