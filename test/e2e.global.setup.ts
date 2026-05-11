@@ -14,12 +14,13 @@ export default async function globalSetup() {
     seed: Constants.seed,
     service: 'slack',
   })
+  const env = Env.get({
+    HOST: host,
+    SLACK_API_URL: `${slack.url}/api`,
+  })
 
   const server = await startDevServer({
-    ...Env.get({
-      HOST: host,
-      SLACK_API_URL: `${slack.url}/api`,
-    }),
+    ...env,
     PORT: String(appPort),
     SLACK_APP_ID: slackAppId,
   })

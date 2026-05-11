@@ -36,7 +36,6 @@ jobs:
           pnpm run db:codegen
           pnpm run gen:types
         env:
-          FEE_PAYER_PRIVATE_KEY: 0x0000000000000000000000000000000000000000000000000000000000000000
           SECRET_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
           SLACK_CLIENT_ID: ci-placeholder
           SLACK_CLIENT_SECRET: ci-placeholder

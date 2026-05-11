@@ -52,13 +52,11 @@ jobs:
           command: deploy --env production
           environment: production
           secrets: |
-            FEE_PAYER_PRIVATE_KEY
             SECRET_KEY
             SLACK_CLIENT_ID
             SLACK_CLIENT_SECRET
             SLACK_SIGNING_SECRET
         env:
-          FEE_PAYER_PRIVATE_KEY: ${{ secrets.FEE_PAYER_PRIVATE_KEY }}
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
           SLACK_APP_ID: ${{ vars.SLACK_APP_ID }}
           SLACK_CLIENT_ID: ${{ secrets.SLACK_CLIENT_ID }}

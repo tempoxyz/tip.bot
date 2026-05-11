@@ -8,42 +8,50 @@ import { env } from 'cloudflare:workers'
 import { Chat, type SlashCommandEvent } from 'chat'
 import { z } from 'zod'
 
-export const slack = createSlackAdapter({
-  apiUrl: `${env.SLACK_API_URL}/`,
-  clientId: env.SLACK_CLIENT_ID,
-  clientSecret: env.SLACK_CLIENT_SECRET,
-  encryptionKey: env.SECRET_KEY,
-  signingSecret: env.SLACK_SIGNING_SECRET,
-})
+let chat: Chat | null = null
+export function getChat() {
+  if (chat) return chat
+  chat = new Chat({
+    adapters: { slack: getSlack() },
+    state: createCloudflareState({
+      name: 'tipbot',
+      namespace: env.CHAT_STATE,
+      shardKey(threadId) {
+        return threadId.split(':', 1)[0] || 'default'
+      },
+    }),
+    userName: 'tipbot',
+  })
+  chat.onSlashCommand('/tip', async (event) => {
+    const context = {
+      db: DB.create(env.DB),
+      provider: getProvider(event),
+      text: event.text.trim(),
+    } satisfies HandlerContext
 
-export const bot = new Chat({
-  adapters: { slack },
-  state: createCloudflareState({
-    name: 'tipbot',
-    namespace: env.CHAT_STATE,
-    shardKey(threadId) {
-      return threadId.split(':', 1)[0] || 'default'
-    },
-  }),
-  userName: 'tipbot',
-})
+    const match = context.text.match(commandPattern)
+    if (match) {
+      const name = z.parse(z.enum(commandNames), match[1])
+      await handlers[name](event, { ...context, text: match[2]?.trim() ?? '' })
+      return
+    }
+    await handlers.default(event, context)
+  })
+  return chat
+}
 
-bot.onSlashCommand('/tip', async (event) => {
-  const context = {
-    db: DB.create(env.DB),
-    provider: getProvider(event),
-    text: event.text.trim(),
-  } satisfies HandlerContext
-
-  const match = context.text.match(subcommandPattern)
-  if (match) {
-    const name = z.parse(z.enum(subcommandNames), match[1])
-    await handlers[name](event, { ...context, text: match[2]?.trim() ?? '' })
-    return
-  }
-
-  await handlers.default(event, context)
-})
+let slack: ReturnType<typeof createSlackAdapter> | null = null
+export function getSlack() {
+  if (slack) return slack
+  slack = createSlackAdapter({
+    apiUrl: `${env.SLACK_API_URL}/`,
+    clientId: env.SLACK_CLIENT_ID,
+    clientSecret: env.SLACK_CLIENT_SECRET,
+    encryptionKey: env.SECRET_KEY,
+    signingSecret: env.SLACK_SIGNING_SECRET,
+  })
+  return slack
+}
 
 const handlers = {
   async config(event, ctx) {
@@ -76,12 +84,12 @@ const handlers = {
 
     if (ctx.provider.type !== 'slack') throw new Error('Provider is not implemented yet.')
 
-    const installation = await slack.getInstallation(ctx.provider.id)
+    const installation = await getSlack().getInstallation(ctx.provider.id)
     if (!installation) throw new Error('Slack app is not installed for this workspace.')
 
     const body = new URLSearchParams()
     body.set('user', event.user.userId)
-    const response = await slack.withBotToken(installation.botToken, () =>
+    const response = await getSlack().withBotToken(installation.botToken, () =>
       fetch(`${env.SLACK_API_URL}/users.info`, {
         body,
         headers: { authorization: `Bearer ${installation.botToken}` },
@@ -200,14 +208,14 @@ const handlers = {
     if (!parsed) {
       if (ctx.provider.type !== 'slack') throw new Error('Provider is not implemented yet.')
 
-      const installation = await slack.getInstallation(ctx.provider.id)
+      const installation = await getSlack().getInstallation(ctx.provider.id)
       if (!installation) throw new Error('Slack app is not installed for this workspace.')
 
       const body = new URLSearchParams()
       body.set('channel', event.channel.id.replace(/^slack:/, ''))
       body.set('text', 'Usage: /tip @account')
       body.set('user', event.user.userId)
-      const response = await slack.withBotToken(installation.botToken, () =>
+      const response = await getSlack().withBotToken(installation.botToken, () =>
         fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
           body,
           headers: { authorization: `Bearer ${installation.botToken}` },
@@ -257,12 +265,12 @@ const handlers = {
     }
   },
 } as const satisfies Record<
-  (typeof subcommandNames)[number] | 'default',
+  (typeof commandNames)[number] | 'default',
   (event: SlashCommandEvent, ctx: HandlerContext) => Promise<void>
 >
 
-const subcommandNames = ['config', 'connect', 'disconnect', 'help'] as const
-const subcommandPattern = new RegExp(`^(${subcommandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
+const commandNames = ['config', 'connect', 'disconnect', 'help'] as const
+const commandPattern = new RegExp(`^(${commandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
 
 type HandlerContext = {
   db: DB.Type
@@ -274,7 +282,7 @@ function getProvider(event: SlashCommandEvent): {
   id: string
   type: DB_gen.Selectable.workspace['provider']
 } {
-  if (event.adapter === slack) {
+  if (event.adapter === getSlack()) {
     const slackSlashCommandRaw = z.object({
       team_id: z.string().min(1),
     })

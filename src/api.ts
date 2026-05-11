@@ -18,7 +18,7 @@ export const api = new Hono<{
   })
   .post('/api/chat/slack', async (c) => {
     const request = c.req.raw
-    return await Chat.bot.webhooks.slack(
+    return await Chat.getChat().webhooks.slack(
       new Request(request.url, {
         body: await request.text(),
         headers: request.headers,
@@ -139,8 +139,8 @@ export const api = new Hono<{
             400,
           )
 
-        await Chat.bot.initialize()
-        const result = await Chat.slack.handleOAuthCallback(c.req.raw, { redirectUri })
+        await Chat.getChat().initialize()
+        const result = await Chat.getSlack().handleOAuthCallback(c.req.raw, { redirectUri })
         const workspace = await c.var.db
           .selectFrom('workspace')
           .selectAll()

@@ -32,8 +32,8 @@ beforeEach(async () => {
       .filter((message): message is { ts: string } => typeof message.ts === 'string')
       .map((message) => slack.chat.delete({ channel: Constants.slack.channelId, ts: message.ts })),
   )
-  await Chat.bot.initialize()
-  await Chat.slack.setInstallation(Constants.slack.teamId, {
+  await Chat.getChat().initialize()
+  await Chat.getSlack().setInstallation(Constants.slack.teamId, {
     botToken: Constants.slack.botToken,
     botUserId: Constants.slack.botUserId,
     teamName: Constants.slack.teamName,
@@ -175,7 +175,7 @@ describe('/tip config', () => {
   })
 
   test('handles missing Slack installation', async () => {
-    await Chat.slack.deleteInstallation(Constants.slack.teamId)
+    await Chat.getSlack().deleteInstallation(Constants.slack.teamId)
 
     const response = await postSlashCommand('config amount 0.002')
     const workspace = await db
