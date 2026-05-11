@@ -1,4 +1,4 @@
-import { defineConfig, lazyPlugins } from 'vite-plus'
+import { defineConfig, lazyPlugins, type Plugin, type ViteDevServer } from 'vite-plus'
 
 const isCheck = ['check', 'fmt', 'lint'].includes(process.env.VP_COMMAND ?? '')
 const isTest = process.env.NODE_ENV === 'test' || process.env.VITEST !== undefined
@@ -60,7 +60,8 @@ export default defineConfig({
     const { cloudflare } = await import('@cloudflare/vite-plugin')
     const { tanstackStart } = await import('@tanstack/react-start/plugin/vite')
     return [
-      devtools.devtools(),
+      tanstackStartVirtualEntryCompat(),
+      devtools.devtools({ consolePiping: { enabled: false } }),
       !isTest &&
         cloudflare({
           viteEnvironment: { name: 'ssr' },
@@ -164,3 +165,18 @@ export default defineConfig({
     ],
   },
 })
+
+// TODO: Remove when TanStack Start emits a Vite-resolvable client entry URL.
+// https://github.com/TanStack/router/issues/7227
+function tanstackStartVirtualEntryCompat(): Plugin {
+  return {
+    name: 'tanstack-start-virtual-entry-compat',
+    configureServer(server: ViteDevServer) {
+      server.middlewares.use((req, _res, next) => {
+        if (req.url?.startsWith('/@id/virtual:tanstack-start-client-entry'))
+          req.url = req.url.replace('/@id/virtual:', '/@id/__x00__virtual:')
+        next()
+      })
+    },
+  }
+}

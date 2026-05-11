@@ -49,7 +49,7 @@
         {
           "binding": "DB",
           "database_name": "tipbot",
-          "database_id": "1bbff49d-87b8-4f60-b048-cbf9fd1bcbed",
+          "database_id": "5933a096-e5aa-48ed-b8bc-273603e5b910",
           "migrations_dir": "db/migrations",
         },
       ],

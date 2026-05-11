@@ -22,8 +22,6 @@ After changing Slack App, run the following to update:
 SLACK_APP_ID=<app-id> pnpm slack:app update production tip.bot
 ```
 
-Set `SLACK_APP_ID` as a GitHub production environment variable so the home page can render Slack's `slack-app-id` meta tag.
-
 To allow any Slack workspace to install the app, enable unlisted distribution manually:
 
 1. Go to https://api.slack.com/apps

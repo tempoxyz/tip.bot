@@ -3,10 +3,16 @@ import { renderRouterToStream } from '@tanstack/react-router/ssr/server'
 import { jsx } from 'react/jsx-runtime'
 import type { Register } from '@tanstack/react-start'
 import { api } from '#/api.ts'
+import { rpc } from '#/lib/rpc.ts'
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url)
+    if (url.pathname === '/install/slack')
+      return Response.redirect(
+        new URL(rpc.api.chat.slack.install.$url().pathname, url).toString(),
+        302,
+      )
     if (url.pathname.startsWith('/api/')) return api.fetch(new Request(url, request), env, ctx)
     return (await getStartHandler())(request, { context: { ctx, env, request } })
   },

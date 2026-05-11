@@ -11,7 +11,7 @@ test('home page opens Slack install flow', async ({ page }) => {
   )
 
   const addToSlack = page.getByRole('link', { name: 'Add to Slack' })
-  await expect(addToSlack).toHaveAttribute('href', '/api/chat/slack/install')
+  await expect(addToSlack).toHaveAttribute('href', '/install/slack')
 
   await addToSlack.click()
 
