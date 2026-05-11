@@ -32,7 +32,7 @@ importers:
         version: 4.27.0
       '@hono/zod-validator':
         specifier: ^0.8.0
-        version: 0.8.0(hono@4.12.17)(zod@4.4.3)
+        version: 0.8.0(hono@4.12.18)(zod@4.4.3)
       '@tanstack/react-router':
         specifier: 1.169.2
         version: 1.169.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -46,8 +46,8 @@ importers:
         specifier: 4.27.0
         version: 4.27.0
       hono:
-        specifier: 4.12.17
-        version: 4.12.17
+        specifier: 4.12.18
+        version: 4.12.18
       kysely:
         specifier: 0.28.17
         version: 0.28.17
@@ -117,7 +117,7 @@ importers:
         version: 12.9.0
       emulate:
         specifier: 0.5.0
-        version: 0.5.0(patch_hash=d2045cc26ad7d356cc10e676eee0ed4be242e12a837f1a65af268c8e1cf3f7ac)(hono@4.12.17)
+        version: 0.5.0(patch_hash=d2045cc26ad7d356cc10e676eee0ed4be242e12a837f1a65af268c8e1cf3f7ac)(hono@4.12.18)
       msw:
         specifier: 2.13.6
         version: 2.13.6(@types/node@22.19.17)(typescript@6.0.3)
@@ -2171,8 +2171,8 @@ packages:
   headers-polyfill@5.0.1:
     resolution: {integrity: sha512-1TJ6Fih/b8h5TIcv+1+Hw0PDQWJTKDKzFZzcKOiW1wJza3XoAQlkCuXLbymPYB8+ZQyw8mHvdw560e8zVFIWyA==}
 
-  hono@4.12.17:
-    resolution: {integrity: sha512-FbJJNb/XgX7YW0hX/V8w5oYLztKEsRLykCMZWt1WdLtsfjzMvmoqWBA4H4t5norinq8/rh20oiZYr+WSl4UzAQ==}
+  hono@4.12.18:
+    resolution: {integrity: sha512-RWzP96k/yv0PQfyXnWjs6zot20TqfpfsNXhOnev8d1InAxubW93L11/oNUc3tQqn2G0bSdAOBpX+2uDFHV7kdQ==}
     engines: {node: '>=16.9.0'}
 
   htmlparser2@10.1.0:
@@ -3611,13 +3611,13 @@ snapshots:
 
   '@floating-ui/utils@0.2.11': {}
 
-  '@hono/node-server@1.19.14(hono@4.12.17)':
+  '@hono/node-server@1.19.14(hono@4.12.18)':
     dependencies:
-      hono: 4.12.17
+      hono: 4.12.18
 
-  '@hono/zod-validator@0.8.0(hono@4.12.17)(zod@4.4.3)':
+  '@hono/zod-validator@0.8.0(hono@4.12.18)(zod@4.4.3)':
     dependencies:
-      hono: 4.12.17
+      hono: 4.12.18
       zod: 4.4.3
 
   '@iconify/json@2.2.467':
@@ -4872,9 +4872,9 @@ snapshots:
 
   emoji-regex@8.0.0: {}
 
-  emulate@0.5.0(patch_hash=d2045cc26ad7d356cc10e676eee0ed4be242e12a837f1a65af268c8e1cf3f7ac)(hono@4.12.17):
+  emulate@0.5.0(patch_hash=d2045cc26ad7d356cc10e676eee0ed4be242e12a837f1a65af268c8e1cf3f7ac)(hono@4.12.18):
     dependencies:
-      '@hono/node-server': 1.19.14(hono@4.12.17)
+      '@hono/node-server': 1.19.14(hono@4.12.18)
       commander: 14.0.3
       picocolors: 1.1.1
       yaml: 2.8.4
@@ -5067,7 +5067,7 @@ snapshots:
       '@types/set-cookie-parser': 2.4.10
       set-cookie-parser: 3.1.0
 
-  hono@4.12.17: {}
+  hono@4.12.18: {}
 
   htmlparser2@10.1.0:
     dependencies:
@@ -6326,7 +6326,6 @@ time:
   better-sqlite3@12.9.0: '2026-04-12T18:23:42.383Z'
   chat@4.27.0: '2026-04-30T20:46:13.887Z'
   emulate@0.5.0: '2026-04-29T05:49:35.977Z'
-  hono@4.12.17: '2026-05-05T09:30:51.600Z'
   kysely@0.28.17: '2026-05-03T01:05:34.179Z'
   nanoid@5.1.11: '2026-04-30T22:06:42.984Z'
   ox@0.14.20: '2026-04-21T20:34:36.837Z'
