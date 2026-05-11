@@ -3,107 +3,115 @@
 import type * as k from 'kysely'
 
 export interface DB {
-  account: Account
-  connect_token: ConnectToken
-  tip: Tip
-  tip_attempt: TipAttempt
-  workspace: Workspace
+  access_key: access_key
+  account: account
+  account_link_token: account_link_token
+  member: member
+  tip: tip
+  workspace: workspace
 }
 
-type Account = {
-  access_key_address: string | null
-  access_key_authorization: string | null
-  access_key_ciphertext: string | null
-  access_key_expires_at: string | null
-  created_at: k.Generated<string>
-  display_name: string | null
-  id: k.Generated<string>
-  platform: k.Generated<string>
-  platform_account_id: string
-  tempo_address: string | null
-  updated_at: k.Generated<string>
-  workspace_id: string
-}
-
-type ConnectToken = {
+type access_key = {
+  account_id: string
+  address: string
+  authorization: string
+  ciphertext: string
   created_at: k.Generated<string>
   expires_at: string
-  id: k.Generated<string>
-  platform: k.Generated<string>
-  platform_account_id: string
+  id: string
+  revoked_at: string | null
+  updated_at: k.Generated<string>
+}
+
+type account = {
+  address: string
+  created_at: k.Generated<string>
+  id: string
+  updated_at: k.Generated<string>
+}
+
+type account_link_token = {
+  account_id: string
+  created_at: k.Generated<string>
+  expires_at: string
+  id: string
+  member_id: string | null
   token_hash: string
   used_at: string | null
-  workspace_id: string
 }
 
-type Tip = {
-  amount: string
+type member = {
+  account_id: string | null
   created_at: k.Generated<string>
-  error: string | null
-  id: k.Generated<string>
-  idempotency_key: string
-  reason: string | null
-  recipient_account_id: string
-  sender_account_id: string
-  source_type: string
-  status: string
-  token_address: string
-  tx_hash: string | null
+  id: string
+  login: string | null
+  name: string | null
+  provider_user_id: string
   updated_at: k.Generated<string>
   workspace_id: string
 }
 
-type TipAttempt = {
-  amount: string
+type tip = {
+  amount: number
+  confirmed_at: string | null
   created_at: k.Generated<string>
-  expires_at: string
-  id: k.Generated<string>
-  recipient_address: string
-  sender_address: string
-  tip_id: string
+  failed_at: string | null
+  failure_reason: string | null
+  id: string
+  idempotency_key: string
+  memo: string | null
+  recipient_id: string
+  recipient_member_id: string
+  sender_id: string
+  sender_member_id: string
   token_address: string
+  transaction_hash: string | null
+  updated_at: k.Generated<string>
+  workspace_id: string
 }
 
-type Workspace = {
+type workspace = {
   created_at: k.Generated<string>
-  daily_cap: k.Generated<string>
-  id: k.Generated<string>
+  default_amount: k.Generated<number>
+  id: string
   name: string | null
-  platform: k.Generated<string>
-  platform_team_id: string
-  tip_amount: k.Generated<string>
-  tip_emoji: k.Generated<string>
+  provider: k.Generated<'slack'>
+  provider_id: string
   updated_at: k.Generated<string>
 }
 
 export declare namespace DB {
-  type Account = k.Selectable<DB['account']>
-  type ConnectToken = k.Selectable<DB['connect_token']>
-  type Tip = k.Selectable<DB['tip']>
-  type TipAttempt = k.Selectable<DB['tip_attempt']>
-  type Workspace = k.Selectable<DB['workspace']>
+  type access_key = k.Selectable<DB['access_key']>
+  type account = k.Selectable<DB['account']>
+  type account_link_token = k.Selectable<DB['account_link_token']>
+  type member = k.Selectable<DB['member']>
+  type tip = k.Selectable<DB['tip']>
+  type workspace = k.Selectable<DB['workspace']>
 
   export namespace Insertable {
-    type Account = k.Insertable<DB['account']>
-    type ConnectToken = k.Insertable<DB['connect_token']>
-    type Tip = k.Insertable<DB['tip']>
-    type TipAttempt = k.Insertable<DB['tip_attempt']>
-    type Workspace = k.Insertable<DB['workspace']>
+    type access_key = k.Insertable<DB['access_key']>
+    type account = k.Insertable<DB['account']>
+    type account_link_token = k.Insertable<DB['account_link_token']>
+    type member = k.Insertable<DB['member']>
+    type tip = k.Insertable<DB['tip']>
+    type workspace = k.Insertable<DB['workspace']>
   }
 
   export namespace Selectable {
-    type Account = k.Selectable<DB['account']>
-    type ConnectToken = k.Selectable<DB['connect_token']>
-    type Tip = k.Selectable<DB['tip']>
-    type TipAttempt = k.Selectable<DB['tip_attempt']>
-    type Workspace = k.Selectable<DB['workspace']>
+    type access_key = k.Selectable<DB['access_key']>
+    type account = k.Selectable<DB['account']>
+    type account_link_token = k.Selectable<DB['account_link_token']>
+    type member = k.Selectable<DB['member']>
+    type tip = k.Selectable<DB['tip']>
+    type workspace = k.Selectable<DB['workspace']>
   }
 
   export namespace Updateable {
-    type Account = k.Updateable<DB['account']>
-    type ConnectToken = k.Updateable<DB['connect_token']>
-    type Tip = k.Updateable<DB['tip']>
-    type TipAttempt = k.Updateable<DB['tip_attempt']>
-    type Workspace = k.Updateable<DB['workspace']>
+    type access_key = k.Updateable<DB['access_key']>
+    type account = k.Updateable<DB['account']>
+    type account_link_token = k.Updateable<DB['account_link_token']>
+    type member = k.Updateable<DB['member']>
+    type tip = k.Updateable<DB['tip']>
+    type workspace = k.Updateable<DB['workspace']>
   }
 }

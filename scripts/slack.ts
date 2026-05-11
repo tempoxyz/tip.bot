@@ -47,7 +47,28 @@ function createManifest() {
           command: '/tip',
           description: 'Tip teammates',
           should_escape: true,
-          usage_hint: 'connect | @account | config',
+          usage_hint: '@account',
+          url: `${baseUrl}/api/chat/slack`,
+        },
+        {
+          command: '/tip-connect',
+          description: 'Connect your wallet',
+          should_escape: true,
+          usage_hint: '',
+          url: `${baseUrl}/api/chat/slack`,
+        },
+        {
+          command: '/tip-config',
+          description: 'Configure Tipbot',
+          should_escape: true,
+          usage_hint: 'amount 0.001',
+          url: `${baseUrl}/api/chat/slack`,
+        },
+        {
+          command: '/tip-help',
+          description: 'Show Tipbot help',
+          should_escape: true,
+          usage_hint: '',
           url: `${baseUrl}/api/chat/slack`,
         },
       ],
@@ -55,25 +76,10 @@ function createManifest() {
     oauth_config: {
       redirect_urls: [`${baseUrl}/api/chat/slack/oauth/callback`],
       scopes: {
-        bot: [
-          'app_mentions:read',
-          'channels:history',
-          'channels:read',
-          'chat:write',
-          'commands',
-          'groups:history',
-          'groups:read',
-          'reactions:read',
-          'reactions:write',
-          'users:read',
-        ],
+        bot: ['chat:write', 'commands', 'users:read'],
       },
     },
     settings: {
-      event_subscriptions: {
-        bot_events: ['app_mention', 'reaction_added'],
-        request_url: `${baseUrl}/api/chat/slack`,
-      },
       interactivity: {
         is_enabled: true,
         request_url: `${baseUrl}/api/chat/slack`,

@@ -66,12 +66,10 @@ for (const { name, sql } of tables) {
   output += `type ${tableTypeName(name)} = {\n`
   schemaOutput += `export const ${name} = z.object({\n`
   for (const col of columns) {
-    const baseType = sqliteToTs(col.type, col.notnull)
+    const baseType = sqliteToTs(col)
     const type = isGeneratedColumn(col) ? `k.Generated<${baseType}>` : baseType
     output += `  ${JSON.stringify(col.name)}: ${type}\n`
-    schemaOutput += `  ${JSON.stringify(col.name)}: ${sqliteToZod(col.type)}${
-      col.notnull ? '' : '.nullable()'
-    },\n`
+    schemaOutput += `  ${JSON.stringify(col.name)}: ${sqliteToZod(col)}${col.notnull ? '' : '.nullable()'},\n`
   }
   output += '}\n\n'
   schemaOutput += '})\n\n'
@@ -106,7 +104,13 @@ writeGeneratedFile('db/schemas.gen.ts', schemaOutput)
 
 //////////////////////////////////////////////////////////////////////////
 
-type Column = { hasDefaultValue: boolean; name: string; notnull: boolean; type: string }
+type Column = {
+  enumValues: string[] | null
+  hasDefaultValue: boolean
+  name: string
+  notnull: boolean
+  type: string
+}
 
 function parseCreateTable(sql: string): Column[] {
   const columns: Column[] = []
@@ -139,17 +143,20 @@ function parseCreateTable(sql: string): Column[] {
     if (!colMatch) continue
 
     const [, name, type] = colMatch
+    const enumValues = parseCheckInValues(part, name)
     const hasDefaultValue = /\bDEFAULT\b/i.test(part)
     const notnull = /NOT\s+NULL/i.test(part) || /PRIMARY\s+KEY/i.test(part)
-    columns.push({ hasDefaultValue, name, notnull, type })
+    columns.push({ enumValues, hasDefaultValue, name, notnull, type })
   }
 
   return columns
 }
 
-function sqliteToTs(sqlType: string, notnull: boolean): string {
-  const type = sqlType.toUpperCase()
+function sqliteToTs(col: Column): string {
+  const type = col.type.toUpperCase()
   const tsType = (() => {
+    if (col.enumValues?.length && type.includes('TEXT'))
+      return col.enumValues.map((value) => JSON.stringify(value)).join(' | ')
     if (type.includes('INT')) return 'number'
     if (
       type.includes('TEXT') ||
@@ -166,26 +173,24 @@ function sqliteToTs(sqlType: string, notnull: boolean): string {
     return 'unknown'
   })()
 
-  return notnull ? tsType : `${tsType} | null`
+  return col.notnull ? tsType : `${tsType} | null`
 }
 
 function isGeneratedColumn(col: Column): boolean {
-  return (
-    col.hasDefaultValue || col.name === 'id' || col.name === 'createdAt' || col.name === 'updatedAt'
-  )
+  return col.hasDefaultValue || col.name === 'createdAt' || col.name === 'updatedAt'
 }
 
 function tableTypeName(table: string): string {
   return table
-    .split(/[^a-zA-Z0-9]+/)
-    .filter(Boolean)
-    .map((part) => part[0].toUpperCase() + part.slice(1))
-    .join('')
 }
 
-function sqliteToZod(sqlType: string): string {
-  const type = sqlType.toUpperCase()
+function sqliteToZod(col: Column): string {
+  const type = col.type.toUpperCase()
 
+  if (col.enumValues?.length && type.includes('TEXT')) {
+    if (col.enumValues.length === 1) return `z.literal(${JSON.stringify(col.enumValues[0])})`
+    return `z.enum([${col.enumValues.map((value) => JSON.stringify(value)).join(', ')}])`
+  }
   if (type.includes('INT')) return 'z.number()'
   if (
     type.includes('TEXT') ||
@@ -200,6 +205,25 @@ function sqliteToZod(sqlType: string): string {
   }
   if (type.includes('BLOB')) return 'z.instanceof(Uint8Array)'
   return 'z.unknown()'
+}
+
+function parseCheckInValues(part: string, column: string) {
+  const match = part.match(
+    new RegExp(
+      `\\bCHECK\\s*\\(\\s*["'\`]??${escapeRegex(column)}["'\`]??\\s+IN\\s*\\(([^)]*)\\)\\s*\\)`,
+      'i',
+    ),
+  )
+  if (!match) return null
+
+  const values = [...match[1]!.matchAll(/'((?:''|[^'])*)'/g)].map((value) =>
+    value[1]!.replaceAll("''", "'"),
+  )
+  return values.length ? values : null
+}
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function writeGeneratedFile(filePath: string, output: string) {

@@ -37,13 +37,13 @@ beforeEach(async () => {
     botUserId: 'B000000001',
     teamName: 'Tip Test',
   })
-  await factory.workspace.insert({ platform_team_id: 'T000000001' })
+  await factory.workspace.insert({ provider_id: 'T000000001' })
 })
 
-test('/tip config', async () => {
+test('/tip-config', async () => {
   const response = await client.api.chat.slack.$post(
     {},
-    await createSlashCommandRequestInit('config'),
+    await createSlashCommandRequestInit('', { command: '/tip-config' }),
   )
   await Promise.all(waitUntil)
 
@@ -52,90 +52,124 @@ test('/tip config', async () => {
     messages: [
       expect.objectContaining({
         subtype: 'ephemeral',
-        text: 'Current config: emoji money_with_wings, amount 0.001, cap 1',
+        text: 'Current config: amount 0.001',
       }),
     ],
     ok: true,
   })
 })
 
-test('/tip config emoji coin', async () => {
-  const response = await client.api.chat.slack.$post(
-    {},
-    await createSlashCommandRequestInit('config emoji coin'),
-  )
-  await Promise.all(waitUntil)
+test('/tip-config missing workspace', async () => {
+  await db.deleteFrom('workspace').where('provider_id', '=', 'T000000001').execute()
 
-  const workspace = await db
+  const response = await postSlashCommand('', { command: '/tip-config' })
+  const workspaces = await db
     .selectFrom('workspace')
-    .select(['tip_emoji'])
-    .where('platform_team_id', '=', 'T000000001')
-    .executeTakeFirstOrThrow()
+    .selectAll()
+    .where('provider_id', '=', 'T000000001')
+    .execute()
 
   expect(response.status).toBe(200)
-  await expect(slack.conversations.history({ channel: 'C000000001' })).resolves.toMatchObject({
-    messages: [expect.objectContaining({ subtype: 'ephemeral', text: 'Updated emoji.' })],
-    ok: true,
-  })
-  expect(workspace.tip_emoji).toBe('coin')
+  await expectSlackMessage(
+    'Tipbot is not configured for this Slack workspace. Reinstall Tipbot and try again.',
+  )
+  expect(workspaces).toEqual([])
 })
 
-test('/tip connect', async () => {
-  const response = await postSlashCommand('connect')
+test('/tip-connect', async () => {
+  const response = await postSlashCommand('', { command: '/tip-connect' })
 
   expect(response.status).toBe(200)
   await expectSlackMessage('Mock tipping is enabled. No wallet connection is required right now.')
+})
+
+test('/tip-disconnect', async () => {
+  const account = await factory.account.insert({})
+  const workspace = await db
+    .selectFrom('workspace')
+    .selectAll()
+    .where('provider_id', '=', 'T000000001')
+    .executeTakeFirstOrThrow()
+  const member = await factory.member.insert({
+    account_id: account.id,
+    provider_user_id: 'U000000001',
+    workspace_id: workspace.id,
+  })
+
+  const response = await postSlashCommand('', { command: '/tip-disconnect' })
+  const updatedMember = await db
+    .selectFrom('member')
+    .selectAll()
+    .where('id', '=', member.id)
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  await expectSlackMessage('Disconnected account.')
+  expect(updatedMember.account_id).toBe(null)
+})
+
+test('/tip-disconnect with no connected account', async () => {
+  const response = await postSlashCommand('', { command: '/tip-disconnect' })
+
+  expect(response.status).toBe(200)
+  await expectSlackMessage('No account is connected.')
+})
+
+test('/tip-help', async () => {
+  const response = await postSlashCommand('', { command: '/tip-help' })
+
+  expect(response.status).toBe(200)
+  await expectSlackMessage('I’m Tipbot: sometime tipper, sometime messenger, always bot.')
+  await expectSlackMessage('Try `/tip <@account> for coffee`.')
 })
 
 test('/tip', async () => {
   const response = await postSlashCommand('')
 
   expect(response.status).toBe(200)
-  await expectSlackMessage('Usage: /tip @account or /tip config')
+  await expectSlackMessage('Usage: /tip @account')
 })
 
 test('/tip hello', async () => {
   const response = await postSlashCommand('hello')
 
   expect(response.status).toBe(200)
-  await expectSlackMessage('Usage: /tip @account or /tip config')
+  await expectSlackMessage('Usage: /tip @account')
 })
 
 test('/tip <@U000000002>', async () => {
   const response = await postSlashCommand('<@U000000002>')
   const tip = await db
     .selectFrom('tip')
-    .innerJoin('account as sender', 'sender.id', 'tip.sender_account_id')
-    .innerJoin('account as recipient', 'recipient.id', 'tip.recipient_account_id')
+    .innerJoin('member as sender', 'sender.id', 'tip.sender_member_id')
+    .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
     .select([
-      'recipient.platform_account_id as recipient_platform_account_id',
-      'sender.platform_account_id as sender_platform_account_id',
+      'recipient.provider_user_id as recipient_provider_user_id',
+      'sender.provider_user_id as sender_provider_user_id',
       'tip.amount',
-      'tip.source_type',
-      'tip.status',
-      'tip.tx_hash',
+      'tip.confirmed_at',
+      'tip.transaction_hash',
     ])
     .executeTakeFirstOrThrow()
 
   expect(response.status).toBe(200)
   await expectSlackMessage('Mock tip sent: <@U000000001> → <@U000000002> 0.001 mock stablecoins')
   expect(tip).toMatchObject({
-    amount: '0.001',
-    recipient_platform_account_id: 'U000000002',
-    sender_platform_account_id: 'U000000001',
-    source_type: 'command',
-    status: 'confirmed',
+    amount: 1000,
+    recipient_provider_user_id: 'U000000002',
+    sender_provider_user_id: 'U000000001',
   })
-  expect(tip.tx_hash).toEqual(expect.any(String))
+  expect(tip.confirmed_at).toEqual(expect.any(String))
+  expect(tip.transaction_hash).toEqual(expect.any(String))
 })
 
 test('/tip <@U000000002> for great work', async () => {
   const response = await postSlashCommand('<@U000000002> for great work')
-  const tip = await db.selectFrom('tip').select(['reason']).executeTakeFirstOrThrow()
+  const tip = await db.selectFrom('tip').select(['memo']).executeTakeFirstOrThrow()
 
   expect(response.status).toBe(200)
   await expectSlackMessage('for great work')
-  expect(tip.reason).toBe('great work')
+  expect(tip.memo).toBe('great work')
 })
 
 test('/tip <@U000000001>', async () => {
@@ -145,102 +179,65 @@ test('/tip <@U000000001>', async () => {
   await expectSlackMessage('You cannot tip yourself.')
 })
 
-test('/tip config amount 0.002', async () => {
-  const response = await postSlashCommand('config amount 0.002')
+test('/tip-config amount 0.002', async () => {
+  const response = await postSlashCommand('amount 0.002', { command: '/tip-config' })
   const workspace = await db
     .selectFrom('workspace')
     .selectAll()
-    .where('platform_team_id', '=', 'T000000001')
+    .where('provider_id', '=', 'T000000001')
     .executeTakeFirstOrThrow()
 
   expect(response.status).toBe(200)
   await expectSlackMessage('Updated amount.')
-  expect(workspace.tip_amount).toBe('0.002')
+  expect(workspace.default_amount).toBe(2000)
 })
 
-test('/tip config cap 2', async () => {
-  const response = await postSlashCommand('config cap 2')
-  const workspace = await db
-    .selectFrom('workspace')
-    .selectAll()
-    .where('platform_team_id', '=', 'T000000001')
-    .executeTakeFirstOrThrow()
+test('/tip-config unknown value', async () => {
+  const response = await postSlashCommand('unknown value', { command: '/tip-config' })
 
   expect(response.status).toBe(200)
-  await expectSlackMessage('Updated cap.')
-  expect(workspace.daily_cap).toBe('2')
+  await expectSlackMessage('Config keys: amount.')
 })
 
-test('/tip config emoji :coin:', async () => {
-  const response = await postSlashCommand('config emoji :coin:')
-  const workspace = await db
-    .selectFrom('workspace')
-    .selectAll()
-    .where('platform_team_id', '=', 'T000000001')
-    .executeTakeFirstOrThrow()
+test('/tip-config amount 0', async () => {
+  const response = await postSlashCommand('amount 0', { command: '/tip-config' })
 
   expect(response.status).toBe(200)
-  await expectSlackMessage('Updated emoji.')
-  expect(workspace.tip_emoji).toBe('coin')
+  await expectSlackMessage('Amount must be a positive decimal with at most 6 decimal places.')
 })
 
-test('/tip config unknown value', async () => {
-  const response = await postSlashCommand('config unknown value')
+test('/tip-config amount abc', async () => {
+  const response = await postSlashCommand('amount abc', { command: '/tip-config' })
 
   expect(response.status).toBe(200)
-  await expectSlackMessage('Config keys: emoji, amount, cap.')
+  await expectSlackMessage('Amount must be a positive decimal with at most 6 decimal places.')
 })
 
-test('/tip config amount 0', async () => {
-  const response = await postSlashCommand('config amount 0')
+test('/tip-config amount 0.0000001', async () => {
+  const response = await postSlashCommand('amount 0.0000001', { command: '/tip-config' })
 
   expect(response.status).toBe(200)
-  await expectSlackMessage('Amount must be a positive decimal.')
+  await expectSlackMessage('Amount must be a positive decimal with at most 6 decimal places.')
 })
 
-test('/tip config cap 0', async () => {
-  const response = await postSlashCommand('config cap 0')
-
-  expect(response.status).toBe(200)
-  await expectSlackMessage('Cap must be a positive decimal.')
-})
-
-test('/tip config amount abc', async () => {
-  const response = await postSlashCommand('config amount abc')
-
-  expect(response.status).toBe(200)
-  await expectSlackMessage('Amount must be a positive decimal.')
-})
-
-test('/tip config cap abc', async () => {
-  const response = await postSlashCommand('config cap abc')
-
-  expect(response.status).toBe(200)
-  await expectSlackMessage('Cap must be a positive decimal.')
-})
-
-test('/tip config amount 2', async () => {
-  const response = await postSlashCommand('config amount 2')
-
-  expect(response.status).toBe(200)
-  await expectSlackMessage('Cap must be greater than or equal to amount.')
-})
-
-test('/tip config emoji coin denied for non-admin', async () => {
+test('/tip-config amount denied for non-admin', async () => {
   const userList = await slack.users.list({})
   const member = userList.members?.find((member) => member.id && !member.is_admin)
   if (!member?.id) throw new Error('Expected Slack emulator to seed a non-admin member.')
 
-  const response = await postSlashCommand('config emoji coin', { userId: member.id })
+  const response = await postSlashCommand('amount 0.002', {
+    command: '/tip-config',
+    userId: member.id,
+  })
   const workspace = await db
     .selectFrom('workspace')
     .selectAll()
-    .where('platform_team_id', '=', 'T000000001')
+    .where('provider_id', '=', 'T000000001')
     .executeTakeFirstOrThrow()
 
   expect(response.status).toBe(200)
   await expectSlackMessage('Only Slack admins can change tip config.')
-  expect(workspace.tip_emoji).toBe('money_with_wings')
+  expect(workspace.default_amount).toBe(1000)
 })
 
 async function expectSlackMessage(text: string) {
@@ -252,7 +249,7 @@ async function expectSlackMessage(text: string) {
 
 async function postSlashCommand(
   text: string,
-  options: { responseUrl?: string; triggerId?: string; userId?: string } = {},
+  options: { command?: string; responseUrl?: string; triggerId?: string; userId?: string } = {},
 ) {
   const response = await client.api.chat.slack.$post(
     {},
@@ -264,11 +261,11 @@ async function postSlashCommand(
 
 async function createSlashCommandRequestInit(
   text: string,
-  options: { responseUrl?: string; triggerId?: string; userId?: string } = {},
+  options: { command?: string; responseUrl?: string; triggerId?: string; userId?: string } = {},
 ) {
   const body = new URLSearchParams({
     channel_id: 'C000000001',
-    command: '/tip',
+    command: options.command ?? '/tip',
     ...(options.responseUrl ? { response_url: options.responseUrl } : {}),
     team_id: 'T000000001',
     text,

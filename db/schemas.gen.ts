@@ -2,76 +2,80 @@
 
 import { z } from 'zod'
 
-export const account = z.object({
-  access_key_address: z.string().nullable(),
-  access_key_authorization: z.string().nullable(),
-  access_key_ciphertext: z.string().nullable(),
-  access_key_expires_at: z.string().nullable(),
-  created_at: z.string(),
-  display_name: z.string().nullable(),
-  id: z.string(),
-  platform: z.string(),
-  platform_account_id: z.string(),
-  tempo_address: z.string().nullable(),
-  updated_at: z.string(),
-  workspace_id: z.string(),
-})
-
-export const connect_token = z.object({
+export const access_key = z.object({
+  account_id: z.string(),
+  address: z.string(),
+  authorization: z.string(),
+  ciphertext: z.string(),
   created_at: z.string(),
   expires_at: z.string(),
   id: z.string(),
-  platform: z.string(),
-  platform_account_id: z.string(),
+  revoked_at: z.string().nullable(),
+  updated_at: z.string(),
+})
+
+export const account = z.object({
+  address: z.string(),
+  created_at: z.string(),
+  id: z.string(),
+  updated_at: z.string(),
+})
+
+export const account_link_token = z.object({
+  account_id: z.string(),
+  created_at: z.string(),
+  expires_at: z.string(),
+  id: z.string(),
+  member_id: z.string().nullable(),
   token_hash: z.string(),
   used_at: z.string().nullable(),
+})
+
+export const member = z.object({
+  account_id: z.string().nullable(),
+  created_at: z.string(),
+  id: z.string(),
+  login: z.string().nullable(),
+  name: z.string().nullable(),
+  provider_user_id: z.string(),
+  updated_at: z.string(),
   workspace_id: z.string(),
 })
 
 export const tip = z.object({
-  amount: z.string(),
+  amount: z.number(),
+  confirmed_at: z.string().nullable(),
   created_at: z.string(),
-  error: z.string().nullable(),
+  failed_at: z.string().nullable(),
+  failure_reason: z.string().nullable(),
   id: z.string(),
   idempotency_key: z.string(),
-  reason: z.string().nullable(),
-  recipient_account_id: z.string(),
-  sender_account_id: z.string(),
-  source_type: z.string(),
-  status: z.string(),
+  memo: z.string().nullable(),
+  recipient_id: z.string(),
+  recipient_member_id: z.string(),
+  sender_id: z.string(),
+  sender_member_id: z.string(),
   token_address: z.string(),
-  tx_hash: z.string().nullable(),
+  transaction_hash: z.string().nullable(),
   updated_at: z.string(),
   workspace_id: z.string(),
 })
 
-export const tip_attempt = z.object({
-  amount: z.string(),
-  created_at: z.string(),
-  expires_at: z.string(),
-  id: z.string(),
-  recipient_address: z.string(),
-  sender_address: z.string(),
-  tip_id: z.string(),
-  token_address: z.string(),
-})
-
 export const workspace = z.object({
   created_at: z.string(),
-  daily_cap: z.string(),
+  default_amount: z.number(),
   id: z.string(),
   name: z.string().nullable(),
-  platform: z.string(),
-  platform_team_id: z.string(),
-  tip_amount: z.string(),
-  tip_emoji: z.string(),
+  provider: z.literal('slack'),
+  provider_id: z.string(),
   updated_at: z.string(),
 })
 
 export const db = {
+  access_key: access_key,
   account: account,
-  connect_token: connect_token,
+  account_link_token: account_link_token,
+  member: member,
   tip: tip,
-  tip_attempt: tip_attempt,
   workspace: workspace,
 }

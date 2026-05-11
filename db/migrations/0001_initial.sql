@@ -1,77 +1,85 @@
-CREATE TABLE "workspace" (
-  "id" TEXT PRIMARY KEY NOT NULL,
-  "platform" TEXT NOT NULL DEFAULT 'slack' CHECK ("platform" IN ('slack')),
-  "platform_team_id" TEXT NOT NULL,
-  "name" TEXT,
-  "tip_emoji" TEXT NOT NULL DEFAULT 'money_with_wings',
-  "tip_amount" TEXT NOT NULL DEFAULT '0.001',
-  "daily_cap" TEXT NOT NULL DEFAULT '1',
-  "created_at" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  "updated_at" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX "workspace_platform_team_idx" ON "workspace" ("platform", "platform_team_id");
-
 CREATE TABLE "account" (
   "id" TEXT PRIMARY KEY NOT NULL,
-  "workspace_id" TEXT NOT NULL REFERENCES "workspace" ("id") ON DELETE CASCADE,
-  "platform" TEXT NOT NULL DEFAULT 'slack' CHECK ("platform" IN ('slack')),
-  "platform_account_id" TEXT NOT NULL,
-  "display_name" TEXT,
-  "tempo_address" TEXT,
-  "access_key_address" TEXT,
-  "access_key_ciphertext" TEXT,
-  "access_key_authorization" TEXT,
-  "access_key_expires_at" TEXT,
+  "address" TEXT NOT NULL UNIQUE,
   "created_at" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updated_at" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX "account_platform_idx" ON "account" ("workspace_id", "platform", "platform_account_id");
-CREATE INDEX "account_tempo_address_idx" ON "account" ("tempo_address");
+CREATE TABLE "access_key" (
+  "id" TEXT PRIMARY KEY NOT NULL,
+  "account_id" TEXT NOT NULL REFERENCES "account" ("id"),
+  "address" TEXT NOT NULL UNIQUE,
+  "ciphertext" TEXT NOT NULL,
+  "authorization" TEXT NOT NULL,
+  "expires_at" TEXT NOT NULL,
+  "revoked_at" TEXT,
+  "created_at" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updated_at" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
-CREATE TABLE "connect_token" (
+CREATE INDEX "access_key_account_idx" ON "access_key" ("account_id");
+
+CREATE TABLE "workspace" (
+  "id" TEXT PRIMARY KEY NOT NULL,
+  "provider" TEXT NOT NULL DEFAULT 'slack' CHECK ("provider" IN ('slack')),
+  "provider_id" TEXT NOT NULL,
+  "name" TEXT,
+  "default_amount" INTEGER NOT NULL DEFAULT 1000 CHECK ("default_amount" > 0),
+  "created_at" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updated_at" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX "workspace_provider_idx" ON "workspace" ("provider", "provider_id");
+
+CREATE TABLE "member" (
   "id" TEXT PRIMARY KEY NOT NULL,
   "workspace_id" TEXT NOT NULL REFERENCES "workspace" ("id") ON DELETE CASCADE,
-  "platform" TEXT NOT NULL DEFAULT 'slack' CHECK ("platform" IN ('slack')),
-  "platform_account_id" TEXT NOT NULL,
+  "account_id" TEXT REFERENCES "account" ("id"),
+  "provider_user_id" TEXT NOT NULL,
+  "login" TEXT,
+  "name" TEXT,
+  "created_at" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updated_at" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX "member_workspace_provider_user_idx" ON "member" ("workspace_id", "provider_user_id");
+CREATE INDEX "member_account_idx" ON "member" ("account_id");
+
+CREATE TABLE "account_link_token" (
+  "id" TEXT PRIMARY KEY NOT NULL,
+  "account_id" TEXT NOT NULL REFERENCES "account" ("id"),
+  "member_id" TEXT REFERENCES "member" ("id") ON DELETE SET NULL,
   "token_hash" TEXT NOT NULL UNIQUE,
   "expires_at" TEXT NOT NULL,
   "used_at" TEXT,
-  "created_at" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  "created_at" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK ("used_at" IS NOT NULL OR "member_id" IS NULL)
 );
 
-CREATE INDEX "connect_token_account_idx" ON "connect_token" ("workspace_id", "platform_account_id");
+CREATE INDEX "account_link_token_account_idx" ON "account_link_token" ("account_id");
+CREATE INDEX "account_link_token_member_idx" ON "account_link_token" ("member_id");
 
 CREATE TABLE "tip" (
   "id" TEXT PRIMARY KEY NOT NULL,
   "workspace_id" TEXT NOT NULL REFERENCES "workspace" ("id") ON DELETE CASCADE,
-  "source_type" TEXT NOT NULL CHECK ("source_type" IN ('command', 'mention', 'reaction')),
   "idempotency_key" TEXT NOT NULL UNIQUE,
-  "sender_account_id" TEXT NOT NULL REFERENCES "account" ("id") ON DELETE CASCADE,
-  "recipient_account_id" TEXT NOT NULL REFERENCES "account" ("id") ON DELETE CASCADE,
-  "amount" TEXT NOT NULL,
+  "sender_id" TEXT NOT NULL REFERENCES "account" ("id"),
+  "recipient_id" TEXT NOT NULL REFERENCES "account" ("id"),
+  "sender_member_id" TEXT NOT NULL REFERENCES "member" ("id"),
+  "recipient_member_id" TEXT NOT NULL REFERENCES "member" ("id"),
+  "amount" INTEGER NOT NULL CHECK ("amount" > 0),
   "token_address" TEXT NOT NULL,
-  "reason" TEXT,
-  "status" TEXT NOT NULL CHECK ("status" IN ('submitting', 'confirmed', 'failed')),
-  "tx_hash" TEXT,
-  "error" TEXT,
+  "memo" TEXT,
+  "transaction_hash" TEXT UNIQUE,
+  "confirmed_at" TEXT,
+  "failed_at" TEXT,
+  "failure_reason" TEXT,
   "created_at" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  "updated_at" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  "updated_at" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK ("confirmed_at" IS NULL OR "failed_at" IS NULL),
+  CHECK ("failed_at" IS NOT NULL OR "failure_reason" IS NULL)
 );
 
 CREATE INDEX "tip_workspace_created_idx" ON "tip" ("workspace_id", "created_at");
-CREATE INDEX "tip_sender_created_idx" ON "tip" ("sender_account_id", "created_at");
-
-CREATE TABLE "tip_attempt" (
-  "id" TEXT PRIMARY KEY NOT NULL,
-  "tip_id" TEXT NOT NULL REFERENCES "tip" ("id") ON DELETE CASCADE,
-  "sender_address" TEXT NOT NULL,
-  "recipient_address" TEXT NOT NULL,
-  "amount" TEXT NOT NULL,
-  "token_address" TEXT NOT NULL,
-  "expires_at" TEXT NOT NULL,
-  "created_at" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX "tip_attempt_tip_idx" ON "tip_attempt" ("tip_id");
+CREATE INDEX "tip_sender_created_idx" ON "tip" ("sender_id", "created_at");
+CREATE INDEX "tip_recipient_created_idx" ON "tip" ("recipient_id", "created_at");

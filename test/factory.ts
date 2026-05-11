@@ -2,6 +2,7 @@ import { createQueryId, type Insertable, type Kysely, type Selectable } from 'ky
 import type { DB } from '#db/types.gen.ts'
 import { mockTokenAddress } from '#/lib/tips.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
+import { Address, Secp256k1 } from 'ox'
 
 export function create(db: Kysely<DB>): FactoryInstance {
   function factory(table: keyof DB) {
@@ -76,66 +77,75 @@ const defaultConfig: Partial<{
   account() {
     const now = new Date().toISOString()
     return {
-      access_key_address: null,
-      access_key_authorization: null,
-      access_key_ciphertext: null,
-      access_key_expires_at: null,
+      address: generateAddress(),
       created_at: now,
-      display_name: null,
-      platform: 'slack',
-      platform_account_id: `U${Nanoid.generate()}`,
-      tempo_address: null,
       updated_at: now,
     }
   },
-  connect_token() {
+  access_key() {
+    const now = new Date().toISOString()
+    return {
+      address: generateAddress(),
+      authorization: Nanoid.generate(),
+      ciphertext: Nanoid.generate(),
+      created_at: now,
+      expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(), // 15 minutes
+      revoked_at: null,
+      updated_at: now,
+    }
+  },
+  account_link_token() {
     return {
       created_at: new Date().toISOString(),
       expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(), // 15 minutes
-      platform: 'slack',
-      platform_account_id: `U${Nanoid.generate()}`,
+      member_id: null,
       token_hash: Nanoid.generate(),
       used_at: null,
+    }
+  },
+  member() {
+    const now = new Date().toISOString()
+    return {
+      account_id: null,
+      created_at: now,
+      login: null,
+      name: null,
+      provider_user_id: `U${Nanoid.generate()}`,
+      updated_at: now,
     }
   },
   tip() {
     const now = new Date().toISOString()
     return {
-      amount: '0.001',
+      amount: 1000,
+      confirmed_at: null,
       created_at: now,
-      error: null,
+      failed_at: null,
+      failure_reason: null,
       idempotency_key: Nanoid.generate(),
-      reason: null,
-      source_type: 'command',
-      status: 'submitting',
+      memo: null,
       token_address: mockTokenAddress,
-      tx_hash: null,
+      transaction_hash: null,
       updated_at: now,
-    }
-  },
-  tip_attempt() {
-    return {
-      amount: '1000',
-      created_at: new Date().toISOString(),
-      expires_at: new Date(Date.now() + 60 * 1000).toISOString(), // 1 minute
-      recipient_address: 'mock-recipient',
-      sender_address: 'mock-sender',
-      token_address: mockTokenAddress,
     }
   },
   workspace() {
     const now = new Date().toISOString()
     return {
       created_at: now,
-      daily_cap: '1',
+      default_amount: 1000,
       name: null,
-      platform: 'slack',
-      platform_team_id: `T${Nanoid.generate()}`,
-      tip_amount: '0.001',
-      tip_emoji: 'money_with_wings',
+      provider: 'slack',
+      provider_id: `T${Nanoid.generate()}`,
       updated_at: now,
     }
   },
+}
+
+function generateAddress() {
+  const privateKey = Secp256k1.randomPrivateKey()
+  const publicKey = Secp256k1.getPublicKey({ privateKey })
+  return Address.fromPublicKey(publicKey)
 }
 
 type FactoryInstance = {

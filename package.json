@@ -28,6 +28,7 @@
   "dependencies": {
     "@base-ui/react": "1.4.1",
     "@chat-adapter/slack": "4.27.0",
+    "@hono/zod-validator": "^0.8.0",
     "@tanstack/react-router": "1.169.2",
     "@tanstack/react-start": "1.167.64",
     "@tanstack/router-plugin": "1.167.34",
