@@ -1,65 +1,64 @@
-import { exports } from 'cloudflare:workers'
-import { expect, test } from 'vitest'
+import { env } from 'cloudflare:workers'
+import { testClient } from 'hono/testing'
+import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { api } from '#/api.ts'
+import { createSlackHeaders } from '#test/slack.ts'
 
-const signingSecret = 'test-signing-secret'
+let waitUntil: Promise<unknown>[] = []
+const executionCtx = {
+  passThroughOnException: vi.fn(),
+  props: {},
+  waitUntil: vi.fn((promise: Promise<unknown>) => {
+    waitUntil.push(promise)
+  }),
+}
+const client = testClient(api, env, executionCtx)
 
-test('Slack URL verification reaches the Worker API route', async () => {
-  const body = JSON.stringify({
-    challenge: 'slack-challenge',
-    event_id: 'Ev000000001',
-    team_id: 'T000000001',
-    type: 'url_verification',
-  })
-
-  const response = await worker.fetch('https://tip.test/api/chat/slack', {
-    body,
-    headers: {
-      ...(await createSlackHeaders(body)),
-      'content-type': 'application/json',
-    },
-    method: 'POST',
-  })
-
-  expect(response.status).toBe(200)
-  expect(await response.json()).toEqual({ challenge: 'slack-challenge' })
+beforeEach(() => {
+  waitUntil = []
+  executionCtx.passThroughOnException.mockClear()
+  executionCtx.waitUntil.mockClear()
 })
 
-test('invalid Slack signatures are rejected by the Worker API route', async () => {
-  const response = await worker.fetch('https://tip.test/api/chat/slack', {
-    body: '{}',
-    headers: {
-      'content-type': 'application/json',
-      'x-slack-request-timestamp': String(Math.floor(Date.now() / 1000)),
-      'x-slack-signature': 'v0=bad',
-    },
-    method: 'POST',
+describe('/api/chat/slack', () => {
+  test('Slack URL verification reaches the Worker API route', async () => {
+    const body = JSON.stringify({
+      challenge: 'slack-challenge',
+      event_id: 'Ev000000001',
+      team_id: 'T000000001',
+      type: 'url_verification',
+    })
+
+    const response = await client.api.chat.slack.$post(
+      {},
+      {
+        headers: {
+          ...(await createSlackHeaders(body)),
+          'content-type': 'application/json',
+        },
+        init: { body },
+      },
+    )
+    await Promise.all(waitUntil)
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ challenge: 'slack-challenge' })
   })
 
-  expect(response.status).toBe(401)
+  test('invalid Slack signatures are rejected by the Worker API route', async () => {
+    const response = await client.api.chat.slack.$post(
+      {},
+      {
+        headers: {
+          'content-type': 'application/json',
+          'x-slack-request-timestamp': String(Math.floor(Date.now() / 1000)),
+          'x-slack-signature': 'v0=bad',
+        },
+        init: { body: '{}' },
+      },
+    )
+    await Promise.all(waitUntil)
+
+    expect(response.status).toBe(401)
+  })
 })
-
-const worker = exports.default as { fetch: typeof fetch }
-
-async function createSlackHeaders(body: string) {
-  const timestamp = String(Math.floor(Date.now() / 1000))
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(signingSecret),
-    { hash: 'SHA-256', name: 'HMAC' },
-    false,
-    ['sign'],
-  )
-  const digest = await crypto.subtle.sign(
-    'HMAC',
-    key,
-    new TextEncoder().encode(`v0:${timestamp}:${body}`),
-  )
-  return {
-    'x-slack-request-timestamp': timestamp,
-    'x-slack-signature': `v0=${bytesToHex(new Uint8Array(digest))}`,
-  }
-}
-
-function bytesToHex(value: Uint8Array) {
-  return Array.from(value, (byte) => byte.toString(16).padStart(2, '0')).join('')
-}

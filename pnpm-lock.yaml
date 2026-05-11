@@ -16,6 +16,10 @@ overrides:
 
 packageExtensionsChecksum: sha256-+qeowdyxhNxOoPcupUZ6hUvH9lsA69jGqvTwkjD2d+c=
 
+patchedDependencies:
+  '@slack/web-api@7.15.2': 97b9149f438abff67b083a9f281917a3b7e1d3133ca6b8be85c6e6ba78b591ae
+  emulate@0.5.0: d2045cc26ad7d356cc10e676eee0ed4be242e12a837f1a65af268c8e1cf3f7ac
+
 importers:
 
   .:
@@ -72,6 +76,9 @@ importers:
       '@playwright/test':
         specifier: 1.59.1
         version: 1.59.1
+      '@slack/web-api':
+        specifier: 7.15.2
+        version: 7.15.2(patch_hash=97b9149f438abff67b083a9f281917a3b7e1d3133ca6b8be85c6e6ba78b591ae)
       '@svgr/core':
         specifier: 8.1.0
         version: 8.1.0(typescript@6.0.3)
@@ -107,7 +114,7 @@ importers:
         version: 12.9.0
       emulate:
         specifier: 0.5.0
-        version: 0.5.0(hono@4.12.17)
+        version: 0.5.0(patch_hash=d2045cc26ad7d356cc10e676eee0ed4be242e12a837f1a65af268c8e1cf3f7ac)(hono@4.12.17)
       node:
         specifier: runtime:^24.5.1
         version: runtime:24.15.0
@@ -3234,7 +3241,7 @@ snapshots:
     dependencies:
       '@chat-adapter/shared': 4.27.0
       '@slack/socket-mode': 2.0.7
-      '@slack/web-api': 7.15.2
+      '@slack/web-api': 7.15.2(patch_hash=97b9149f438abff67b083a9f281917a3b7e1d3133ca6b8be85c6e6ba78b591ae)
       chat: 4.27.0
     transitivePeerDependencies:
       - bufferutil
@@ -3752,7 +3759,7 @@ snapshots:
 
   '@slack/types@2.21.0': {}
 
-  '@slack/web-api@7.15.2':
+  '@slack/web-api@7.15.2(patch_hash=97b9149f438abff67b083a9f281917a3b7e1d3133ca6b8be85c6e6ba78b591ae)':
     dependencies:
       '@slack/logger': 4.0.1
       '@slack/types': 2.21.0
@@ -4579,7 +4586,7 @@ snapshots:
 
   electron-to-chromium@1.5.349: {}
 
-  emulate@0.5.0(hono@4.12.17):
+  emulate@0.5.0(patch_hash=d2045cc26ad7d356cc10e676eee0ed4be242e12a837f1a65af268c8e1cf3f7ac)(hono@4.12.17):
     dependencies:
       '@hono/node-server': 1.19.14(hono@4.12.17)
       commander: 14.0.3

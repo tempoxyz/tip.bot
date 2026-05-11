@@ -54,6 +54,7 @@ function parseTipText(text: string) {
 async function handleSlashCommand(event: SlashCommandEvent) {
   const raw = event.raw as Record<string, string | undefined>
   const text = event.text.trim()
+  const channelId = raw.channel_id ?? ''
   const teamId = raw.team_id ?? ''
   const senderAccountId = event.user.userId
 
@@ -77,9 +78,17 @@ async function handleSlashCommand(event: SlashCommandEvent) {
 
   const parsed = parseTipText(text)
   if (!parsed) {
-    await event.channel.postEphemeral(event.user, 'Usage: /tip @account or /tip config', {
-      fallbackToDM: false,
-    })
+    if (channelId && teamId)
+      await postSlackEphemeral(
+        teamId,
+        channelId,
+        senderAccountId,
+        'Usage: /tip @account or /tip config',
+      )
+    else
+      await event.channel.postEphemeral(event.user, 'Usage: /tip @account or /tip config', {
+        fallbackToDM: false,
+      })
     return
   }
 
@@ -262,6 +271,15 @@ async function slackApi<T>(
   if (json.ok) return json as T
 
   throw new Error(json.error ?? `Slack API ${method} failed.`)
+}
+
+async function postSlackEphemeral(
+  teamId: string,
+  channelId: string,
+  accountId: string,
+  text: string,
+) {
+  await slackApi(teamId, 'chat.postEphemeral', { channel: channelId, text, user: accountId })
 }
 
 async function renderTipResult(input: TipInput, result: TipResult) {

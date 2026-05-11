@@ -1,0 +1,13 @@
+diff --git a/dist/WebClient.js b/dist/WebClient.js
+index 21653c25121ad255a663110205e4747134e4ace1..c9a89d9863ae7e320c1e87873799e2478089d869 100644
+--- a/dist/WebClient.js
++++ b/dist/WebClient.js
+@@ -153,7 +153,7 @@ class WebClient extends methods_1.Methods {
+         if (this.token && !headers.Authorization)
+             headers.Authorization = `Bearer ${this.token}`;
+         this.axios = axios_1.default.create({
+-            adapter: adapter ? (config) => adapter(Object.assign(Object.assign({}, config), { adapter: undefined })) : undefined,
++            adapter: adapter ? (config) => adapter(Object.assign(Object.assign({}, config), { adapter: undefined })) : axios_1.default.getAdapter('fetch'),
+             timeout,
+             baseURL: this.slackApiUrl,
+             headers: (0, is_electron_1.default)() ? headers : Object.assign({ 'User-Agent': (0, instrument_1.getUserAgent)() }, headers),

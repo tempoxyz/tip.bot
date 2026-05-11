@@ -1,0 +1,43 @@
+diff --git a/dist/dist-CE6BUCWQ.js b/dist/dist-CE6BUCWQ.js
+index 6876d0e09488b5533c787b541f674e755004e739..f0939a456c8b21cf9f0df2d19f5cfcceb8d5cd08 100644
+--- a/dist/dist-CE6BUCWQ.js
++++ b/dist/dist-CE6BUCWQ.js
+@@ -76,6 +76,38 @@ function authRoutes(ctx) {
+ function chatRoutes(ctx) {
+   const { app, store, webhooks } = ctx;
+   const ss = () => getSlackStore(store);
++  app.post("/api/chat.postEphemeral", async (c) => {
++    const authUser = c.get("authUser");
++    if (!authUser) return slackError(c, "not_authed");
++    const body = await parseSlackBody(c);
++    const channel = typeof body.channel === "string" ? body.channel : "";
++    const text = typeof body.text === "string" ? body.text : "";
++    const user = typeof body.user === "string" ? body.user : "";
++    const thread_ts = typeof body.thread_ts === "string" ? body.thread_ts : void 0;
++    if (!channel) return slackError(c, "channel_not_found");
++    if (!user) return slackError(c, "user_not_found");
++    const ch = ss().channels.findOneBy("channel_id", channel) ?? ss().channels.findOneBy("name", channel);
++    if (!ch) return slackError(c, "channel_not_found");
++    const targetUser = ss().users.findOneBy("user_id", user);
++    if (!targetUser) return slackError(c, "user_not_found");
++    const ts = generateTs();
++    ss().messages.insert({
++      ts,
++      channel_id: ch.channel_id,
++      user: authUser.login,
++      text,
++      type: "message",
++      subtype: "ephemeral",
++      thread_ts,
++      reply_count: 0,
++      reply_users: [],
++      reactions: []
++    });
++    return slackOk(c, {
++      channel: ch.channel_id,
++      message_ts: ts
++    });
++  });
+   app.post("/api/chat.postMessage", async (c) => {
+     const authUser = c.get("authUser");
+     if (!authUser) return slackError(c, "not_authed");
