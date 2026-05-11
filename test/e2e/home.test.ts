@@ -1,5 +1,12 @@
 import { expect, test } from '@playwright/test'
 
+test('home page shows Slack install success', async ({ page }) => {
+  await page.goto('/?slack=installed&team=wevm')
+
+  await expect(page.getByText('Tipbot installed for wevm', { exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Add to Slack' })).toBeHidden()
+})
+
 test('home page opens Slack install flow', async ({ page }) => {
   await page.goto('/')
 
