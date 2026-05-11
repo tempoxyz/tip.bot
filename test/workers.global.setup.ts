@@ -1,16 +1,13 @@
 import { createEmulator } from 'emulate'
 import type { TestProject } from 'vitest/node'
+import * as Constants from './constants.ts'
 import { Env } from './env.ts'
 import { getAvailablePort } from './utils.ts'
 
 export default async function (project: TestProject) {
   const slack = await createEmulator({
     port: await getAvailablePort(),
-    seed: {
-      slack: {
-        users: [{ email: 'member@example.com', name: 'member' }],
-      },
-    },
+    seed: Constants.seed,
     service: 'slack',
   })
 

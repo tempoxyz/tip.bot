@@ -3,6 +3,7 @@ import { testClient } from 'hono/testing'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { api } from '#/api.ts'
 import * as DB from '#db/client.ts'
+import * as Constants from '#test/constants.ts'
 import * as Factory from '#test/factory.ts'
 import { createSlackHeaders } from '#test/slack.ts'
 
@@ -31,7 +32,7 @@ describe('/api/chat/slack', () => {
     const body = JSON.stringify({
       challenge: 'slack-challenge',
       event_id: 'Ev000000001',
-      team_id: 'T000000001',
+      team_id: Constants.slack.teamId,
       type: 'url_verification',
     })
 
@@ -142,7 +143,7 @@ describe('/api/chat/slack/oauth/callback', () => {
         redirect_uri: authorizeUrl.searchParams.get('redirect_uri') ?? '',
         scope: authorizeUrl.searchParams.get('scope') ?? '',
         state: authorizeUrl.searchParams.get('state') ?? '',
-        user_id: 'U000000001',
+        user_id: Constants.slack.adminUserId,
       }),
       method: 'POST',
       redirect: 'manual',
@@ -160,16 +161,20 @@ describe('/api/chat/slack/oauth/callback', () => {
     const workspace = await db
       .selectFrom('workspace')
       .select(['name', 'provider', 'provider_id'])
-      .where('provider_id', '=', 'T000000001')
+      .where('provider_id', '=', Constants.slack.teamId)
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(302)
     expect(response.headers.get('location')).toBe('http://localhost/?slack=installed&team=Emulate')
-    expect(workspace).toEqual({ name: 'Emulate', provider: 'slack', provider_id: 'T000000001' })
+    expect(workspace).toEqual({
+      name: 'Emulate',
+      provider: 'slack',
+      provider_id: Constants.slack.teamId,
+    })
   })
 
   test('updates existing workspace and redirects', async () => {
-    await factory.workspace.insert({ name: 'Old Name', provider_id: 'T000000001' })
+    await factory.workspace.insert({ name: 'Old Name', provider_id: Constants.slack.teamId })
     const installResponse = await client.api.chat.slack.install.$get()
     const location = installResponse.headers.get('location')
     if (!location) throw new Error('Expected Slack install redirect location.')
@@ -181,7 +186,7 @@ describe('/api/chat/slack/oauth/callback', () => {
         redirect_uri: authorizeUrl.searchParams.get('redirect_uri') ?? '',
         scope: authorizeUrl.searchParams.get('scope') ?? '',
         state: authorizeUrl.searchParams.get('state') ?? '',
-        user_id: 'U000000001',
+        user_id: Constants.slack.adminUserId,
       }),
       method: 'POST',
       redirect: 'manual',
@@ -199,10 +204,12 @@ describe('/api/chat/slack/oauth/callback', () => {
     const workspaces = await db
       .selectFrom('workspace')
       .select(['name', 'provider', 'provider_id'])
-      .where('provider_id', '=', 'T000000001')
+      .where('provider_id', '=', Constants.slack.teamId)
       .execute()
 
     expect(response.status).toBe(302)
-    expect(workspaces).toEqual([{ name: 'Emulate', provider: 'slack', provider_id: 'T000000001' }])
+    expect(workspaces).toEqual([
+      { name: 'Emulate', provider: 'slack', provider_id: Constants.slack.teamId },
+    ])
   })
 })

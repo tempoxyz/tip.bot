@@ -56,6 +56,8 @@ jobs:
 
       - name: Build
         run: pnpm build
+        env:
+          SLACK_APP_ID: ci-placeholder
 
   e2e:
     name: E2E

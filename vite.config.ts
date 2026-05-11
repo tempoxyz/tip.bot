@@ -46,6 +46,7 @@ export default defineConfig({
           __ORIGIN__: process.env.PLAYWRIGHT
             ? `(typeof window !== 'undefined' ? window.location.origin : 'https://${host}')`
             : JSON.stringify(`https://${host}`),
+          __SLACK_APP_ID__: JSON.stringify(process.env.SLACK_APP_ID ?? ''),
         }
       })()
     : {},

@@ -45,30 +45,9 @@ function createManifest() {
       slash_commands: [
         {
           command: '/tip',
-          description: 'Tip teammates',
+          description: 'Tip teammates and manage Tipbot',
           should_escape: true,
-          usage_hint: '@account',
-          url: `${baseUrl}/api/chat/slack`,
-        },
-        {
-          command: '/tip-connect',
-          description: 'Connect your wallet',
-          should_escape: true,
-          usage_hint: '',
-          url: `${baseUrl}/api/chat/slack`,
-        },
-        {
-          command: '/tip-config',
-          description: 'Configure Tipbot',
-          should_escape: true,
-          usage_hint: 'amount 0.001',
-          url: `${baseUrl}/api/chat/slack`,
-        },
-        {
-          command: '/tip-help',
-          description: 'Show Tipbot help',
-          should_escape: true,
-          usage_hint: '',
+          usage_hint: '@account, connect, config, disconnect, help',
           url: `${baseUrl}/api/chat/slack`,
         },
       ],
@@ -92,10 +71,7 @@ function createManifest() {
 }
 
 function appIdFromEnv() {
-  if (process.env.SLACK_APP_ID) return process.env.SLACK_APP_ID
-  if (appEnv === 'local') return process.env.SLACK_LOCAL_APP_ID
-  if (appEnv === 'production') return process.env.SLACK_PRODUCTION_APP_ID
-  return undefined
+  return process.env.SLACK_APP_ID
 }
 
 function printCreateResult(result: Record<string, unknown>) {
@@ -109,7 +85,7 @@ function printCreateResult(result: Record<string, unknown>) {
   console.log(`SLACK_CLIENT_SECRET=${credentials.client_secret}`)
   console.log(`SLACK_SIGNING_SECRET=${credentials.signing_secret}`)
   console.log(`HOST=${host}`)
-  console.log(`SLACK_${appEnv.toUpperCase()}_APP_ID=${String(result.app_id)}`)
+  console.log(`SLACK_APP_ID=${String(result.app_id)}`)
 }
 
 async function slackApi(method: string, body: Record<string, unknown>) {
@@ -165,8 +141,6 @@ Environment:
   SLACK_APP_NAME         Optional manifest app name override
   SLACK_BOT_DISPLAY_NAME Optional bot mention display name override
   SLACK_APP_ID           Optional app ID for updates
-  SLACK_LOCAL_APP_ID     Optional local app ID for updates
-  SLACK_PRODUCTION_APP_ID Optional production app ID for updates
 `)
   process.exit(1)
 }

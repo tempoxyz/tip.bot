@@ -1,16 +1,12 @@
 import * as DB from '#db/client.ts'
+import type { DB as DB_gen } from '#db/types.gen.ts'
+import * as Nanoid from '#/lib/nanoid.ts'
+import * as Tip from '#/lib/tip.ts'
 import { createCloudflareState } from '#/vendor/chatStateCloudflareDO.ts'
 import { createSlackAdapter } from '@chat-adapter/slack'
 import { env } from 'cloudflare:workers'
 import { Chat, type SlashCommandEvent } from 'chat'
 import { z } from 'zod'
-import {
-  formatAmount,
-  formatTxLink,
-  handleTipRequest,
-  parseAmount,
-  type TipResult,
-} from '#/lib/tips'
 
 export const slack = createSlackAdapter({
   apiUrl: `${env.SLACK_API_URL}/`,
@@ -32,15 +28,30 @@ export const bot = new Chat({
   userName: 'tipbot',
 })
 
-const commands = {
-  async config(event, ctx) {
-    const raw = z.parse(slackSlashCommandRaw, event.raw)
+bot.onSlashCommand('/tip', async (event) => {
+  const context = {
+    db: DB.create(env.DB),
+    provider: getProvider(event),
+    text: event.text.trim(),
+  } satisfies HandlerContext
 
+  const match = context.text.match(subcommandPattern)
+  if (match) {
+    const name = z.parse(z.enum(subcommandNames), match[1])
+    await handlers[name](event, { ...context, text: match[2]?.trim() ?? '' })
+    return
+  }
+
+  await handlers.default(event, context)
+})
+
+const handlers = {
+  async config(event, ctx) {
     const workspace = await ctx.db
       .selectFrom('workspace')
       .selectAll()
-      .where('provider', '=', 'slack')
-      .where('provider_id', '=', raw.team_id)
+      .where('provider', '=', ctx.provider.type)
+      .where('provider_id', '=', ctx.provider.id)
       .executeTakeFirst()
     if (!workspace) {
       await event.channel.postEphemeral(
@@ -51,19 +62,21 @@ const commands = {
       return
     }
 
-    const parts = event.text.trim().split(/\s+/)
+    const parts = ctx.text.trim().split(/\s+/)
     const key = parts[0]
     const value = parts[1]
     if (!key || !value) {
       await event.channel.postEphemeral(
         event.user,
-        `Current config: amount ${formatAmount(workspace.default_amount)}`,
+        `Current config: amount ${Tip.formatAmount(workspace.default_amount)}`,
         { fallbackToDM: false },
       )
       return
     }
 
-    const installation = await slack.getInstallation(raw.team_id)
+    if (ctx.provider.type !== 'slack') throw new Error('Provider is not implemented yet.')
+
+    const installation = await slack.getInstallation(ctx.provider.id)
     if (!installation) throw new Error('Slack app is not installed for this workspace.')
 
     const body = new URLSearchParams()
@@ -102,7 +115,7 @@ const commands = {
       return
     }
 
-    const amount = parseAmount(value)
+    const amount = Tip.parseAmount(value)
     if (amount === null) {
       await event.channel.postEphemeral(
         event.user,
@@ -131,12 +144,11 @@ const commands = {
     )
   },
   async disconnect(event, ctx) {
-    const raw = z.parse(slackSlashCommandRaw, event.raw)
     const workspace = await ctx.db
       .selectFrom('workspace')
       .selectAll()
-      .where('provider', '=', 'slack')
-      .where('provider_id', '=', raw.team_id)
+      .where('provider', '=', ctx.provider.type)
+      .where('provider_id', '=', ctx.provider.id)
       .executeTakeFirst()
     if (!workspace) {
       await event.channel.postEphemeral(
@@ -170,15 +182,13 @@ const commands = {
   async help(event, _ctx) {
     await event.channel.postEphemeral(
       event.user,
-      'I’m Tipbot: sometime tipper, sometime messenger, always bot.\nMock tips are enabled while payment rails are paused. Try `/tip @account for coffee`.',
+      'I’m Tipbot: sometime tipper, sometime messenger, always bot.\nMock tips are enabled while payment rails are paused. Try `/tip @account for coffee`. Subcommands: `/tip connect`, `/tip disconnect`, `/tip config`, `/tip help`.',
       { fallbackToDM: false },
     )
   },
-  async tip(event, _ctx) {
-    const raw = z.parse(slackSlashCommandRaw, event.raw)
-
+  async default(event, ctx) {
     const parsed = (() => {
-      const text = event.text.trim()
+      const text = ctx.text.trim()
       const mention = text.match(/<@([A-Z0-9_]+)(?:\|[^>]+)?>/)
       if (!mention) return null
       const afterMention = text.slice((mention.index ?? 0) + mention[0].length).trim()
@@ -188,7 +198,9 @@ const commands = {
       }
     })()
     if (!parsed) {
-      const installation = await slack.getInstallation(raw.team_id)
+      if (ctx.provider.type !== 'slack') throw new Error('Provider is not implemented yet.')
+
+      const installation = await slack.getInstallation(ctx.provider.id)
       if (!installation) throw new Error('Slack app is not installed for this workspace.')
 
       const body = new URLSearchParams()
@@ -215,11 +227,11 @@ const commands = {
 
     const sentMessage = await event.channel.post('Sending tip.')
 
-    const result = await handleTipRequest(env, {
-      idempotencyKey: `command:${raw.team_id}:${event.triggerId ?? crypto.randomUUID()}`,
+    const result = await Tip.handleTipRequest(env, {
+      idempotencyKey: `command:${ctx.provider.id}:${event.triggerId ?? Nanoid.generate()}`,
       memo: parsed.memo,
-      provider: 'slack',
-      providerId: raw.team_id,
+      provider: ctx.provider.type,
+      providerId: ctx.provider.id,
       recipientProviderUserId: parsed.recipientProviderUserId,
       senderProviderUserId: event.user.userId,
     }).catch(
@@ -228,11 +240,11 @@ const commands = {
           code: 'failed',
           message: error instanceof Error ? error.message : 'Command failed.',
           ok: false,
-        }) satisfies TipResult,
+        }) satisfies Tip.TipResult,
     )
     const textResult = (() => {
       if (result.ok)
-        return `${result.status === 'already_sent' ? 'Already sent' : 'Mock tip sent'}: ${event.channel.mentionUser(result.senderProviderUserId)} → ${event.channel.mentionUser(result.recipientProviderUserId)} ${result.amount} mock stablecoins${result.memo ? ` for ${result.memo}` : ''}. ${formatTxLink(env, result.transactionHash)}`
+        return `${result.status === 'already_sent' ? 'Already sent' : 'Mock tip sent'}: ${event.channel.mentionUser(result.senderProviderUserId)} → ${event.channel.mentionUser(result.recipientProviderUserId)} ${result.amount} mock stablecoins${result.memo ? ` for ${result.memo}` : ''}. ${Tip.formatTxLink(env, result.transactionHash)}`
 
       if (result.code === 'self_tip') return 'You cannot tip yourself.'
       return `Could not mock tip: ${result.message ?? 'Tip submission failed.'}`
@@ -244,24 +256,34 @@ const commands = {
       await event.channel.postEphemeral(event.user, textResult, { fallbackToDM: false })
     }
   },
-} satisfies Record<string, (event: SlashCommandEvent, ctx: { db: DB.Type }) => Promise<void>>
+} as const satisfies Record<
+  (typeof subcommandNames)[number] | 'default',
+  (event: SlashCommandEvent, ctx: HandlerContext) => Promise<void>
+>
 
-bot.onSlashCommand('/tip', async (event) => {
-  await commands.tip(event, { db: DB.create(env.DB) })
-})
-bot.onSlashCommand('/tip-connect', async (event) => {
-  await commands.connect(event, { db: DB.create(env.DB) })
-})
-bot.onSlashCommand('/tip-disconnect', async (event) => {
-  await commands.disconnect(event, { db: DB.create(env.DB) })
-})
-bot.onSlashCommand('/tip-config', async (event) => {
-  await commands.config(event, { db: DB.create(env.DB) })
-})
-bot.onSlashCommand('/tip-help', async (event) => {
-  await commands.help(event, { db: DB.create(env.DB) })
-})
+const subcommandNames = ['config', 'connect', 'disconnect', 'help'] as const
+const subcommandPattern = new RegExp(`^(${subcommandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
 
-const slackSlashCommandRaw = z.object({
-  team_id: z.string().min(1),
-})
+type HandlerContext = {
+  db: DB.Type
+  provider: ReturnType<typeof getProvider>
+  text: string
+}
+
+function getProvider(event: SlashCommandEvent): {
+  id: string
+  type: DB_gen.Selectable.workspace['provider']
+} {
+  if (event.adapter === slack) {
+    const slackSlashCommandRaw = z.object({
+      team_id: z.string().min(1),
+    })
+    const raw = z.parse(slackSlashCommandRaw, event.raw)
+    return {
+      id: raw.team_id,
+      type: 'slack',
+    }
+  }
+
+  throw new Error('Provider is not implemented yet.')
+}

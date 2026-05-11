@@ -5,6 +5,10 @@ test('home page opens Slack install flow', async ({ page }) => {
 
   await expect(page).toHaveTitle(/Tipbot/)
   await expect(page.getByRole('heading', { name: 'Tipbot' })).toBeVisible()
+  await expect(page.locator('meta[name="slack-app-id"]')).toHaveAttribute(
+    'content',
+    process.env.PLAYWRIGHT_SLACK_APP_ID ?? '',
+  )
 
   const addToSlack = page.getByRole('link', { name: 'Add to Slack' })
   await expect(addToSlack).toHaveAttribute('href', '/api/chat/slack/install')

@@ -19,7 +19,17 @@ pnpm dev              # Start https://tip.localhost
 After changing Slack App, run the following to update:
 
 ```sh
-pnpm slack:app:update -- production https://tip.bot A0B29MACHQV
+SLACK_APP_ID=<app-id> pnpm slack:app update production tip.bot
 ```
+
+Set `SLACK_APP_ID` as a GitHub production environment variable so the home page can render Slack's `slack-app-id` meta tag.
+
+To allow any Slack workspace to install the app, enable unlisted distribution manually:
+
+1. Go to https://api.slack.com/apps
+2. Select the production app
+3. Go to **Manage Distribution**
+4. Under **Share Your App with Other Workspaces**, complete the checklist
+5. Click **Activate Public Distribution**
 
 All other changes deployed via CI.

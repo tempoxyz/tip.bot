@@ -5,6 +5,10 @@ export const Route = createFileRoute('/')({
   head: () => ({
     meta: [
       {
+        content: __SLACK_APP_ID__,
+        name: 'slack-app-id',
+      },
+      {
         title: 'Tipbot - Chat-native stablecoin micropayments',
       },
     ],

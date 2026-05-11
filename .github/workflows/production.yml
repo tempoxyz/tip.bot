@@ -42,6 +42,7 @@ jobs:
         run: pnpm build
         env:
           CLOUDFLARE_ENV: production
+          SLACK_APP_ID: ${{ vars.SLACK_APP_ID }}
 
       - name: Deploy to Production
         uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # v3.14.1
@@ -59,6 +60,7 @@ jobs:
         env:
           FEE_PAYER_PRIVATE_KEY: ${{ secrets.FEE_PAYER_PRIVATE_KEY }}
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          SLACK_APP_ID: ${{ vars.SLACK_APP_ID }}
           SLACK_CLIENT_ID: ${{ secrets.SLACK_CLIENT_ID }}
           SLACK_CLIENT_SECRET: ${{ secrets.SLACK_CLIENT_SECRET }}
           SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
