@@ -33,7 +33,7 @@ export default defineConfig({
   },
   define: !isCheck
     ? await (async () => {
-        const { getWranglerVar } = await import('./config/wrangler')
+        const { getWranglerVar } = await import('./config/wrangler.ts')
         const host = getWranglerVar('HOST')
         const environment = (() => {
           if (host === 'tip.bot') return 'production'
@@ -107,10 +107,8 @@ export default defineConfig({
   server: {
     allowedHosts: !isCheck
       ? (() => {
-          const url = process.env.PORTLESS_TAILSCALE_URL
-          if (!url) return []
           try {
-            return [new URL(url).hostname]
+            return [new URL(process.env.PORTLESS_TAILSCALE_URL ?? '').hostname]
           } catch {
             return []
           }
@@ -119,25 +117,18 @@ export default defineConfig({
     fs: { allow: [process.cwd()] },
   },
   test: {
+    onConsoleLog(log) {
+      if (log.includes('[chat-sdk')) return false
+    },
+    passWithNoTests: true,
     projects: [
       {
         plugins: lazyPlugins(async () => {
           if (!isTest) return []
-
-          // @cloudflare/vitest-pool-workers currently forwards this harmless workerd shutdown log.
-          const writeStdout = process.stdout.write.bind(process.stdout)
-          process.stdout.write = (chunk, ...args) => {
-            if (String(chunk).includes('disconnected: WebSocket peer disconnected')) return true
-            return writeStdout(chunk, ...(args as [BufferEncoding?, (() => void)?]))
-          }
-          const writeStderr = process.stderr.write.bind(process.stderr)
-          process.stderr.write = (chunk, ...args) => {
-            if (String(chunk).includes('disconnected: WebSocket peer disconnected')) return true
-            return writeStderr(chunk, ...(args as [BufferEncoding?, (() => void)?]))
-          }
-
           const { cloudflareTest } = await import('@cloudflare/vitest-pool-workers')
+          const { setupVitestOutputFilter } = await import('./config/vitest.ts')
           const envMod = await import('./test/env.ts')
+          setupVitestOutputFilter()
           return [
             cloudflareTest(async (config) => {
               const env = envMod.Env.parse(config.inject('env'))

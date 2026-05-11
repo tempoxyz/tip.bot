@@ -30,6 +30,7 @@
   "include": [
     "../src/worker-configuration.d.ts",
     "../db/**/*.ts",
+    "../config/vitest.ts",
     "../config/wrangler.ts",
     "../scripts/**/*.ts",
     "../test/**/*.ts",

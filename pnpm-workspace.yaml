@@ -2,6 +2,7 @@ allowBuilds:
   better-sqlite3@12.9.0: true
   esbuild@0.27.3: true
   lightningcss@1.32.0: true
+  msw: true
   sharp@0.34.5: true
   workerd@1.20260426.1: true
   workerd@1.20260504.1: true
@@ -14,7 +15,6 @@ catalog:
   vitest: npm:@voidzero-dev/vite-plus-test@0.1.20
 dangerouslyAllowAllBuilds: false
 enableGlobalVirtualStore: true
-engineStrict: true
 linkWorkspacePackages: false
 minimumReleaseAge: 1440
 minimumReleaseAgeStrict: true
@@ -41,9 +41,5 @@ peerDependencyRules:
   allowedVersions:
     vite: '*'
     vitest: '*'
-pmOnFail: error
-resolutionMode: time-based
-saveExact: true
 strictDepBuilds: true
 strictPeerDependencies: true
-verifyDepsBeforeRun: error
