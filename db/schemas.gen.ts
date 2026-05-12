@@ -32,6 +32,7 @@ export const account_link_token = z.object({
   expires_at: z.string(),
   id: z.string(),
   member_id: z.string(),
+  provider_channel_id: z.string().nullable(),
   token_hash: z.string(),
   used_at: z.string().nullable(),
 })

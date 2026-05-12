@@ -71,6 +71,60 @@ function Component() {
     setError(null)
   }, [loaderData])
 
+  const provider = defaultProviders.find((item) => item.id === search.provider)?.id ?? 'slack'
+  const workspace =
+    search.workspace === slackDefaults.teamId ? search.workspace : slackDefaults.teamId
+  const channelItems = defaultChannels
+  const channel =
+    channelItems.find((item) => item.id === search.channel)?.id ??
+    channelItems[0]?.id ??
+    slackDefaults.channelId
+  const availableActors = data?.actors ?? defaultActors
+  const actor = availableActors.some((item) => item.id === search.actor)
+    ? search.actor
+    : (availableActors[0]?.id ?? slackDefaults.adminUserId)
+  const actorItems = availableActors
+
+  React.useEffect(() => {
+    const next: Partial<EmulateSearch> = {}
+    if (actor !== search.actor) next.actor = actor
+    if (channel !== search.channel) next.channel = channel
+    if (provider !== search.provider) next.provider = provider
+    if (workspace !== search.workspace) next.workspace = workspace
+    if (Object.keys(next).length > 0) updateSearch(next)
+  }, [
+    actor,
+    channel,
+    provider,
+    search.actor,
+    search.channel,
+    search.provider,
+    search.workspace,
+    workspace,
+  ])
+
+  React.useEffect(() => {
+    async function refresh() {
+      if (document.visibilityState !== 'visible') return
+      setData(await getEmulateWorkspaceState({ data: { actor, channel, provider, workspace } }))
+    }
+
+    function onFocus() {
+      void refresh().catch(() => {})
+    }
+
+    function onVisibilityChange() {
+      if (document.visibilityState === 'visible') void refresh().catch(() => {})
+    }
+
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [actor, channel, provider, workspace])
+
   if (__ENV__ !== 'development')
     return (
       <main className="min-h-screen bg-background-2 px-6 py-12 text-gray10">
@@ -86,7 +140,9 @@ function Component() {
     setStatus('installing')
     setError(null)
     try {
-      setData(await installEmulateWorkspace({ data: search }))
+      setData(
+        await installEmulateWorkspace({ data: { ...search, actor, channel, provider, workspace } }),
+      )
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Could not install emulator workspace.')
     } finally {
@@ -101,7 +157,7 @@ function Component() {
     setStatus('sending')
     setError(null)
     try {
-      const requestSearch = { ...search, actor }
+      const requestSearch = { ...search, actor, channel, provider, workspace }
       setData(
         await (isTipCommand(text)
           ? sendEmulateCommand({
@@ -123,17 +179,9 @@ function Component() {
     })
   }
 
-  const channelItems = includeCurrent(defaultChannels, search.channel)
-  const availableActors = data?.actors ?? defaultActors
-  const actor = availableActors.some((item) => item.id === search.actor)
-    ? search.actor
-    : (availableActors.find((item) => item.label === getOptionLabel(defaultActors, search.actor))
-        ?.id ?? search.actor)
-  const actorItems = includeCurrent(availableActors, actor)
-  const channelName = getOptionLabel(channelItems, search.channel)
+  const channelName = getOptionLabel(channelItems, channel)
   const channelDescription =
-    defaultChannels.find((channel) => channel.id === search.channel)?.description ??
-    `${channelName} channel`
+    defaultChannels.find((item) => item.id === channel)?.description ?? `${channelName} channel`
   const showProviderSelect = defaultProviders.length > 1
   const shortcutCommands = getShortcutCommands(
     actor,
@@ -179,7 +227,7 @@ function Component() {
                 label="Provider"
                 onValueChange={(value) => updateSearch({ provider: value as 'slack' })}
                 options={defaultProviders}
-                value={search.provider}
+                value={provider}
               />
             </div>
           ) : null}
@@ -192,7 +240,7 @@ function Component() {
               label="Channels"
               onValueChange={(value) => updateSearch({ channel: value })}
               options={channelItems}
-              value={search.channel}
+              value={channel}
             />
           </div>
         </aside>
@@ -208,7 +256,7 @@ function Component() {
                   <MobileChannelSelect
                     onValueChange={(value) => updateSearch({ channel: value })}
                     options={channelItems}
-                    value={search.channel}
+                    value={channel}
                   />
                   <p className="text-sm font-medium text-gray9">
                     {channelDescription} - {data?.app.members.length ?? actorItems.length} members
@@ -888,11 +936,6 @@ function getDiagnostics() {
   }
 }
 
-function includeCurrent(options: readonly { id: string; label: string }[], id: string) {
-  if (options.some((option) => option.id === id)) return options
-  return [{ id, label: id }, ...options]
-}
-
 function getOptionLabel(options: readonly { id: string; label: string }[], id: string) {
   return options.find((option) => option.id === id)?.label ?? id
 }
@@ -915,12 +958,18 @@ function isTipCommand(text: string) {
 }
 
 function withSearchDefaults(search: EmulateSearch): Required<EmulateSearch> {
+  const channel =
+    defaultChannels.find((item) => item.id === search.channel)?.id ??
+    defaultChannels[0]?.id ??
+    slackDefaults.channelId
+  const provider = defaultProviders.find((item) => item.id === search.provider)?.id ?? 'slack'
+
   return {
     actor: search.actor ?? slackDefaults.adminUserId,
-    channel: search.channel ?? slackDefaults.channelId,
-    provider: search.provider ?? 'slack',
+    channel,
+    provider,
     text: search.text ?? '',
-    workspace: search.workspace ?? slackDefaults.teamId,
+    workspace: search.workspace === slackDefaults.teamId ? search.workspace : slackDefaults.teamId,
   }
 }
 

@@ -41,6 +41,7 @@ type account_link_token = {
   expires_at: string
   id: string
   member_id: string
+  provider_channel_id: string | null
   token_hash: string
   used_at: string | null
 }

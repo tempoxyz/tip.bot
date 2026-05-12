@@ -1,16 +1,18 @@
+import { WebClient } from '@slack/web-api'
 import { env } from 'cloudflare:workers'
 import { testClient } from 'hono/testing'
 import { Address, Secp256k1 } from 'ox'
 import { Account } from 'viem/tempo'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { api } from '#/api.ts'
-import * as DB from '#db/client.ts'
-import * as Schema from '#db/schemas.gen.ts'
+import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as AccessKey from '#/lib/accessKey.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import { createSlackHeaders } from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
+import * as DB from '#db/client.ts'
+import * as Schema from '#db/schemas.gen.ts'
 import * as Constants from '#test/constants.ts'
 import * as Factory from '#test/factory.ts'
 
@@ -25,6 +27,7 @@ const executionCtx = {
   }),
 }
 const client = testClient(api, env, executionCtx)
+const slack = new WebClient(Constants.slack.botToken, { slackApiUrl: env.SLACK_API_URL })
 
 beforeEach(async () => {
   waitUntil = []
@@ -173,6 +176,35 @@ describe('/api/account/link/:token', () => {
     expect(link.account_id).toBe(account.id)
     expect(link.access_key_authorization).toEqual(JSON.stringify(keyAuthorization))
     expect(link.used_at).toEqual(expect.any(String))
+  })
+
+  test('notifies Slack member when wallet connection completes', async () => {
+    await Chat.getChat().initialize()
+    await Chat.getSlack().setInstallation(Constants.slack.teamId, {
+      botToken: Constants.slack.botToken,
+      botUserId: Constants.slack.botUserId,
+      teamName: Constants.slack.teamName,
+    })
+    const channel = await slack.conversations.create({ name: `connect${Date.now()}` })
+    const channelId = channel.channel?.id
+    if (!channelId) throw new Error('Expected Slack test channel.')
+    const pending = await createPendingAccountLink({
+      providerChannelId: channelId,
+      providerId: Constants.slack.teamId,
+      providerUserId: Constants.slack.adminUserId,
+    })
+    const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    const keyAuthorization = await signKeyAuthorization(root, pending)
+
+    const response = await client.api.account.link[':token'].$post({
+      json: { address: root.address, keyAuthorization },
+      param: { token: pending.token },
+    })
+    await Promise.all(waitUntil)
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(channelId, 'Connected to Tipbot')
+    await expectSlackMessage(channelId, 'Use `/tip disconnect` to disconnect.')
   })
 
   test('rejects token reuse', async () => {
@@ -396,7 +428,12 @@ describe('/api/chat/slack/oauth/callback', () => {
 })
 
 async function createPendingAccountLink(
-  options: { providerUserId?: string; workspaceId?: string } = {},
+  options: {
+    providerChannelId?: string
+    providerId?: string
+    providerUserId?: string
+    workspaceId?: string
+  } = {},
 ) {
   const workspace = options.workspaceId
     ? await db
@@ -404,7 +441,7 @@ async function createPendingAccountLink(
         .selectAll()
         .where('id', '=', options.workspaceId)
         .executeTakeFirstOrThrow()
-    : await factory.workspace.insert({ provider_id: `T${Nanoid.generate()}` })
+    : await factory.workspace.insert({ provider_id: options.providerId ?? `T${Nanoid.generate()}` })
   const member = await factory.member.insert({
     provider_user_id: options.providerUserId ?? `U${Nanoid.generate()}`,
     workspace_id: workspace.id,
@@ -419,9 +456,17 @@ async function createPendingAccountLink(
     access_key_public_key: accessKey.publicKey,
     expires_at: new Date(now + 10 * 60 * 1000).toISOString(), // 10 minutes
     member_id: member.id,
+    provider_channel_id: options.providerChannelId ?? null,
     token_hash: await AccountLink.hashToken(env, token),
   })
   return { accessKey, link, member, token, workspace }
+}
+
+async function expectSlackMessage(channelId: string, text: string) {
+  const history = await slack.conversations.history({ channel: channelId })
+
+  expect(history.ok).toBe(true)
+  expect(history.messages?.some((message) => message.text?.includes(text))).toBe(true)
 }
 
 async function signKeyAuthorization(

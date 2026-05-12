@@ -107,9 +107,12 @@ export const api = new Hono<{
           'account_link_token.expires_at',
           'account_link_token.id',
           'account_link_token.member_id',
+          'account_link_token.provider_channel_id',
           'account_link_token.used_at',
+          'member.provider_user_id as member_provider_user_id',
           'workspace.default_token_address',
           'workspace.id as workspace_id',
+          'workspace.provider_id',
         ])
         .where(
           'account_link_token.token_hash',
@@ -222,6 +225,34 @@ export const api = new Hono<{
           })
           .where('id', '=', link.id)
           .execute()
+
+        if (link.provider_channel_id)
+          c.executionCtx.waitUntil(
+            (async () => {
+              const installation = await Chat.getSlack().getInstallation(link.provider_id)
+              if (!installation) return
+
+              const body = new URLSearchParams()
+              body.set('channel', link.provider_channel_id!.replace(/^slack:/, ''))
+              body.set('text', 'Connected to Tipbot\nUse `/tip disconnect` to disconnect.')
+              body.set('user', link.member_provider_user_id)
+              const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
+                fetch(`${c.env.SLACK_API_URL}/chat.postEphemeral`, {
+                  body,
+                  headers: { authorization: `Bearer ${installation.botToken}` },
+                  method: 'POST',
+                }),
+              )
+              const json = z.parse(
+                z.object({
+                  error: z.string().optional(),
+                  ok: z.boolean().optional(),
+                }),
+                await response.json(),
+              )
+              if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postEphemeral failed.')
+            })().catch(() => {}),
+          )
 
         return c.json({ ok: true as const })
       } catch (error) {

@@ -224,6 +224,7 @@ const handlers = {
         expires_at: linkExpiresAt,
         id: Nanoid.generate(),
         member_id: member.id,
+        provider_channel_id: event.channel.id,
         token_hash: await AccountLink.hashToken(env, token),
         used_at: null,
       })
