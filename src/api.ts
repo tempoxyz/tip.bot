@@ -77,7 +77,7 @@ export const api = new Hono<{
       accessKeyExpiry: link.access_key_expires_at,
       accessKeyLimit: '10',
       accessKeyLimitPeriodSeconds: 24 * 60 * 60, // 1 day
-      accessKeyPublicKey: link.access_key_public_key,
+      accessKeyPublicKey: link.access_key_public_key as `0x${string}`,
       expiresAt: link.expires_at,
       ok: true as const,
       tokenAddress: Address.checksum(link.default_token_address ?? Tempo.pathUsdAddress),

@@ -10,7 +10,7 @@ test('visitor opens an expired connection link', async ({ app, page }) => {
 
   await expect(page.getByText('This connection link is invalid or expired.')).toBeVisible()
   await expect(page.getByText('Run `/tip connect` in Slack to get a new link.')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Connect to Tipbot' })).toBeHidden()
+  await expect(page.getByRole('button', { name: 'Connect' })).toBeHidden()
 })
 
 test('slack member opens valid connection link', async ({ app, factory, page }) => {
@@ -27,7 +27,8 @@ test('slack member opens valid connection link', async ({ app, factory, page }) 
 
   await page.goto(app.url({ params: { token }, to: '/connect/$token' }))
 
-  await expect(page.getByRole('button', { name: 'Connect to Tipbot' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Connect' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Cancel' })).toBeVisible()
   await expect(page.getByText('Authorize Tipbot to connect your Tempo Wallet')).toBeVisible()
 })
 
@@ -41,8 +42,8 @@ test('slack member connects wallet from slack', async ({ app, page, request }) =
   await page.waitForLoadState('networkidle')
 
   const walletConnectTimeoutMs = 15_000 // 15 seconds
-  await expect(page.getByRole('button', { name: 'Connect to Tipbot' })).toBeVisible()
-  await page.getByRole('button', { name: 'Connect to Tipbot' }).click()
+  await expect(page.getByRole('button', { name: 'Connect' })).toBeVisible()
+  await page.getByRole('button', { name: 'Connect' }).click()
   await expect(page.getByRole('heading', { name: 'Connected to Tipbot' })).toBeVisible({
     timeout: walletConnectTimeoutMs,
   })

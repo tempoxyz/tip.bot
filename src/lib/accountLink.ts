@@ -24,7 +24,7 @@ export async function signKeyAuthorization(
   const tokenAddress = Address.checksum(input.tokenAddress)
   const policy = (() => {
     return {
-      chainId: BigInt(Tempo.tempoChain.id),
+      chainId: BigInt(Tempo.chain.id),
       expiry: Math.floor(new Date(input.expiresAt).getTime() / 1000),
       limits: [
         {
@@ -68,7 +68,7 @@ export async function verifyKeyAuthorization(input: {
   const authorization = KeyAuthorization.fromRpc(input.keyAuthorization as never)
   const policy = (() => {
     return {
-      chainId: BigInt(Tempo.tempoChain.id),
+      chainId: BigInt(Tempo.chain.id),
       expiry: Math.floor(new Date(input.expiresAt).getTime() / 1000),
       limits: [
         {
@@ -131,7 +131,7 @@ export async function verifyKeyAuthorization(input: {
     scopes: authorization.scopes,
     type: authorization.type,
   })
-  const valid = await verifyHash(createClient({ chain: Tempo.tempoChain, transport: http() }), {
+  const valid = await verifyHash(createClient({ chain: Tempo.chain, transport: http() }), {
     address: rootAddress,
     hash: KeyAuthorization.getSignPayload(unsigned),
     signature: SignatureEnvelope.serialize(authorization.signature, {
