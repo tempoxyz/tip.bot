@@ -6,6 +6,8 @@ export const access_key = z.object({
   account_id: z.string(),
   address: z.string(),
   authorization: z.string(),
+  authorization_used_at: z.string().nullable(),
+  chain_id: z.number(),
   ciphertext: z.string(),
   created_at: z.string(),
   expires_at: z.string(),
@@ -50,6 +52,7 @@ export const member = z.object({
 
 export const tip = z.object({
   amount: z.number(),
+  chain_id: z.number(),
   confirmed_at: z.string().nullable(),
   created_at: z.string(),
   failed_at: z.string().nullable(),
@@ -61,6 +64,7 @@ export const tip = z.object({
   recipient_member_id: z.string(),
   sender_id: z.string(),
   sender_member_id: z.string(),
+  sponsorship_memo: z.string().nullable(),
   token_address: z.string(),
   transaction_hash: z.string().nullable(),
   updated_at: z.string(),
@@ -68,6 +72,7 @@ export const tip = z.object({
 })
 
 export const workspace = z.object({
+  chain_id: z.number(),
   created_at: z.string(),
   default_amount: z.number(),
   default_token_address: z.string().nullable(),

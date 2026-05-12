@@ -1,6 +1,7 @@
 {
   "extends": "./tsconfig.app.json",
   "include": [
+    "../src/env.d.ts",
     "../src/vite-env.d.ts",
     "../src/**/*.workers.test.ts",
     "../test/**/*.workers.test.ts",

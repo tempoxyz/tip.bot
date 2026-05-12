@@ -15,6 +15,8 @@ type access_key = {
   account_id: string
   address: string
   authorization: string
+  authorization_used_at: string | null
+  chain_id: k.Generated<number>
   ciphertext: string
   created_at: k.Generated<string>
   expires_at: string
@@ -59,6 +61,7 @@ type member = {
 
 type tip = {
   amount: number
+  chain_id: k.Generated<number>
   confirmed_at: string | null
   created_at: k.Generated<string>
   failed_at: string | null
@@ -70,6 +73,7 @@ type tip = {
   recipient_member_id: string
   sender_id: string
   sender_member_id: string
+  sponsorship_memo: string | null
   token_address: string
   transaction_hash: string | null
   updated_at: k.Generated<string>
@@ -77,6 +81,7 @@ type tip = {
 }
 
 type workspace = {
+  chain_id: k.Generated<number>
   created_at: k.Generated<string>
   default_amount: k.Generated<number>
   default_token_address: string | null

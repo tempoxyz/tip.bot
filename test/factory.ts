@@ -87,6 +87,8 @@ const defaultConfig: Partial<{
     return {
       address: generateAddress(),
       authorization: Nanoid.generate(),
+      authorization_used_at: null,
+      chain_id: 4217,
       ciphertext: Nanoid.generate(),
       created_at: now,
       expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(), // 15 minutes
@@ -124,12 +126,14 @@ const defaultConfig: Partial<{
     const now = new Date().toISOString()
     return {
       amount: 1000,
+      chain_id: 4217,
       confirmed_at: null,
       created_at: now,
       failed_at: null,
       failure_reason: null,
       idempotency_key: Nanoid.generate(),
       memo: null,
+      sponsorship_memo: null,
       token_address: Tip.mockTokenAddress,
       transaction_hash: null,
       updated_at: now,
@@ -138,6 +142,7 @@ const defaultConfig: Partial<{
   workspace() {
     const now = new Date().toISOString()
     return {
+      chain_id: 4217,
       created_at: now,
       default_amount: 1000,
       default_token_address: null,
@@ -174,7 +179,7 @@ type RequiredForeignKeys<type> = {
   [key in keyof type as key extends `${string}_id`
     ? null extends type[key]
       ? never
-      : key extends 'id' | 'credential_id'
+      : key extends 'id' | 'chain_id' | 'credential_id'
         ? never
         : key
     : never]-?: type[key]

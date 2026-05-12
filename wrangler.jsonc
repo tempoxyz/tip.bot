@@ -36,7 +36,14 @@
     },
   ],
   "secrets": {
-    "required": ["SECRET_KEY", "SLACK_CLIENT_ID", "SLACK_CLIENT_SECRET", "SLACK_SIGNING_SECRET"],
+    "required": [
+      "FEE_PAYER_PRIVATE_KEY_MAINNET",
+      "FEE_PAYER_PRIVATE_KEY_TESTNET",
+      "SECRET_KEY",
+      "SLACK_CLIENT_ID",
+      "SLACK_CLIENT_SECRET",
+      "SLACK_SIGNING_SECRET",
+    ],
   },
   "vars": {
     "HOST": "tipbot.localhost",
@@ -79,6 +86,8 @@
       ],
       "secrets": {
         "required": [
+          "FEE_PAYER_PRIVATE_KEY_MAINNET",
+          "FEE_PAYER_PRIVATE_KEY_TESTNET",
           "SECRET_KEY",
           "SLACK_CLIENT_ID",
           "SLACK_CLIENT_SECRET",

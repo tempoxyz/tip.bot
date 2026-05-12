@@ -1,6 +1,8 @@
 import { env } from 'cloudflare:workers'
 import { applyD1Migrations, reset } from 'cloudflare:test'
+import { http } from 'msw'
 import { afterEach, beforeAll, beforeEach } from 'vitest'
+import { api } from '#/api.ts'
 import { server } from './workers.server.ts'
 
 const migrations = Object.entries(
@@ -27,6 +29,15 @@ beforeAll(() => {
 })
 
 beforeEach(async () => {
+  server.use(
+    http.all(`https://${env.HOST}/api/relay/:chainId`, async ({ request }) =>
+      api.fetch(request as Request, env, {
+        passThroughOnException() {},
+        props: {},
+        waitUntil() {},
+      }),
+    ),
+  )
   await reset()
   await applyD1Migrations(env.DB, migrations)
 })
