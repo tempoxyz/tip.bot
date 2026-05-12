@@ -22,11 +22,16 @@ export const account = z.object({
 })
 
 export const account_link_token = z.object({
-  account_id: z.string(),
+  access_key_address: z.string(),
+  access_key_authorization: z.string().nullable(),
+  access_key_ciphertext: z.string(),
+  access_key_expires_at: z.string(),
+  access_key_public_key: z.string(),
+  account_id: z.string().nullable(),
   created_at: z.string(),
   expires_at: z.string(),
   id: z.string(),
-  member_id: z.string().nullable(),
+  member_id: z.string(),
   token_hash: z.string(),
   used_at: z.string().nullable(),
 })
@@ -64,6 +69,7 @@ export const tip = z.object({
 export const workspace = z.object({
   created_at: z.string(),
   default_amount: z.number(),
+  default_token_address: z.string().nullable(),
   id: z.string(),
   name: z.string().nullable(),
   provider: z.literal('slack'),

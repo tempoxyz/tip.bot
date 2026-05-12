@@ -5,6 +5,7 @@ import { env } from 'cloudflare:workers'
 import { testClient } from 'hono/testing'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { api } from '#/api.ts'
+import * as Schema from '#db/schemas.gen.ts'
 import * as Constants from '#test/constants.ts'
 import * as Factory from '#test/factory.ts'
 import { createSlackHeaders } from '#test/slack.ts'
@@ -132,6 +133,42 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage('You cannot tip yourself.')
+  })
+
+  test('handles recorded tip without transaction', async () => {
+    const triggerId = 'trigger-recorded-without-transaction'
+    const workspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', Constants.slack.teamId)
+      .executeTakeFirstOrThrow()
+    const senderAccount = await factory.account.insert({})
+    const recipientAccount = await factory.account.insert({})
+    const senderMember = await factory.member.insert({
+      account_id: senderAccount.id,
+      provider_user_id: Constants.slack.adminUserId,
+      workspace_id: workspace.id,
+    })
+    const recipientMember = await factory.member.insert({
+      account_id: recipientAccount.id,
+      provider_user_id: Constants.slack.memberUserId,
+      workspace_id: workspace.id,
+    })
+    await factory.tip.insert({
+      idempotency_key: `command:${Constants.slack.teamId}:${triggerId}`,
+      recipient_id: recipientAccount.id,
+      recipient_member_id: recipientMember.id,
+      sender_id: senderAccount.id,
+      sender_member_id: senderMember.id,
+      transaction_hash: null,
+      workspace_id: workspace.id,
+    })
+
+    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}>`, { triggerId })
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('Could not mock tip: Tip already recorded without a transaction.')
+    await expectSlackMessageNotContaining('Sending tip.')
   })
 })
 
@@ -279,11 +316,109 @@ describe('/tip config', () => {
 })
 
 describe('/tip connect', () => {
-  test('shows connect status', async () => {
+  test('creates one-time account link', async () => {
+    const response = await postSlashCommand('connect')
+    const link = await db
+      .selectFrom('account_link_token')
+      .selectAll('account_link_token')
+      .innerJoin('member', 'member.id', 'account_link_token.member_id')
+      .where('member.provider_user_id', '=', Constants.slack.adminUserId)
+      .executeTakeFirstOrThrow()
+    const member = await db
+      .selectFrom('member')
+      .selectAll()
+      .where('id', '=', link.member_id)
+      .executeTakeFirstOrThrow()
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(`Connect to Tipbot: https://${env.HOST}/connect/`)
+    await expectSlackMessage('This link expires in 10 minutes.')
+    expect(link).toEqual(expect.schemaMatching(Schema.account_link_token))
+    expect(member).toEqual(expect.schemaMatching(Schema.member))
+    expect(link.access_key_address).toEqual(expect.stringMatching(/^0x[0-9a-fA-F]{40}$/))
+    expect(link.access_key_ciphertext).toEqual(expect.stringMatching(/^0x[0-9a-f]+\.0x[0-9a-f]+$/))
+    expect(link.access_key_public_key).toEqual(expect.stringMatching(/^0x[0-9a-fA-F]+$/))
+    expect(member.provider_user_id).toBe(Constants.slack.adminUserId)
+    expect(new Date(link.expires_at).getTime()).toBeGreaterThan(Date.now())
+    expect(new Date(link.access_key_expires_at).getTime()).toBeGreaterThan(Date.now())
+  })
+
+  test('invalidates previous unused links', async () => {
+    await postSlashCommand('connect')
+    await postSlashCommand('connect')
+    const links = await db
+      .selectFrom('account_link_token')
+      .innerJoin('member', 'member.id', 'account_link_token.member_id')
+      .select(['account_link_token.id'])
+      .where('member.provider_user_id', '=', Constants.slack.adminUserId)
+      .execute()
+
+    expect(links).toHaveLength(1)
+  })
+
+  test('handles missing workspace', async () => {
+    await db.deleteFrom('workspace').where('provider_id', '=', Constants.slack.teamId).execute()
+
+    const response = await postSlashCommand('connect')
+    const workspaces = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', Constants.slack.teamId)
+      .execute()
+    const links = await db.selectFrom('account_link_token').selectAll().execute()
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(
+      'Tipbot is not configured for this Slack workspace. Reinstall Tipbot and try again.',
+    )
+    expect(workspaces).toEqual([])
+    expect(links).toEqual([])
+  })
+
+  test('reuses existing unconnected member', async () => {
+    const workspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', Constants.slack.teamId)
+      .executeTakeFirstOrThrow()
+    const member = await factory.member.insert({
+      provider_user_id: Constants.slack.adminUserId,
+      workspace_id: workspace.id,
+    })
+
+    const response = await postSlashCommand('connect')
+    const members = await db
+      .selectFrom('member')
+      .selectAll()
+      .where('provider_user_id', '=', Constants.slack.adminUserId)
+      .execute()
+    const link = await db.selectFrom('account_link_token').selectAll().executeTakeFirstOrThrow()
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(`Connect to Tipbot: https://${env.HOST}/connect/`)
+    expect(members).toHaveLength(1)
+    expect(link.member_id).toBe(member.id)
+  })
+
+  test('handles already connected account without showing address', async () => {
+    const account = await factory.account.insert({})
+    const workspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', Constants.slack.teamId)
+      .executeTakeFirstOrThrow()
+    await factory.member.insert({
+      account_id: account.id,
+      provider_user_id: Constants.slack.adminUserId,
+      workspace_id: workspace.id,
+    })
+
     const response = await postSlashCommand('connect')
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Mock tipping is enabled. No wallet connection is required right now.')
+    await expectSlackMessage('Connected to Tipbot')
+    await expectSlackMessage('Use `/tip disconnect` to disconnect.')
+    await expectSlackMessageNotContaining(account.address)
   })
 })
 
@@ -300,6 +435,7 @@ describe('/tip disconnect', () => {
       provider_user_id: Constants.slack.adminUserId,
       workspace_id: workspace.id,
     })
+    const accessKey = await factory.access_key.insert({ account_id: account.id })
 
     const response = await postSlashCommand('disconnect')
     const updatedMember = await db
@@ -307,10 +443,16 @@ describe('/tip disconnect', () => {
       .selectAll()
       .where('id', '=', member.id)
       .executeTakeFirstOrThrow()
+    const accessKeys = await db
+      .selectFrom('access_key')
+      .selectAll()
+      .where('id', '=', accessKey.id)
+      .execute()
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Disconnected account.')
+    await expectSlackMessage('Disconnected from Tipbot')
     expect(updatedMember.account_id).toBe(null)
+    expect(accessKeys).toEqual([])
   })
 
   test('handles no connected account', async () => {
@@ -346,8 +488,55 @@ describe('/tip help', () => {
     await expectSlackMessage('I’m Tipbot: sometime tipper, sometime messenger, always bot.')
     await expectSlackMessage('Try `/tip <@account> for coffee`.')
     await expectSlackMessage(
-      'Subcommands: `/tip connect`, `/tip disconnect`, `/tip config`, `/tip help`.',
+      'Subcommands: `/tip connect`, `/tip disconnect`, `/tip config`, `/tip help`, `/tip whoami`.',
     )
+  })
+})
+
+describe('/tip whoami', () => {
+  test('shows current connected account', async () => {
+    const account = await factory.account.insert({})
+    const workspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', Constants.slack.teamId)
+      .executeTakeFirstOrThrow()
+    await factory.member.insert({
+      account_id: account.id,
+      provider_user_id: Constants.slack.adminUserId,
+      workspace_id: workspace.id,
+    })
+
+    const response = await postSlashCommand('whoami')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(`Account ID: ${account.id}`)
+    await expectSlackMessage(`Address: ${account.address}`)
+    await expectSlackMessage(`Provider user ID: ${Constants.slack.adminUserId}`)
+  })
+
+  test('handles no connected account', async () => {
+    const response = await postSlashCommand('whoami')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('No account is connected.')
+  })
+
+  test('handles missing workspace', async () => {
+    await db.deleteFrom('workspace').where('provider_id', '=', Constants.slack.teamId).execute()
+
+    const response = await postSlashCommand('whoami')
+    const workspaces = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', Constants.slack.teamId)
+      .execute()
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(
+      'Tipbot is not configured for this Slack workspace. Reinstall Tipbot and try again.',
+    )
+    expect(workspaces).toEqual([])
   })
 })
 
@@ -366,6 +555,15 @@ describe('/tip usage', () => {
     await expectSlackMessage('Usage: /tip @account')
   })
 
+  test('handles missing Slack installation', async () => {
+    await Chat.getSlack().deleteInstallation(Constants.slack.teamId)
+
+    const response = await postSlashCommand('hello')
+
+    expect(response.status).toBe(200)
+    await expectNoSlackMessages()
+  })
+
   test('handles Slack chat.postEphemeral failure', async () => {
     const response = await postSlashCommand('', { channelId: Constants.slack.missingChannelId })
 
@@ -374,11 +572,20 @@ describe('/tip usage', () => {
   })
 })
 
+////////////////////////////////////////////////////////////////////////////
+
 async function expectSlackMessage(text: string) {
   const history = await slack.conversations.history({ channel: Constants.slack.channelId })
 
   expect(history.ok).toBe(true)
   expect(history.messages?.some((message) => message.text?.includes(text))).toBe(true)
+}
+
+async function expectSlackMessageNotContaining(text: string) {
+  const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+
+  expect(history.ok).toBe(true)
+  expect(history.messages?.some((message) => message.text?.includes(text))).toBe(false)
 }
 
 async function expectNoSlackMessages() {

@@ -96,9 +96,15 @@ const defaultConfig: Partial<{
   },
   account_link_token() {
     return {
+      access_key_address: generateAddress(),
+      access_key_authorization: null,
+      access_key_ciphertext: Nanoid.generate(),
+      access_key_expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
+      access_key_public_key: Nanoid.generate(),
+      account_id: null,
       created_at: new Date().toISOString(),
       expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(), // 15 minutes
-      member_id: null,
+      member_id: Nanoid.generate(),
       token_hash: Nanoid.generate(),
       used_at: null,
     }
@@ -134,6 +140,7 @@ const defaultConfig: Partial<{
     return {
       created_at: now,
       default_amount: 1000,
+      default_token_address: null,
       name: null,
       provider: 'slack',
       provider_id: `T${Nanoid.generate()}`,
@@ -149,26 +156,26 @@ function generateAddress() {
 }
 
 type FactoryInstance = {
-  [K in keyof DB]: {
-    attrs: <const V extends readonly Record<string, unknown>[]>(
-      ...args: V & AttrsValidation<K, V>
-    ) => V['length'] extends 1 ? Selectable<DB[K]> : Selectable<DB[K]>[]
-    insert: <const V extends readonly Record<string, unknown>[]>(
-      ...args: V & AttrsValidation<K, V>
-    ) => Promise<V['length'] extends 1 ? Selectable<DB[K]> : Selectable<DB[K]>[]>
+  [key in keyof DB]: {
+    attrs: <const value extends readonly Record<string, unknown>[]>(
+      ...args: value & AttrsValidation<key, value>
+    ) => value['length'] extends 1 ? Selectable<DB[key]> : Selectable<DB[key]>[]
+    insert: <const value extends readonly Record<string, unknown>[]>(
+      ...args: value & AttrsValidation<key, value>
+    ) => Promise<value['length'] extends 1 ? Selectable<DB[key]> : Selectable<DB[key]>[]>
   }
 }
 
-type AttrsValidation<K extends keyof DB, V extends readonly Record<string, unknown>[]> = {
-  [I in keyof V]: Partial<Insertable<DB[K]>> & RequiredForeignKeys<DB[K]>
+type AttrsValidation<key extends keyof DB, value extends readonly Record<string, unknown>[]> = {
+  [index in keyof value]: Partial<Insertable<DB[key]>> & RequiredForeignKeys<DB[key]>
 }
 
-type RequiredForeignKeys<T> = {
-  [K in keyof T as K extends `${string}_id`
-    ? null extends T[K]
+type RequiredForeignKeys<type> = {
+  [key in keyof type as key extends `${string}_id`
+    ? null extends type[key]
       ? never
-      : K extends 'id' | 'credential_id'
+      : key extends 'id' | 'credential_id'
         ? never
-        : K
-    : never]-?: T[K]
+        : key
+    : never]-?: type[key]
 }

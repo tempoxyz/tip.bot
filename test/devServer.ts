@@ -52,7 +52,7 @@ export function startDevServer(env: Record<string, string>) {
   })
 }
 
-if (process.send) {
+if (process.send && process.argv[1] === scriptPath) {
   const { createServer } = await import('vite')
   const port = Number(process.env.PORT)
   assert(Number.isInteger(port) && port > 0, 'PORT is required.')

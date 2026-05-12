@@ -1,5 +1,7 @@
 import * as DB from '#db/client.ts'
 import type { DB as DB_gen } from '#db/types.gen.ts'
+import * as AccountLink from '#/lib/accountLink.ts'
+import * as AccessKey from '#/lib/accessKey.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Tip from '#/lib/tip.ts'
 import { createCloudflareState } from '#/vendor/chatStateCloudflareDO.ts'
@@ -144,10 +146,91 @@ const handlers = {
 
     await event.channel.postEphemeral(event.user, `Updated ${key}.`, { fallbackToDM: false })
   },
-  async connect(event, _ctx) {
+  async connect(event, ctx) {
+    const workspace = await ctx.db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', ctx.provider.type)
+      .where('provider_id', '=', ctx.provider.id)
+      .executeTakeFirst()
+    if (!workspace) {
+      await event.channel.postEphemeral(
+        event.user,
+        'Tipbot is not configured for this Slack workspace. Reinstall Tipbot and try again.',
+        { fallbackToDM: false },
+      )
+      return
+    }
+
+    let member = await ctx.db
+      .selectFrom('member')
+      .selectAll()
+      .where('workspace_id', '=', workspace.id)
+      .where('provider_user_id', '=', event.user.userId)
+      .executeTakeFirst()
+    if (!member) {
+      const id = Nanoid.generate()
+      const now = new Date().toISOString()
+      await ctx.db
+        .insertInto('member')
+        .values({
+          account_id: null,
+          created_at: now,
+          id,
+          login: null,
+          name: null,
+          provider_user_id: event.user.userId,
+          updated_at: now,
+          workspace_id: workspace.id,
+        })
+        .execute()
+      member = await ctx.db
+        .selectFrom('member')
+        .selectAll()
+        .where('id', '=', id)
+        .executeTakeFirstOrThrow()
+    }
+
+    if (member.account_id) {
+      await event.channel.postEphemeral(
+        event.user,
+        'Connected to Tipbot\nUse `/tip disconnect` to disconnect.',
+        { fallbackToDM: false },
+      )
+      return
+    }
+
+    const now = new Date()
+    const token = Nanoid.generate()
+    const accessKey = AccessKey.generate()
+    const linkExpiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString() // 10 minutes
+    const accessKeyExpiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
+    await ctx.db
+      .deleteFrom('account_link_token')
+      .where('member_id', '=', member.id)
+      .where('used_at', 'is', null)
+      .execute()
+    await ctx.db
+      .insertInto('account_link_token')
+      .values({
+        access_key_address: accessKey.address,
+        access_key_authorization: null,
+        access_key_ciphertext: await AccessKey.encrypt(env, accessKey.privateKey),
+        access_key_expires_at: accessKeyExpiresAt,
+        access_key_public_key: accessKey.publicKey,
+        account_id: null,
+        created_at: now.toISOString(),
+        expires_at: linkExpiresAt,
+        id: Nanoid.generate(),
+        member_id: member.id,
+        token_hash: await AccountLink.hashToken(env, token),
+        used_at: null,
+      })
+      .execute()
+
     await event.channel.postEphemeral(
       event.user,
-      'Mock tipping is enabled. No wallet connection is required right now.',
+      `Connect to Tipbot: https://${env.HOST}/connect/${token}\nThis link expires in 10 minutes.`,
       { fallbackToDM: false },
     )
   },
@@ -180,17 +263,60 @@ const handlers = {
       return
     }
 
+    await ctx.db.deleteFrom('access_key').where('account_id', '=', member.account_id).execute()
     await ctx.db
       .updateTable('member')
       .set({ account_id: null, updated_at: new Date().toISOString() })
       .where('id', '=', member.id)
       .execute()
-    await event.channel.postEphemeral(event.user, 'Disconnected account.', { fallbackToDM: false })
+    await event.channel.postEphemeral(event.user, 'Disconnected from Tipbot', {
+      fallbackToDM: false,
+    })
   },
   async help(event, _ctx) {
     await event.channel.postEphemeral(
       event.user,
-      'I’m Tipbot: sometime tipper, sometime messenger, always bot.\nMock tips are enabled while payment rails are paused. Try `/tip @account for coffee`. Subcommands: `/tip connect`, `/tip disconnect`, `/tip config`, `/tip help`.',
+      'I’m Tipbot: sometime tipper, sometime messenger, always bot.\nMock tips are enabled while payment rails are paused. Try `/tip @account for coffee`. Subcommands: `/tip connect`, `/tip disconnect`, `/tip config`, `/tip help`, `/tip whoami`.',
+      { fallbackToDM: false },
+    )
+  },
+  async whoami(event, ctx) {
+    const workspace = await ctx.db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', ctx.provider.type)
+      .where('provider_id', '=', ctx.provider.id)
+      .executeTakeFirst()
+    if (!workspace) {
+      await event.channel.postEphemeral(
+        event.user,
+        'Tipbot is not configured for this Slack workspace. Reinstall Tipbot and try again.',
+        { fallbackToDM: false },
+      )
+      return
+    }
+
+    const member = await ctx.db
+      .selectFrom('member')
+      .innerJoin('account', 'account.id', 'member.account_id')
+      .select([
+        'account.address as account_address',
+        'account.id as account_id',
+        'member.provider_user_id',
+      ])
+      .where('member.workspace_id', '=', workspace.id)
+      .where('member.provider_user_id', '=', event.user.userId)
+      .executeTakeFirst()
+    if (!member) {
+      await event.channel.postEphemeral(event.user, 'No account is connected.', {
+        fallbackToDM: false,
+      })
+      return
+    }
+
+    await event.channel.postEphemeral(
+      event.user,
+      `Account ID: ${member.account_id}\nAddress: ${member.account_address}\nProvider user ID: ${member.provider_user_id}`,
       { fallbackToDM: false },
     )
   },
@@ -269,7 +395,7 @@ const handlers = {
   (event: SlashCommandEvent, ctx: HandlerContext) => Promise<void>
 >
 
-const commandNames = ['config', 'connect', 'disconnect', 'help'] as const
+const commandNames = ['config', 'connect', 'disconnect', 'help', 'whoami'] as const
 const commandPattern = new RegExp(`^(${commandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
 
 type HandlerContext = {
@@ -292,6 +418,5 @@ function getProvider(event: SlashCommandEvent): {
       type: 'slack',
     }
   }
-
   throw new Error('Provider is not implemented yet.')
 }

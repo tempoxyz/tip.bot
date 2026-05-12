@@ -41,6 +41,9 @@ export default defineConfig({
           return 'development'
         })()
         return {
+          __PLAYWRIGHT_ACCOUNT_PRIVATE_KEY__: JSON.stringify(
+            process.env.PLAYWRIGHT ? process.env.PLAYWRIGHT_ACCOUNT_PRIVATE_KEY : undefined,
+          ),
           __ENV__: JSON.stringify(environment),
           __HOST__: JSON.stringify(host),
           __ORIGIN__: process.env.PLAYWRIGHT
@@ -64,6 +67,9 @@ export default defineConfig({
       devtools.devtools({ consolePiping: { enabled: false } }),
       !isTest &&
         cloudflare({
+          inspectorPort: process.env.CLOUDFLARE_INSPECTOR_PORT
+            ? Number(process.env.CLOUDFLARE_INSPECTOR_PORT)
+            : undefined,
           viteEnvironment: { name: 'ssr' },
           persistState: { path: process.env.CLOUDFLARE_PERSIST_STATE_PATH ?? '.wrangler/state' },
           ...(process.env.PLAYWRIGHT
@@ -79,7 +85,8 @@ export default defineConfig({
                     SLACK_CLIENT_SECRET: process.env.SLACK_CLIENT_SECRET ?? '',
                     SLACK_SIGNING_SECRET: process.env.SLACK_SIGNING_SECRET ?? '',
                   }
-                  delete config.secrets
+                  // In Playwright, use explicit test vars above instead of loading real .env secrets.
+                  config.secrets = { required: [] }
                 },
               }
             : {}),
@@ -122,9 +129,22 @@ export default defineConfig({
     onConsoleLog(log) {
       if (log.includes('[chat-sdk')) return false
     },
-    passWithNoTests: true,
     projects: [
       {
+        test: {
+          exclude: ['src/**/*.workers.test.ts'],
+          include: ['src/**/*.test.ts'],
+          name: 'unit',
+        },
+      },
+      {
+        define: {
+          __ENV__: JSON.stringify('development'),
+          __HOST__: JSON.stringify('tip.bot'),
+          __ORIGIN__: JSON.stringify('https://tip.bot'),
+          __PLAYWRIGHT_ACCOUNT_PRIVATE_KEY__: 'undefined',
+          __SLACK_APP_ID__: JSON.stringify(''),
+        },
         plugins: lazyPlugins(async () => {
           if (!isTest) return []
           const { cloudflareTest } = await import('@cloudflare/vitest-pool-workers')

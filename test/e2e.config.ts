@@ -15,7 +15,6 @@ export default defineConfig({
   testDir: './e2e',
   testMatch: '**/*.test.ts',
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL,
     trace: 'on-first-retry',
   },
 })

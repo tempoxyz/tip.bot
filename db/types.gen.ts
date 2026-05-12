@@ -31,11 +31,16 @@ type account = {
 }
 
 type account_link_token = {
-  account_id: string
+  access_key_address: string
+  access_key_authorization: string | null
+  access_key_ciphertext: string
+  access_key_expires_at: k.Generated<string>
+  access_key_public_key: string
+  account_id: string | null
   created_at: k.Generated<string>
   expires_at: string
   id: string
-  member_id: string | null
+  member_id: string
   token_hash: string
   used_at: string | null
 }
@@ -73,6 +78,7 @@ type tip = {
 type workspace = {
   created_at: k.Generated<string>
   default_amount: k.Generated<number>
+  default_token_address: string | null
   id: string
   name: string | null
   provider: k.Generated<'slack'>

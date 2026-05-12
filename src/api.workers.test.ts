@@ -1,8 +1,15 @@
 import { env } from 'cloudflare:workers'
 import { testClient } from 'hono/testing'
+import { Address, Secp256k1 } from 'ox'
+import { Account } from 'viem/tempo'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { api } from '#/api.ts'
 import * as DB from '#db/client.ts'
+import * as Schema from '#db/schemas.gen.ts'
+import * as AccountLink from '#/lib/accountLink.ts'
+import * as AccessKey from '#/lib/accessKey.ts'
+import * as Nanoid from '#/lib/nanoid.ts'
+import * as Tempo from '#/lib/tempo.ts'
 import * as Constants from '#test/constants.ts'
 import * as Factory from '#test/factory.ts'
 import { createSlackHeaders } from '#test/slack.ts'
@@ -25,6 +32,13 @@ beforeEach(async () => {
   executionCtx.waitUntil.mockClear()
   vi.restoreAllMocks()
   await db.deleteFrom('workspace').execute()
+})
+
+test('/api/health returns ok', async () => {
+  const response = await client.api.health.$get()
+
+  expect(response.status).toBe(200)
+  await expect(response.json()).resolves.toEqual({ ok: true })
 })
 
 describe('/api/chat/slack', () => {
@@ -86,6 +100,132 @@ describe('/api/chat/slack/install', () => {
     )
     expect(url.searchParams.get('scope')).toBe('chat:write,commands,users:read')
     expect(url.searchParams.get('state')).toMatch(/^[^.]+\.[^.]+$/)
+  })
+})
+
+describe('/api/account/link/:token', () => {
+  test('returns pending link metadata', async () => {
+    const pending = await createPendingAccountLink()
+
+    const response = await client.api.account.link[':token'].$get({
+      param: { token: pending.token },
+    })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      accessKeyAddress: pending.accessKey.address,
+      accessKeyPublicKey: pending.accessKey.publicKey,
+      ok: true,
+      tokenAddress: Tempo.pathUsdAddress,
+    })
+  })
+
+  test('rejects invalid links generically', async () => {
+    const response = await client.api.account.link[':token'].$get({ param: { token: 'missing' } })
+
+    expect(response.status).toBe(404)
+    await expect(response.json()).resolves.toMatchObject({
+      message: 'This connection link is invalid or expired.',
+      ok: false,
+    })
+  })
+
+  test('completes wallet connection and stores access key', async () => {
+    const pending = await createPendingAccountLink()
+    const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    const keyAuthorization = await signKeyAuthorization(root, pending)
+
+    const response = await client.api.account.link[':token'].$post({
+      json: { address: root.address, keyAuthorization },
+      param: { token: pending.token },
+    })
+    const member = await db
+      .selectFrom('member')
+      .selectAll()
+      .where('id', '=', pending.member.id)
+      .executeTakeFirstOrThrow()
+    const account = await db
+      .selectFrom('account')
+      .selectAll()
+      .where('id', '=', member.account_id)
+      .executeTakeFirstOrThrow()
+    const accessKey = await db
+      .selectFrom('access_key')
+      .selectAll()
+      .where('account_id', '=', account.id)
+      .executeTakeFirstOrThrow()
+    const link = await db
+      .selectFrom('account_link_token')
+      .selectAll()
+      .where('id', '=', pending.link.id)
+      .executeTakeFirstOrThrow()
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ ok: true })
+    expect(member).toEqual(expect.schemaMatching(Schema.member))
+    expect(account).toEqual(expect.schemaMatching(Schema.account))
+    expect(accessKey).toEqual(expect.schemaMatching(Schema.access_key))
+    expect(link).toEqual(expect.schemaMatching(Schema.account_link_token))
+    expect(account.address).toBe(root.address)
+    expect(accessKey.address).toBe(pending.accessKey.address)
+    expect(accessKey.ciphertext).toBe(pending.link.access_key_ciphertext)
+    expect(accessKey.expires_at).toBe(pending.link.access_key_expires_at)
+    expect(link.account_id).toBe(account.id)
+    expect(link.access_key_authorization).toEqual(JSON.stringify(keyAuthorization))
+    expect(link.used_at).toEqual(expect.any(String))
+  })
+
+  test('rejects token reuse', async () => {
+    const pending = await createPendingAccountLink()
+    const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    const keyAuthorization = await signKeyAuthorization(root, pending)
+    const json = { address: root.address, keyAuthorization }
+
+    const first = await client.api.account.link[':token'].$post({
+      json,
+      param: { token: pending.token },
+    })
+    const second = await client.api.account.link[':token'].$post({
+      json,
+      param: { token: pending.token },
+    })
+
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(404)
+  })
+
+  test('rejects mismatched access key authorization', async () => {
+    const pending = await createPendingAccountLink()
+    const other = await createPendingAccountLink({ providerUserId: 'UOTHER' })
+    const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    const keyAuthorization = await signKeyAuthorization(root, other)
+
+    const response = await client.api.account.link[':token'].$post({
+      json: { address: root.address, keyAuthorization },
+      param: { token: pending.token },
+    })
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({ code: 'invalid_key_authorization' })
+  })
+
+  test('rejects same wallet linked to another member in same workspace', async () => {
+    const pending = await createPendingAccountLink()
+    const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    const account = await factory.account.insert({ address: root.address })
+    await factory.member.insert({
+      account_id: account.id,
+      provider_user_id: 'UOTHER',
+      workspace_id: pending.workspace.id,
+    })
+    const keyAuthorization = await signKeyAuthorization(root, pending)
+
+    const response = await client.api.account.link[':token'].$post({
+      json: { address: root.address, keyAuthorization },
+      param: { token: pending.token },
+    })
+
+    expect(response.status).toBe(409)
   })
 })
 
@@ -213,3 +353,43 @@ describe('/api/chat/slack/oauth/callback', () => {
     ])
   })
 })
+
+async function createPendingAccountLink(
+  options: { providerUserId?: string; workspaceId?: string } = {},
+) {
+  const workspace = options.workspaceId
+    ? await db
+        .selectFrom('workspace')
+        .selectAll()
+        .where('id', '=', options.workspaceId)
+        .executeTakeFirstOrThrow()
+    : await factory.workspace.insert({ provider_id: `T${Nanoid.generate()}` })
+  const member = await factory.member.insert({
+    provider_user_id: options.providerUserId ?? `U${Nanoid.generate()}`,
+    workspace_id: workspace.id,
+  })
+  const token = Nanoid.generate()
+  const now = Date.now()
+  const accessKey = AccessKey.generate()
+  const link = await factory.account_link_token.insert({
+    access_key_address: accessKey.address,
+    access_key_ciphertext: await AccessKey.encrypt(env, accessKey.privateKey),
+    access_key_expires_at: new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
+    access_key_public_key: accessKey.publicKey,
+    expires_at: new Date(now + 10 * 60 * 1000).toISOString(), // 10 minutes
+    member_id: member.id,
+    token_hash: await AccountLink.hashToken(env, token),
+  })
+  return { accessKey, link, member, token, workspace }
+}
+
+async function signKeyAuthorization(
+  account: ReturnType<typeof Account.fromSecp256k1>,
+  pending: Awaited<ReturnType<typeof createPendingAccountLink>>,
+) {
+  return await AccountLink.signKeyAuthorization(account, {
+    accessKeyAddress: pending.accessKey.address,
+    expiresAt: pending.link.access_key_expires_at,
+    tokenAddress: Address.checksum(pending.workspace.default_token_address ?? Tempo.pathUsdAddress),
+  })
+}

@@ -17,6 +17,9 @@ dangerouslyAllowAllBuilds: false
 enableGlobalVirtualStore: true
 linkWorkspacePackages: false
 minimumReleaseAge: 1440
+minimumReleaseAgeExclude:
+  - accounts
+  - mppx
 minimumReleaseAgeStrict: true
 overrides:
   vite: 'catalog:'

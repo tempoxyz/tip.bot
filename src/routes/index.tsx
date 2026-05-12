@@ -15,14 +15,10 @@ export const Route = createFileRoute('/')({
     ],
   }),
   component: Component,
-  validateSearch: (search) =>
-    z.parse(
-      z.object({
-        slack: z.catch(z.optional(z.literal('installed')), undefined),
-        team: z.catch(z.optional(z.string()), undefined),
-      }),
-      search,
-    ),
+  validateSearch: z.object({
+    slack: z.optional(z.literal('installed')),
+    team: z.optional(z.string()),
+  }),
 })
 
 function Component() {
@@ -55,7 +51,7 @@ function Component() {
             role="status"
           >
             <IconLucideCheck aria-hidden="true" className="size-5 shrink-0" />
-            Tipbot installed{search.team ? ` for ${search.team}` : ''}
+            Installed{search.team ? ` for ${search.team}` : ''}
           </p>
         ) : (
           <a

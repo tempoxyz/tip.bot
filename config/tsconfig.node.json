@@ -28,6 +28,7 @@
     "noUncheckedSideEffectImports": true
   },
   "include": [
+    "../src/vite-env.d.ts",
     "../src/worker-configuration.d.ts",
     "../db/**/*.ts",
     "../config/vitest.ts",
