@@ -73,6 +73,9 @@ jobs:
       - name: Setup Playwright
         uses: ./.github/actions/setup-playwright
 
+      - name: Build native dependencies
+        run: pnpm rebuild better-sqlite3
+
       - name: Run E2E tests
         run: pnpm test:e2e
 
