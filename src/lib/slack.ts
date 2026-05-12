@@ -1,10 +1,10 @@
 import { Hex } from 'ox'
 
-export async function createSlackHeaders(body: string) {
+export async function createSlackHeaders(body: string, signingSecret: string) {
   const timestamp = String(Math.floor(Date.now() / 1000))
   const key = await crypto.subtle.importKey(
     'raw',
-    new TextEncoder().encode('test-signing-secret'),
+    new TextEncoder().encode(signingSecret),
     { hash: 'SHA-256', name: 'HMAC' },
     false,
     ['sign'],

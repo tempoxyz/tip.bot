@@ -34,10 +34,14 @@ export default defineConfig({
   define: !isCheck
     ? await (async () => {
         const { getWranglerVar } = await import('./config/wrangler.ts')
-        const host = getWranglerVar('HOST')
+        const host =
+          (() => {
+            if (!process.env.PORTLESS_URL) return undefined
+            return new URL(process.env.PORTLESS_URL).host
+          })() ?? getWranglerVar('HOST')
         const environment = (() => {
           if (host === 'tip.bot') return 'production'
-          if (host === 'tip.localhost') return 'development'
+          if (host === 'tipbot.localhost') return 'development'
           return 'development'
         })()
         return {
@@ -60,9 +64,13 @@ export default defineConfig({
     const iconsResolver = await import('unplugin-icons/resolver')
     const tailwindcss = await import('@tailwindcss/vite')
     const viteReact = await import('@vitejs/plugin-react')
+    const vite = await import('./config/vite.ts')
     const { cloudflare } = await import('@cloudflare/vite-plugin')
     const { tanstackStart } = await import('@tanstack/react-start/plugin/vite')
+    const shouldEmulateSlack =
+      !isTest && process.env.CLOUDFLARE_ENV !== 'production' && process.env.EMULATE_SLACK !== '0'
     return [
+      shouldEmulateSlack && vite.emulate({ type: 'slack' }),
       tanstackStartVirtualEntryCompat(),
       devtools.devtools({ consolePiping: { enabled: false } }),
       !isTest &&
@@ -75,21 +83,31 @@ export default defineConfig({
           ...(process.env.PLAYWRIGHT
             ? {
                 remoteBindings: false,
-                config(config) {
-                  config.vars = {
-                    ...config.vars,
-                    HOST: process.env.HOST ?? config.vars?.HOST,
+              }
+            : {}),
+          config(config) {
+            config.vars = {
+              ...config.vars,
+              HOST: process.env.PLAYWRIGHT
+                ? (process.env.HOST ?? config.vars?.HOST)
+                : ((() => {
+                    if (!process.env.PORTLESS_URL) return undefined
+                    return new URL(process.env.PORTLESS_URL).host
+                  })() ?? config.vars?.HOST),
+              ...(process.env.PLAYWRIGHT
+                ? {
                     SECRET_KEY: process.env.SECRET_KEY ?? '',
-                    SLACK_API_URL: process.env.SLACK_API_URL ?? config.vars?.SLACK_API_URL,
                     SLACK_CLIENT_ID: process.env.SLACK_CLIENT_ID ?? '',
                     SLACK_CLIENT_SECRET: process.env.SLACK_CLIENT_SECRET ?? '',
                     SLACK_SIGNING_SECRET: process.env.SLACK_SIGNING_SECRET ?? '',
                   }
-                  // In Playwright, use explicit test vars above instead of loading real .env secrets.
-                  config.secrets = { required: [] }
-                },
-              }
-            : {}),
+                : {}),
+              SLACK_API_URL: process.env.SLACK_API_URL ?? config.vars?.SLACK_API_URL,
+            }
+            if (process.env.PLAYWRIGHT)
+              // In Playwright, use explicit test vars above instead of loading real .env secrets.
+              config.secrets = { required: [] }
+          },
         }),
       tailwindcss.default(),
       icons.default({

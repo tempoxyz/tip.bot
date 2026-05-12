@@ -89,6 +89,7 @@ export const api = new Hono<{
       'json',
       z.object({
         address: z.string().min(1),
+        disconnectExistingAccount: z.boolean().optional(),
         keyAuthorization: z.unknown(),
       }),
     ),
@@ -174,7 +175,7 @@ export const api = new Hono<{
           .where('account_id', '=', account.id)
           .where('id', '!=', link.member_id)
           .executeTakeFirst()
-        if (duplicate)
+        if (duplicate && !body.disconnectExistingAccount)
           return c.json(
             {
               code: 'account_already_connected' as const,
@@ -183,6 +184,14 @@ export const api = new Hono<{
             },
             409,
           )
+        if (duplicate && body.disconnectExistingAccount)
+          await c.var.db
+            .updateTable('member')
+            .set({ account_id: null, updated_at: now })
+            .where('workspace_id', '=', link.workspace_id)
+            .where('account_id', '=', account.id)
+            .where('id', '!=', link.member_id)
+            .execute()
 
         await c.var.db.deleteFrom('access_key').where('account_id', '=', account.id).execute()
         await c.var.db

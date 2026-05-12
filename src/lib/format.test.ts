@@ -1,5 +1,11 @@
 import { expect, test } from 'vitest'
-import { formatCurrencyAmount, formatPeriod } from '#/lib/format.ts'
+import { formatAmount, formatCurrencyAmount, formatPeriod } from '#/lib/format.ts'
+
+test('formats integer token amounts', () => {
+  expect(formatAmount(1_000_000)).toBe('1')
+  expect(formatAmount(1_500_000)).toBe('1.5')
+  expect(formatAmount(1_000_001)).toBe('1.000001')
+})
 
 test('formats currency amounts with narrow symbols', () => {
   expect(formatCurrencyAmount('10', 'USD')).toBe('$10.00')

@@ -23,11 +23,18 @@ function Component() {
   const data = Route.useLoaderData()
   const params = Route.useParams()
   const [error, setError] = React.useState<string | null>(null)
+  const [errorCode, setErrorCode] = React.useState<string | null>(null)
+  const [pendingConnection, setPendingConnection] = React.useState<{
+    address: string
+    keyAuthorization: unknown
+  } | null>(null)
   const [status, setStatus] = React.useState<'idle' | 'connecting' | 'connected'>('idle')
 
   async function connect() {
     if (!data.ok) return
     setError(null)
+    setErrorCode(null)
+    setPendingConnection(null)
     setStatus('connecting')
     try {
       const provider = Provider.create({
@@ -69,22 +76,49 @@ function Component() {
       const account = result.accounts[0]
       if (!account?.capabilities?.keyAuthorization)
         throw new Error('Tempo Wallet did not authorize Tipbot.')
-      const response = await rpc.api.account.link[':token'].$post({
-        json: {
-          address: account.address,
-          keyAuthorization: account.capabilities.keyAuthorization,
-        },
-        param: { token: params.token },
+      await linkAccount({
+        address: account.address,
+        keyAuthorization: account.capabilities.keyAuthorization,
       })
-      if (!response.ok) {
-        const json = await response.json().catch(() => null)
-        throw new Error(json && 'message' in json ? json.message : 'Could not connect to Tipbot.')
-      }
       setStatus('connected')
     } catch (error) {
       setStatus('idle')
       setError(error instanceof Error ? error.message : 'Could not connect to Tipbot.')
     }
+  }
+
+  async function disconnectExistingAccount() {
+    if (!pendingConnection) return
+    setError(null)
+    setErrorCode(null)
+    setStatus('connecting')
+    try {
+      await linkAccount({ ...pendingConnection, disconnectExistingAccount: true })
+      setPendingConnection(null)
+      setStatus('connected')
+    } catch (error) {
+      setStatus('idle')
+      setError(error instanceof Error ? error.message : 'Could not connect to Tipbot.')
+    }
+  }
+
+  async function linkAccount(connection: {
+    address: string
+    keyAuthorization: unknown
+    disconnectExistingAccount?: boolean
+  }) {
+    const response = await rpc.api.account.link[':token'].$post({
+      json: connection,
+      param: { token: params.token },
+    })
+    if (response.ok) return
+
+    const json = await response.json().catch(() => null)
+    if (json && 'code' in json && json.code === 'account_already_connected') {
+      setErrorCode(json.code)
+      setPendingConnection(connection)
+    }
+    throw new Error(json && 'message' in json ? json.message : 'Could not connect to Tipbot.')
   }
 
   return (
@@ -165,7 +199,7 @@ function Component() {
                 <div className="space-y-4 pt-6">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                     <button
-                      className="inline-flex h-12 items-center justify-center rounded-lg bg-green9 px-6 text-lg font-bold text-white transition-colors outline-none hover:bg-green6 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                      className="inline-flex h-12 items-center justify-center rounded-lg bg-green8 px-6 text-lg font-bold text-white transition-colors outline-none hover:bg-green7 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
                       disabled={status === 'connecting'}
                       onClick={connect}
                       type="button"
@@ -182,7 +216,23 @@ function Component() {
                   <p className="text-base text-gray9">
                     Next: you’ll be asked to approve this connection in Tempo Wallet.
                   </p>
-                  {error ? <p className="text-sm font-medium text-red9">{error}</p> : null}
+                  {error ? (
+                    <div className="space-y-3">
+                      <p className="text-sm font-medium text-red9">{error}</p>
+                      {errorCode === 'account_already_connected' && pendingConnection ? (
+                        <button
+                          className="inline-flex h-10 items-center justify-center rounded-lg bg-red8 px-4 text-sm font-bold text-white transition-colors outline-none hover:bg-red7 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-red9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                          disabled={status === 'connecting'}
+                          onClick={disconnectExistingAccount}
+                          type="button"
+                        >
+                          {status === 'connecting'
+                            ? 'Disconnecting'
+                            : 'Disconnect existing account and connect'}
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>

@@ -8,7 +8,7 @@ import { api } from '#/api.ts'
 import * as Schema from '#db/schemas.gen.ts'
 import * as Constants from '#test/constants.ts'
 import * as Factory from '#test/factory.ts'
-import { createSlackHeaders } from '#test/slack.ts'
+import { createSlackHeaders } from '#/lib/slack.ts'
 
 let waitUntil: Promise<unknown>[] = []
 const db = DB.create(env.DB)
@@ -634,7 +634,7 @@ async function createSlashCommandRequestInit(
 
   return {
     headers: {
-      ...(await createSlackHeaders(body)),
+      ...(await createSlackHeaders(body, env.SLACK_SIGNING_SECRET)),
       'content-type': 'application/x-www-form-urlencoded',
     },
     init: { body },

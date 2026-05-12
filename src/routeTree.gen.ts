@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as InstallSlackRouteImport } from './routes/install/slack'
+import { Route as EmulateWorkspaceRouteImport } from './routes/emulate/workspace'
 import { Route as ConnectTokenRouteImport } from './routes/connect/$token'
 
 const IndexRoute = IndexRouteImport.update({
@@ -23,6 +24,11 @@ const InstallSlackRoute = InstallSlackRouteImport.update({
   path: '/install/slack',
   getParentRoute: () => rootRouteImport,
 } as any)
+const EmulateWorkspaceRoute = EmulateWorkspaceRouteImport.update({
+  id: '/emulate/workspace',
+  path: '/emulate/workspace',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ConnectTokenRoute = ConnectTokenRouteImport.update({
   id: '/connect/$token',
   path: '/connect/$token',
@@ -32,30 +38,39 @@ const ConnectTokenRoute = ConnectTokenRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/connect/$token': typeof ConnectTokenRoute
+  '/emulate/workspace': typeof EmulateWorkspaceRoute
   '/install/slack': typeof InstallSlackRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/connect/$token': typeof ConnectTokenRoute
+  '/emulate/workspace': typeof EmulateWorkspaceRoute
   '/install/slack': typeof InstallSlackRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/connect/$token': typeof ConnectTokenRoute
+  '/emulate/workspace': typeof EmulateWorkspaceRoute
   '/install/slack': typeof InstallSlackRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/connect/$token' | '/install/slack'
+  fullPaths: '/' | '/connect/$token' | '/emulate/workspace' | '/install/slack'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/connect/$token' | '/install/slack'
-  id: '__root__' | '/' | '/connect/$token' | '/install/slack'
+  to: '/' | '/connect/$token' | '/emulate/workspace' | '/install/slack'
+  id:
+    | '__root__'
+    | '/'
+    | '/connect/$token'
+    | '/emulate/workspace'
+    | '/install/slack'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ConnectTokenRoute: typeof ConnectTokenRoute
+  EmulateWorkspaceRoute: typeof EmulateWorkspaceRoute
   InstallSlackRoute: typeof InstallSlackRoute
 }
 
@@ -75,6 +90,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof InstallSlackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/emulate/workspace': {
+      id: '/emulate/workspace'
+      path: '/emulate/workspace'
+      fullPath: '/emulate/workspace'
+      preLoaderRoute: typeof EmulateWorkspaceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/connect/$token': {
       id: '/connect/$token'
       path: '/connect/$token'
@@ -88,6 +110,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ConnectTokenRoute: ConnectTokenRoute,
+  EmulateWorkspaceRoute: EmulateWorkspaceRoute,
   InstallSlackRoute: InstallSlackRoute,
 }
 export const routeTree = rootRouteImport

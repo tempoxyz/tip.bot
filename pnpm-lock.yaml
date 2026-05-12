@@ -131,8 +131,8 @@ importers:
         specifier: runtime:^24.5.1
         version: runtime:24.15.0
       portless:
-        specifier: 0.12.0
-        version: 0.12.0
+        specifier: 0.13.0
+        version: 0.13.0
       tailwindcss:
         specifier: 4.2.4
         version: 4.2.4
@@ -2901,8 +2901,8 @@ packages:
     resolution: {integrity: sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow==}
     engines: {node: '>=14.19.0'}
 
-  portless@0.12.0:
-    resolution: {integrity: sha512-zE8EYJ5xIEtKEBu1wnD+FavOE90/GNxRixF4Mu2hxMvDuVx1ftUbA6VbjbxI9sP9LUt0L26l6OiENGo4EFtLfw==}
+  portless@0.13.0:
+    resolution: {integrity: sha512-PxMZ5BHH+ZZi9rTq4T8m003aZxh56qI0aBdNsxLn7jrTtvNJYBWYD3lc5PuQrom/aVh6z8iLb+tKUI6b7QNYQw==}
     engines: {node: '>=20'}
     os: [darwin, linux, win32]
     hasBin: true
@@ -5976,7 +5976,7 @@ snapshots:
 
   pngjs@7.0.0: {}
 
-  portless@0.12.0: {}
+  portless@0.13.0: {}
 
   postcss@8.5.12:
     dependencies:
@@ -6577,7 +6577,6 @@ time:
   kysely@0.28.17: '2026-05-03T01:05:34.179Z'
   nanoid@5.1.11: '2026-04-30T22:06:42.984Z'
   ox@0.14.20: '2026-04-21T20:34:36.837Z'
-  portless@0.12.0: '2026-04-29T16:07:55.005Z'
   react-dom@19.2.5: '2026-04-08T18:39:31.423Z'
   react@19.2.5: '2026-04-08T18:39:24.455Z'
   tailwindcss@4.2.4: '2026-04-21T13:15:55.494Z'

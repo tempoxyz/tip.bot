@@ -2,6 +2,7 @@ import * as DB from '#db/client.ts'
 import type { DB as DB_gen } from '#db/types.gen.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as AccessKey from '#/lib/accessKey.ts'
+import { formatAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Tip from '#/lib/tip.ts'
 import { createCloudflareState } from '#/vendor/chatStateCloudflareDO.ts'
@@ -78,7 +79,7 @@ const handlers = {
     if (!key || !value) {
       await event.channel.postEphemeral(
         event.user,
-        `Current config: amount ${Tip.formatAmount(workspace.default_amount)}`,
+        `Current config: amount ${formatAmount(workspace.default_amount)}`,
         { fallbackToDM: false },
       )
       return

@@ -9,10 +9,10 @@ import * as Schema from '#db/schemas.gen.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as AccessKey from '#/lib/accessKey.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
+import { createSlackHeaders } from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Constants from '#test/constants.ts'
 import * as Factory from '#test/factory.ts'
-import { createSlackHeaders } from '#test/slack.ts'
 
 let waitUntil: Promise<unknown>[] = []
 const db = DB.create(env.DB)
@@ -54,7 +54,7 @@ describe('/api/chat/slack', () => {
       {},
       {
         headers: {
-          ...(await createSlackHeaders(body)),
+          ...(await createSlackHeaders(body, env.SLACK_SIGNING_SECRET)),
           'content-type': 'application/json',
         },
         init: { body },
@@ -226,6 +226,47 @@ describe('/api/account/link/:token', () => {
     })
 
     expect(response.status).toBe(409)
+  })
+
+  test('disconnects same wallet from another member when requested', async () => {
+    const pending = await createPendingAccountLink()
+    const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    const account = await factory.account.insert({ address: root.address })
+    const duplicate = await factory.member.insert({
+      account_id: account.id,
+      provider_user_id: 'UOTHER',
+      workspace_id: pending.workspace.id,
+    })
+    const oldAccessKey = await factory.access_key.insert({ account_id: account.id })
+    const keyAuthorization = await signKeyAuthorization(root, pending)
+
+    const response = await client.api.account.link[':token'].$post({
+      json: { address: root.address, disconnectExistingAccount: true, keyAuthorization },
+      param: { token: pending.token },
+    })
+    const currentMember = await db
+      .selectFrom('member')
+      .selectAll()
+      .where('id', '=', pending.member.id)
+      .executeTakeFirstOrThrow()
+    const duplicateMember = await db
+      .selectFrom('member')
+      .selectAll()
+      .where('id', '=', duplicate.id)
+      .executeTakeFirstOrThrow()
+    const accessKeys = await db
+      .selectFrom('access_key')
+      .selectAll()
+      .where('account_id', '=', account.id)
+      .execute()
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ ok: true })
+    expect(currentMember.account_id).toBe(account.id)
+    expect(duplicateMember.account_id).toBe(null)
+    expect(accessKeys).toHaveLength(1)
+    expect(accessKeys[0]?.address).toBe(pending.accessKey.address)
+    expect(accessKeys[0]?.id).not.toBe(oldAccessKey.id)
   })
 })
 

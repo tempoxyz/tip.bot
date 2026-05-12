@@ -6,6 +6,7 @@ dist-ssr
 .env
 .nitro
 .tanstack
+.emulate
 .vite-hooks
 .wrangler
 .output

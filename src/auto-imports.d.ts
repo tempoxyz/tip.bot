@@ -7,6 +7,9 @@
 export {}
 declare global {
   const IconLucideCheck: typeof import('~icons/lucide/check.jsx').default
+  const IconLucideChevronDown: typeof import('~icons/lucide/chevron-down.jsx').default
+  const IconLucideChevronsUpDown: typeof import('~icons/lucide/chevrons-up-down.jsx').default
+  const IconLucideEye: typeof import('~icons/lucide/eye.jsx').default
   const IconLucidePlug: typeof import('~icons/lucide/plug.jsx').default
   const IconLucidePlus: typeof import('~icons/lucide/plus.jsx').default
   const IconLucideSend: typeof import('~icons/lucide/send.jsx').default

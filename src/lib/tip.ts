@@ -1,4 +1,5 @@
 import * as DB from '#db/client.ts'
+import { formatAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import type { DB as Database } from '#db/types.gen.ts'
 import { Address, Secp256k1 } from 'ox'
@@ -120,14 +121,6 @@ export async function handleTipRequest(env: Env, input: TipInput): Promise<TipRe
     status: 'sent',
     transactionHash,
   }
-}
-
-export function formatAmount(amount: number) {
-  const whole = Math.floor(amount / 1_000_000)
-  const fraction = String(amount % 1_000_000)
-    .padStart(6, '0')
-    .replace(/0+$/, '')
-  return fraction ? `${whole}.${fraction}` : String(whole)
 }
 
 export function formatTxLink(_env: Env, transactionHash: string) {

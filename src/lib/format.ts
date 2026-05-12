@@ -1,3 +1,11 @@
+export function formatAmount(amount: number) {
+  const whole = Math.floor(amount / 1_000_000)
+  const fraction = String(amount % 1_000_000)
+    .padStart(6, '0')
+    .replace(/0+$/, '')
+  return fraction ? `${whole}.${fraction}` : String(whole)
+}
+
 export function formatCurrencyAmount(value: string, currency: string) {
   try {
     return new Intl.NumberFormat('en', {

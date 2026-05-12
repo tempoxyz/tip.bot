@@ -1,8 +1,8 @@
 import type { APIRequestContext } from '@playwright/test'
 import { WebClient } from '@slack/web-api'
 import * as AccountLink from '#/lib/accountLink.ts'
+import { createSlackHeaders } from '#/lib/slack.ts'
 import * as Constants from '../constants.ts'
-import { createSlackHeaders } from '../slack.ts'
 import { expect, test } from './fixture.ts'
 
 test('visitor opens an expired connection link', async ({ app, page }) => {
@@ -119,7 +119,7 @@ async function postSlashCommand(app: { url: (path: `/api/${string}`) => string }
   const response = await fetch(app.url('/api/chat/slack'), {
     body,
     headers: {
-      ...(await createSlackHeaders(body)),
+      ...(await createSlackHeaders(body, 'test-signing-secret')),
       'content-type': 'application/x-www-form-urlencoded',
     },
     method: 'POST',
