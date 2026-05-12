@@ -7,6 +7,11 @@ allowBuilds:
   workerd@1.20260426.1: true
   workerd@1.20260504.1: true
   workerd@1.20260507.1: true
+auditConfig:
+  # @tanstack/history is required by latest TanStack Router/Start. Audit marks all
+  # versions vulnerable with no patched release, so ignore until a fix exists.
+  ignoreGhsas:
+    - GHSA-rmmr-r34h-pfm5
 blockExoticSubdeps: true
 catalog:
   # Vite+ dependency aliases.
