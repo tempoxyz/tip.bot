@@ -475,6 +475,7 @@ async function signKeyAuthorization(
 ) {
   return await AccountLink.signKeyAuthorization(account, {
     accessKeyAddress: pending.accessKey.address,
+    chainId: pending.workspace.chain_id,
     expiresAt: pending.link.access_key_expires_at,
     tokenAddress: Address.checksum(pending.workspace.default_token_address ?? Tempo.pathUsdAddress),
   })

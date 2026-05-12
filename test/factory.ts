@@ -1,7 +1,6 @@
 import { createQueryId, type Insertable, type Kysely, type Selectable } from 'kysely'
 import type { DB } from '#db/types.gen.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
-import * as Tip from '#/lib/tip.ts'
 import { Address, Secp256k1 } from 'ox'
 
 export function create(db: Kysely<DB>): FactoryInstance {
@@ -134,7 +133,7 @@ const defaultConfig: Partial<{
       idempotency_key: Nanoid.generate(),
       memo: null,
       sponsorship_memo: null,
-      token_address: Tip.mockTokenAddress,
+      token_address: Address.checksum('0x0000000000000000000000000000000000000001'),
       transaction_hash: null,
       updated_at: now,
     }

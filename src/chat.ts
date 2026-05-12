@@ -2,8 +2,9 @@ import * as DB from '#db/client.ts'
 import type { DB as DB_gen } from '#db/types.gen.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as AccessKey from '#/lib/accessKey.ts'
-import { formatAmount } from '#/lib/format.ts'
+import { formatAmount, formatTipAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
+import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
 import { createCloudflareState } from '#/vendor/chatStateCloudflareDO.ts'
 import { createSlackAdapter } from '@chat-adapter/slack'
@@ -76,12 +77,26 @@ const handlers = {
     const parts = ctx.text.trim().split(/\s+/)
     const key = parts[0]
     const value = parts[1]
-    if (!key || !value) {
+    if (!key) {
       await event.channel.postEphemeral(
         event.user,
-        `Current config: amount ${formatAmount(workspace.default_amount)}`,
+        `Current config: amount ${formatAmount(workspace.default_amount)}, network ${Tempo.getChainName(workspace.chain_id)}`,
         { fallbackToDM: false },
       )
+      return
+    }
+    if (key === 'network' && !value) {
+      await event.channel.postEphemeral(
+        event.user,
+        `Current network: ${Tempo.getChainName(workspace.chain_id)}`,
+        { fallbackToDM: false },
+      )
+      return
+    }
+    if (!value) {
+      await event.channel.postEphemeral(event.user, 'Config keys: amount, network.', {
+        fallbackToDM: false,
+      })
       return
     }
 
@@ -121,8 +136,40 @@ const handlers = {
       return
     }
 
-    if (key !== 'amount') {
-      await event.channel.postEphemeral(event.user, 'Config keys: amount.', { fallbackToDM: false })
+    if (key !== 'amount' && key !== 'network') {
+      await event.channel.postEphemeral(event.user, 'Config keys: amount, network.', {
+        fallbackToDM: false,
+      })
+      return
+    }
+
+    if (key === 'network') {
+      const chainId = (() => {
+        if (value === 'mainnet') return Tempo.mainnetChainId
+        if (value === 'moderato' || value === 'testnet') return Tempo.moderatoChainId
+        return null
+      })()
+      if (chainId === null) {
+        await event.channel.postEphemeral(event.user, 'Network must be mainnet or moderato.', {
+          fallbackToDM: false,
+        })
+        return
+      }
+
+      await ctx.db
+        .updateTable('workspace')
+        .set({
+          chain_id: chainId,
+          updated_at: new Date().toISOString(),
+        })
+        .where('id', '=', workspace.id)
+        .execute()
+
+      await event.channel.postEphemeral(
+        event.user,
+        `Network updated to ${Tempo.getChainName(chainId)}. Members without a matching key must run \`/tip connect\`.`,
+        { fallbackToDM: false },
+      )
       return
     }
 
@@ -278,7 +325,7 @@ const handlers = {
   async help(event, _ctx) {
     await event.channel.postEphemeral(
       event.user,
-      'I’m Tipbot: sometime tipper, sometime messenger, always bot.\nMock tips are enabled while payment rails are paused. Try `/tip @account for coffee`. Subcommands: `/tip connect`, `/tip disconnect`, `/tip config`, `/tip help`, `/tip whoami`.',
+      'I’m Tipbot: sometime tipper, sometime messenger, always bot.\nTry `/tip @account for coffee`. Subcommands: `/tip connect`, `/tip disconnect`, `/tip config`, `/tip help`, `/tip whoami`.',
       { fallbackToDM: false },
     )
   },
@@ -361,10 +408,19 @@ const handlers = {
       return
     }
 
-    const sentMessage = await event.channel.post('Sending tip.')
+    if (!event.triggerId) {
+      await event.channel.postEphemeral(
+        event.user,
+        'Could not send tip: missing Slack request ID.',
+        {
+          fallbackToDM: false,
+        },
+      )
+      return
+    }
 
     const result = await Tip.handleTipRequest(env, {
-      idempotencyKey: `command:${ctx.provider.id}:${event.triggerId ?? Nanoid.generate()}`,
+      idempotencyKey: `command:${ctx.provider.id}:${event.triggerId}`,
       memo: parsed.memo,
       provider: ctx.provider.type,
       providerId: ctx.provider.id,
@@ -380,15 +436,47 @@ const handlers = {
     )
     const textResult = (() => {
       if (result.ok)
-        return `${result.status === 'already_sent' ? 'Already sent' : 'Mock tip sent'}: ${event.channel.mentionUser(result.senderProviderUserId)} → ${event.channel.mentionUser(result.recipientProviderUserId)} ${result.amount} mock stablecoins${result.memo ? ` for ${result.memo}` : ''}. ${Tip.formatTxLink(env, result.transactionHash)}`
+        return `${event.channel.mentionUser(result.senderProviderUserId)} tipped ${event.channel.mentionUser(result.recipientProviderUserId)} ${formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)}${result.memo ? ` for ${result.memo}` : ''}. ${Tempo.formatTxLink(result.chainId, result.transactionHash)}`
 
       if (result.code === 'self_tip') return 'You cannot tip yourself.'
-      return `Could not mock tip: ${result.message ?? 'Tip submission failed.'}`
+      if (result.code === 'sender_unconnected') return 'Connect your wallet first: `/tip connect`.'
+      if (result.code === 'missing_sender_access_key')
+        return `Reconnect for ${Tempo.getChainName(result.chainId ?? Tempo.mainnetChainId)}: \`/tip connect\`.`
+      if (result.code === 'recipient_unconnected')
+        return `${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipientProviderUserId)} hasn’t connected Tipbot yet.`
+      return `${result.message ?? 'Tip submission failed.'}${'transactionHash' in result && result.transactionHash && 'chainId' in result && result.chainId ? ` ${Tempo.formatTxLink(result.chainId, result.transactionHash)}` : ''}`
     })()
 
-    if (result.ok) await sentMessage.edit(textResult)
+    if (result.ok && result.status === 'sent') await event.channel.post(textResult)
+    else if (result.ok)
+      await event.channel.postEphemeral(
+        event.user,
+        `Tip complete. ${Tempo.formatTxLink(result.chainId, result.transactionHash)}`,
+        {
+          fallbackToDM: false,
+        },
+      )
     else {
-      await sentMessage.delete()
+      if (result.code === 'recipient_unconnected') {
+        if (ctx.provider.type !== 'slack') throw new Error('Provider is not implemented yet.')
+        const installation = await getSlack().getInstallation(ctx.provider.id)
+        if (installation) {
+          const body = new URLSearchParams()
+          body.set('channel', event.channel.id.replace(/^slack:/, ''))
+          body.set(
+            'text',
+            `${event.channel.mentionUser(event.user.userId)} tried to tip you. Connect with \`/tip connect\` to receive tips.`,
+          )
+          body.set('user', parsed.recipientProviderUserId)
+          await getSlack().withBotToken(installation.botToken, () =>
+            fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
+              body,
+              headers: { authorization: `Bearer ${installation.botToken}` },
+              method: 'POST',
+            }),
+          )
+        }
+      }
       await event.channel.postEphemeral(event.user, textResult, { fallbackToDM: false })
     }
   },

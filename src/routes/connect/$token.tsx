@@ -43,7 +43,7 @@ function Component() {
               adapter: dangerous_secp256k1({ privateKey: __PLAYWRIGHT_ACCOUNT_PRIVATE_KEY__ }),
             }
           : {}),
-        testnet: true,
+        testnet: data.chainId !== Tempo.mainnetChainId,
       })
       const result = await provider.request({
         method: 'wallet_connect',
@@ -51,6 +51,7 @@ function Component() {
           {
             capabilities: {
               authorizeAccessKey: {
+                chainId: toHex(data.chainId),
                 expiry: Math.floor(new Date(data.accessKeyExpiry).getTime() / 1000),
                 keyType: 'secp256k1',
                 limits: [
@@ -183,7 +184,7 @@ function Component() {
                         Tipbot can send tips up to{' '}
                         <a
                           className="font-medium text-blue9 no-underline underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-blue9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
-                          href={`${Tempo.chain.blockExplorers.default.url}/address/${data.tokenAddress}`}
+                          href={`${Tempo.getChain(data.chainId).blockExplorers?.default.url ?? Tempo.getChain(data.chainId).rpcUrls.default.http[0]}/address/${data.tokenAddress}`}
                           rel="noreferrer"
                           target="_blank"
                         >
@@ -271,8 +272,11 @@ const getConnectData = createServerFn({ method: 'GET' })
       const tokenMetadataTimeoutMs = 1_000 // 1 second
       const metadata = await Actions.token.getMetadata(
         createClient({
-          chain: Tempo.chain,
-          transport: http(undefined, { retryCount: 0, timeout: tokenMetadataTimeoutMs }),
+          chain: Tempo.getChain(json.chainId),
+          transport: http(Tempo.getRpcUrl(env, json.chainId), {
+            retryCount: 0,
+            timeout: tokenMetadataTimeoutMs,
+          }),
         }),
         { token: json.tokenAddress },
       )

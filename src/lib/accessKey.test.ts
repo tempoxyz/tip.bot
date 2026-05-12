@@ -18,3 +18,22 @@ test('encrypts access keys', async () => {
     /^0x[0-9a-f]+\.0x[0-9a-f]+$/,
   )
 })
+
+test('decrypts encrypted access keys', async () => {
+  const env = { SECRET_KEY: 'test-secret' } satisfies Pick<Env, 'SECRET_KEY'>
+  const accessKey = AccessKey.generate()
+  const ciphertext = await AccessKey.encrypt(env, accessKey.privateKey)
+
+  await expect(AccessKey.decrypt(env, ciphertext)).resolves.toBe(accessKey.privateKey)
+})
+
+test('rejects invalid encrypted access keys', async () => {
+  const env = { SECRET_KEY: 'test-secret' } satisfies Pick<Env, 'SECRET_KEY'>
+  const accessKey = AccessKey.generate()
+  const ciphertext = await AccessKey.encrypt(env, accessKey.privateKey)
+
+  await expect(AccessKey.decrypt(env, 'invalid')).rejects.toThrow(
+    'Access key ciphertext is invalid.',
+  )
+  await expect(AccessKey.decrypt({ SECRET_KEY: 'other-secret' }, ciphertext)).rejects.toThrow()
+})

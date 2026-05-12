@@ -19,12 +19,12 @@ export async function hashToken(env: Pick<Env, 'SECRET_KEY'>, token: string) {
 
 export async function signKeyAuthorization(
   account: ReturnType<typeof TempoAccount.fromSecp256k1>,
-  input: { accessKeyAddress: string; expiresAt: string; tokenAddress: string },
+  input: { accessKeyAddress: string; chainId: number; expiresAt: string; tokenAddress: string },
 ) {
   const tokenAddress = Address.checksum(input.tokenAddress)
   const policy = (() => {
     return {
-      chainId: BigInt(Tempo.chain.id),
+      chainId: BigInt(input.chainId),
       expiry: Math.floor(new Date(input.expiresAt).getTime() / 1000),
       limits: [
         {
@@ -57,6 +57,8 @@ export async function signKeyAuthorization(
 
 export async function verifyKeyAuthorization(input: {
   accessKeyAddress: string
+  chainId: number
+  env: Pick<Env, 'RPC_URL_MAINNET' | 'RPC_URL_TESTNET'>
   expiresAt: string
   keyAuthorization: unknown
   rootAddress: string
@@ -68,7 +70,7 @@ export async function verifyKeyAuthorization(input: {
   const authorization = KeyAuthorization.fromRpc(input.keyAuthorization as never)
   const policy = (() => {
     return {
-      chainId: BigInt(Tempo.chain.id),
+      chainId: BigInt(input.chainId),
       expiry: Math.floor(new Date(input.expiresAt).getTime() / 1000),
       limits: [
         {
@@ -131,13 +133,19 @@ export async function verifyKeyAuthorization(input: {
     scopes: authorization.scopes,
     type: authorization.type,
   })
-  const valid = await verifyHash(createClient({ chain: Tempo.chain, transport: http() }), {
-    address: rootAddress,
-    hash: KeyAuthorization.getSignPayload(unsigned),
-    signature: SignatureEnvelope.serialize(authorization.signature, {
-      magic: authorization.signature.type === 'webAuthn',
+  const valid = await verifyHash(
+    createClient({
+      chain: Tempo.getChain(input.chainId),
+      transport: http(Tempo.getRpcUrl(input.env, input.chainId)),
     }),
-  })
+    {
+      address: rootAddress,
+      hash: KeyAuthorization.getSignPayload(unsigned),
+      signature: SignatureEnvelope.serialize(authorization.signature, {
+        magic: authorization.signature.type === 'webAuthn',
+      }),
+    },
+  )
   if (!valid) throw new Error('Key authorization signature is invalid.')
 
   return {

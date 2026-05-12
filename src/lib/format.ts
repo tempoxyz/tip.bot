@@ -19,6 +19,10 @@ export function formatCurrencyAmount(value: string, currency: string) {
   }
 }
 
+export function formatTipAmount(amount: string, tokenCurrency: string, tokenSymbol: string) {
+  return `${formatCurrencyAmount(amount, tokenCurrency)} ${tokenSymbol}`
+}
+
 export function formatPeriod(seconds: number) {
   if (seconds === 30 * 24 * 60 * 60) return 'month' // 1 month
   if (seconds % (30 * 24 * 60 * 60) === 0) return `${seconds / (30 * 24 * 60 * 60)} months` // months

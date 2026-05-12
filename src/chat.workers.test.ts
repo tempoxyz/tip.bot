@@ -1,8 +1,12 @@
 import * as DB from '#db/client.ts'
+import * as AccessKey from '#/lib/accessKey.ts'
+import * as AccountLink from '#/lib/accountLink.ts'
 import * as Chat from '#/chat.ts'
+import * as Tempo from '#/lib/tempo.ts'
 import { WebClient } from '@slack/web-api'
 import { env } from 'cloudflare:workers'
 import { testClient } from 'hono/testing'
+import { Account } from 'viem/tempo'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { api } from '#/api.ts'
 import * as Schema from '#db/schemas.gen.ts'
@@ -39,11 +43,16 @@ beforeEach(async () => {
     botUserId: Constants.slack.botUserId,
     teamName: Constants.slack.teamName,
   })
-  await factory.workspace.insert({ provider_id: Constants.slack.teamId })
+  await factory.workspace.insert({
+    chain_id: Tempo.localnetChainId,
+    provider_id: Constants.slack.teamId,
+  })
 })
 
 describe('/tip @account', () => {
   test('sends tip', async () => {
+    await connectTipAccounts()
+
     const response = await postSlashCommand(`<@${Constants.slack.memberUserId}>`)
     const tip = await db
       .selectFrom('tip')
@@ -60,7 +69,7 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      `Mock tip sent: <@${Constants.slack.adminUserId}> → <@${Constants.slack.memberUserId}> 0.001 mock stablecoins`,
+      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 pathUSD.`,
     )
     expect(tip).toMatchObject({
       amount: 1000,
@@ -69,10 +78,11 @@ describe('/tip @account', () => {
     })
     expect(tip.confirmed_at).toEqual(expect.any(String))
     expect(tip.transaction_hash).toEqual(expect.any(String))
-  })
+  }, 20_000) // 20 seconds
 
   test('is idempotent for the same trigger', async () => {
     const triggerId = 'trigger-idempotent-tip'
+    await connectTipAccounts()
 
     const firstResponse = await postSlashCommand(`<@${Constants.slack.memberUserId}>`, {
       triggerId,
@@ -84,22 +94,24 @@ describe('/tip @account', () => {
 
     expect(firstResponse.status).toBe(200)
     expect(secondResponse.status).toBe(200)
-    await expectSlackMessage(
-      `Already sent: <@${Constants.slack.adminUserId}> → <@${Constants.slack.memberUserId}> 0.001 mock stablecoins`,
-    )
+    await expectSlackMessage('Tip complete.')
     expect(tips).toHaveLength(1)
-  })
+  }, 20_000) // 20 seconds
 
   test('sends tip with memo', async () => {
+    await connectTipAccounts()
+
     const response = await postSlashCommand(`<@${Constants.slack.memberUserId}> for great work`)
     const tip = await db.selectFrom('tip').select(['memo']).executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
     await expectSlackMessage('for great work')
     expect(tip.memo).toBe('great work')
-  })
+  }, 20_000) // 20 seconds
 
   test('supports Slack mention label syntax', async () => {
+    await connectTipAccounts()
+
     const response = await postSlashCommand(
       `<@${Constants.slack.memberUserId}|member> for great work`,
     )
@@ -117,16 +129,18 @@ describe('/tip @account', () => {
     await expectSlackMessage('for great work')
     expect(recipient.provider_user_id).toBe(Constants.slack.memberUserId)
     expect(tip.memo).toBe('great work')
-  })
+  }, 20_000) // 20 seconds
 
   test('supports memo without for prefix', async () => {
+    await connectTipAccounts()
+
     const response = await postSlashCommand(`<@${Constants.slack.memberUserId}> coffee`)
     const tip = await db.selectFrom('tip').select(['memo']).executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
     await expectSlackMessage('for coffee')
     expect(tip.memo).toBe('coffee')
-  })
+  }, 20_000) // 20 seconds
 
   test('denies self-tip', async () => {
     const response = await postSlashCommand(`<@${Constants.slack.adminUserId}>`)
@@ -155,6 +169,7 @@ describe('/tip @account', () => {
       workspace_id: workspace.id,
     })
     await factory.tip.insert({
+      chain_id: Tempo.localnetChainId,
       idempotency_key: `command:${Constants.slack.teamId}:${triggerId}`,
       recipient_id: recipientAccount.id,
       recipient_member_id: recipientMember.id,
@@ -167,7 +182,7 @@ describe('/tip @account', () => {
     const response = await postSlashCommand(`<@${Constants.slack.memberUserId}>`, { triggerId })
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Could not mock tip: Tip already recorded without a transaction.')
+    await expectSlackMessage('Tip is still sending.')
     await expectSlackMessageNotContaining('Sending tip.')
   })
 })
@@ -187,7 +202,7 @@ describe('/tip config', () => {
       messages: [
         expect.objectContaining({
           subtype: 'ephemeral',
-          text: 'Current config: amount 0.001',
+          text: 'Current config: amount 0.001, network Tempo',
         }),
       ],
       ok: true,
@@ -271,7 +286,7 @@ describe('/tip config', () => {
     const response = await postSlashCommand('config unknown value')
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Config keys: amount.')
+    await expectSlackMessage('Config keys: amount, network.')
   })
 
   test('rejects zero amount', async () => {
@@ -573,6 +588,46 @@ describe('/tip usage', () => {
 })
 
 ////////////////////////////////////////////////////////////////////////////
+
+async function connectTipAccounts() {
+  const workspace = await db
+    .selectFrom('workspace')
+    .selectAll()
+    .where('provider_id', '=', Constants.slack.teamId)
+    .executeTakeFirstOrThrow()
+  const senderRoot = Account.fromSecp256k1(Constants.tip.senderRootPrivateKey)
+  const recipientRoot = Account.fromSecp256k1(Constants.tip.recipientRootPrivateKey)
+  const accessKey = AccessKey.generate()
+  const accessKeyExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
+  const senderAccount = await factory.account.insert({ address: senderRoot.address })
+  const recipientAccount = await factory.account.insert({ address: recipientRoot.address })
+
+  await factory.member.insert({
+    account_id: senderAccount.id,
+    provider_user_id: Constants.slack.adminUserId,
+    workspace_id: workspace.id,
+  })
+  await factory.member.insert({
+    account_id: recipientAccount.id,
+    provider_user_id: Constants.slack.memberUserId,
+    workspace_id: workspace.id,
+  })
+  await factory.access_key.insert({
+    account_id: senderAccount.id,
+    address: accessKey.address,
+    authorization: JSON.stringify(
+      await AccountLink.signKeyAuthorization(senderRoot, {
+        accessKeyAddress: accessKey.address,
+        chainId: Tempo.localnetChainId,
+        expiresAt: accessKeyExpiresAt,
+        tokenAddress: Tempo.pathUsdAddress,
+      }),
+    ),
+    chain_id: Tempo.localnetChainId,
+    ciphertext: await AccessKey.encrypt(env, accessKey.privateKey),
+    expires_at: accessKeyExpiresAt,
+  })
+}
 
 async function expectSlackMessage(text: string) {
   const history = await slack.conversations.history({ channel: Constants.slack.channelId })

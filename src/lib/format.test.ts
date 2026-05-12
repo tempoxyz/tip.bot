@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { formatAmount, formatCurrencyAmount, formatPeriod } from '#/lib/format.ts'
+import { formatAmount, formatCurrencyAmount, formatPeriod, formatTipAmount } from '#/lib/format.ts'
 
 test('formats integer token amounts', () => {
   expect(formatAmount(1_000_000)).toBe('1')
@@ -16,6 +16,11 @@ test('formats currency amounts with narrow symbols', () => {
 
 test('falls back when currency code is invalid', () => {
   expect(formatCurrencyAmount('10', 'TOKEN')).toBe('TOKEN10')
+})
+
+test('formats tip amounts with token symbol', () => {
+  expect(formatTipAmount('0.001', 'USD', 'pathUSD')).toBe('$0.001 pathUSD')
+  expect(formatTipAmount('0.001', 'EUR', 'pathEUR')).toBe('€0.001 pathEUR')
 })
 
 test('formats singular periods without a count', () => {

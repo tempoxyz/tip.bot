@@ -2,6 +2,9 @@ import { createEmulator } from 'emulate'
 import { Server } from 'prool'
 import * as TestContainers from 'prool/testcontainers'
 import type { TestProject } from 'vitest/node'
+import { createClient, http, parseUnits } from 'viem'
+import { Account, Actions } from 'viem/tempo'
+import * as Tempo from '#/lib/tempo.ts'
 import * as Constants from './constants.ts'
 import { Env } from './env.ts'
 import { getAvailablePort } from './utils.ts'
@@ -26,6 +29,20 @@ export default async function (project: TestProject) {
     RPC_URL_TESTNET: `http://127.0.0.1:${rpcPort}/1`,
     SLACK_API_URL: `${slack.url}/api`,
   })
+
+  await Actions.token.mintSync(
+    createClient({
+      chain: Tempo.getChain(Tempo.localnetChainId),
+      transport: http(env.RPC_URL_TESTNET),
+    }),
+    {
+      account: Account.fromSecp256k1(env.FEE_PAYER_PRIVATE_KEY_TESTNET),
+      amount: parseUnits('10', 6),
+      to: Account.fromSecp256k1(Constants.tip.senderRootPrivateKey).address,
+      token: Tempo.pathUsdAddress,
+    },
+  )
+
   process.env.FEE_PAYER_PRIVATE_KEY_MAINNET = env.FEE_PAYER_PRIVATE_KEY_MAINNET
   process.env.FEE_PAYER_PRIVATE_KEY_TESTNET = env.FEE_PAYER_PRIVATE_KEY_TESTNET
   process.env.VITE_RPC_PORT = String(rpcPort)

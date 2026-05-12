@@ -30,7 +30,6 @@ export const Route = createFileRoute('/emulate/workspace')({
     actor: z.optional(z.string()),
     channel: z.optional(z.string()),
     provider: z.optional(z.literal('slack')),
-    text: z.optional(z.string()),
     workspace: z.optional(z.string()),
   }),
 })
@@ -64,6 +63,7 @@ function Component() {
   const search = withSearchDefaults(Route.useSearch())
   const [data, setData] = React.useState<EmulateWorkspaceState | null>(loaderData)
   const [error, setError] = React.useState<string | null>(null)
+  const [text, setText] = React.useState('')
   const [status, setStatus] = React.useState<'idle' | 'installing' | 'loading' | 'sending'>('idle')
 
   React.useEffect(() => {
@@ -151,21 +151,21 @@ function Component() {
   }
 
   async function send() {
-    const text = search.text.trim()
-    if (!text) return
+    const trimmedText = text.trim()
+    if (!trimmedText) return
 
     setStatus('sending')
     setError(null)
     try {
       const requestSearch = { ...search, actor, channel, provider, workspace }
       setData(
-        await (isTipCommand(text)
+        await (isTipCommand(trimmedText)
           ? sendEmulateCommand({
-              data: { ...requestSearch, text: text.replace(/^\/tip(?:\s+|$)/, '') },
+              data: { ...requestSearch, text: trimmedText.replace(/^\/tip(?:\s+|$)/, '') },
             })
-          : sendEmulateMessage({ data: { ...requestSearch, text } })),
+          : sendEmulateMessage({ data: { ...requestSearch, text: trimmedText } })),
       )
-      updateSearch({ text: '' })
+      setText('')
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Could not send message.')
     } finally {
@@ -361,14 +361,14 @@ function Component() {
               </div>
               <textarea
                 className="min-h-20 w-full resize-none bg-transparent p-1 pe-28 font-mono text-gray10 outline-none placeholder:text-gray8"
-                onChange={(event) => updateSearch({ text: event.currentTarget.value })}
+                onChange={(event) => setText(event.currentTarget.value)}
                 onKeyDown={(event) => {
                   if (!event.metaKey || event.key !== 'Enter') return
                   event.preventDefault()
                   if (status !== 'sending') void send()
                 }}
                 placeholder={`Message #${channelName}`}
-                value={search.text}
+                value={text}
               />
               <div className="mt-3 flex items-end gap-3">
                 <div className="flex min-w-0 max-w-[72rem] flex-1 flex-wrap items-center gap-2">
@@ -376,7 +376,7 @@ function Component() {
                     <button
                       className="shrink-0 rounded-full bg-gray1 px-3 py-1.5 text-sm font-medium text-gray10 hover:bg-gray2"
                       key={shortcut.text}
-                      onClick={() => updateSearch({ text: shortcut.text })}
+                      onClick={() => setText(shortcut.text)}
                       type="button"
                     >
                       {shortcut.label}
@@ -649,9 +649,10 @@ const installEmulateWorkspace = createServerFn({ method: 'POST' })
   })
 
 const sendEmulateCommand = createServerFn({ method: 'POST' })
-  .inputValidator((input: EmulateSearch) => withSearchDefaults(input))
+  .inputValidator((input: EmulateRequest) => withRequestDefaults(input))
   .handler(async ({ data }) => {
     const triggerId = `emulate-${Date.now()}`
+    const waitUntilPromises: Promise<unknown>[] = []
     const body = new URLSearchParams({
       channel_id: data.channel,
       command: '/tip',
@@ -670,7 +671,15 @@ const sendEmulateCommand = createServerFn({ method: 'POST' })
         method: 'POST',
       }),
       env,
+      {
+        passThroughOnException() {},
+        props: undefined,
+        waitUntil(promise) {
+          waitUntilPromises.push(promise)
+        },
+      },
     )
+    await Promise.allSettled(waitUntilPromises)
     await new Promise((resolve) => setTimeout(resolve, 100)) // 100 milliseconds
     const [actors, app, transcript] = await Promise.all([
       getSlackActors(),
@@ -687,7 +696,7 @@ const sendEmulateCommand = createServerFn({ method: 'POST' })
   })
 
 const sendEmulateMessage = createServerFn({ method: 'POST' })
-  .inputValidator((input: EmulateSearch) => withSearchDefaults(input))
+  .inputValidator((input: EmulateRequest) => withRequestDefaults(input))
   .handler(async ({ data }) => {
     const triggerId = `message-${Date.now()}`
     const actors = await getSlackActors()
@@ -968,9 +977,12 @@ function withSearchDefaults(search: EmulateSearch): Required<EmulateSearch> {
     actor: search.actor ?? slackDefaults.adminUserId,
     channel,
     provider,
-    text: search.text ?? '',
     workspace: search.workspace === slackDefaults.teamId ? search.workspace : slackDefaults.teamId,
   }
+}
+
+function withRequestDefaults(request: EmulateRequest): Required<EmulateRequest> {
+  return { ...withSearchDefaults(request), text: request.text ?? '' }
 }
 
 type EmulateWorkspaceState = {
@@ -1005,6 +1017,9 @@ type EmulateSearch = {
   actor?: string
   channel?: string
   provider?: 'slack'
-  text?: string
   workspace?: string
+}
+
+type EmulateRequest = EmulateSearch & {
+  text?: string
 }

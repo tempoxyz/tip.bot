@@ -1,5 +1,10 @@
 import type { SeedConfig } from 'emulate'
 
+export const tip = {
+  recipientRootPrivateKey: '0x19d1b9afaf5b1f79f708bd95673df2203213fdbbdafe50e70f056c2fecaa799e',
+  senderRootPrivateKey: '0x7797c0f3db8b946604ec2039dfd9763e4ffdc53174342a2ed9b14fa3eda666a5',
+} as const
+
 export const slack = {
   adminUserEmail: 'admin@emulate.dev',
   adminUserId: 'U000000001',

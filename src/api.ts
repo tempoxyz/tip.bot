@@ -1,11 +1,16 @@
 import { Hono } from 'hono'
+import { Handler } from 'accounts/server'
 import { Address, Base64, Hex } from 'ox'
+import { decodeFunctionData, http } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+import { Abis } from 'viem/tempo'
 import { z } from 'zod'
 import * as DB from '#db/client.ts'
 import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Tempo from '#/lib/tempo.ts'
+import * as Tip from '#/lib/tip.ts'
 import * as hono from '#/lib/hono.ts'
 
 export const api = new Hono<{
@@ -22,6 +27,92 @@ export const api = new Hono<{
     await c.env.DB.prepare('SELECT 1').first()
     return c.json({ ok: true })
   })
+  .post(
+    '/api/relay/:chainId{[0-9]+}',
+    hono.validator('param', z.object({ chainId: z.coerce.number().int() })),
+    async (c) => {
+      const params = c.req.valid('param')
+      const privateKey = (() => {
+        if (params.chainId === Tempo.mainnetChainId) return c.env.FEE_PAYER_PRIVATE_KEY_MAINNET
+        if (params.chainId === Tempo.moderatoChainId || params.chainId === Tempo.localnetChainId)
+          return c.env.FEE_PAYER_PRIVATE_KEY_TESTNET
+        return undefined
+      })()
+      if (!privateKey)
+        return c.json(
+          {
+            error: { code: -32603, message: 'Fee payer is not configured for this network.' },
+            id: null,
+            jsonrpc: '2.0',
+          },
+          500,
+        )
+
+      return await Handler.relay({
+        chains: [Tempo.getChain(params.chainId)],
+        transports: {
+          [params.chainId]: http(Tempo.getRpcUrl(c.env, params.chainId)),
+        },
+        feePayer: {
+          account: privateKeyToAccount(privateKey),
+          async validate(request) {
+            const call = (() => {
+              if (!request.calls || request.calls.length !== 1) return undefined
+              return request.calls[0]
+            })()
+            if (!call?.data || !call.to || !request.from) return false
+
+            const decoded = (() => {
+              try {
+                return decodeFunctionData({ abi: Abis.tip20, data: call.data })
+              } catch {
+                return undefined
+              }
+            })()
+            if (decoded?.functionName !== 'transferWithMemo') return false
+
+            const [to, amount, memo] = decoded.args
+            if (typeof to !== 'string' || typeof amount !== 'bigint' || typeof memo !== 'string')
+              return false
+
+            const tip = await c.var.db
+              .selectFrom('tip')
+              .innerJoin('account as sender', 'sender.id', 'tip.sender_id')
+              .innerJoin('account as recipient', 'recipient.id', 'tip.recipient_id')
+              .select([
+                'recipient.address as recipient_address',
+                'sender.address as sender_address',
+                'tip.amount',
+                'tip.chain_id',
+                'tip.confirmed_at',
+                'tip.failed_at',
+                'tip.id',
+                'tip.idempotency_key',
+                'tip.sponsorship_memo',
+                'tip.token_address',
+              ])
+              .where('tip.sponsorship_memo', '=', Hex.trimLeft(memo as Hex.Hex))
+              .executeTakeFirst()
+            if (!tip || tip.confirmed_at || tip.failed_at) return false
+            if (tip.chain_id !== params.chainId) return false
+            if (BigInt(tip.amount) !== amount) return false
+            try {
+              const recipientAddress = tip.recipient_address as Address.Address
+              const senderAddress = tip.sender_address as Address.Address
+              const tokenAddress = tip.token_address as Address.Address
+              if (!Address.isEqual(call.to as Address.Address, tokenAddress)) return false
+              if (!Address.isEqual(to as Address.Address, recipientAddress)) return false
+              if (!Address.isEqual(request.from as Address.Address, senderAddress)) return false
+            } catch {
+              return false
+            }
+            if (!Tempo.isAllowedToken(params.chainId, tip.token_address)) return false
+            return await Tip.verifySponsorshipMemo(c.env, tip)
+          },
+        },
+      }).fetch(new Request(`https://relay.local/${params.chainId}`, c.req.raw))
+    },
+  )
   .post('/api/chat/slack', async (c) => {
     const request = c.req.raw
     return await Chat.getChat().webhooks.slack(
@@ -53,6 +144,7 @@ export const api = new Hono<{
         'account_link_token.id',
         'account_link_token.member_id',
         'account_link_token.used_at',
+        'workspace.chain_id',
         'workspace.default_token_address',
         'workspace.id as workspace_id',
       ])
@@ -78,6 +170,8 @@ export const api = new Hono<{
       accessKeyLimit: '10',
       accessKeyLimitPeriodSeconds: 24 * 60 * 60, // 1 day
       accessKeyPublicKey: link.access_key_public_key as `0x${string}`,
+      chainId: link.chain_id,
+      chainName: Tempo.getChainName(link.chain_id),
       expiresAt: link.expires_at,
       ok: true as const,
       tokenAddress: Address.checksum(link.default_token_address ?? Tempo.pathUsdAddress),
@@ -110,6 +204,7 @@ export const api = new Hono<{
           'account_link_token.provider_channel_id',
           'account_link_token.used_at',
           'member.provider_user_id as member_provider_user_id',
+          'workspace.chain_id',
           'workspace.default_token_address',
           'workspace.id as workspace_id',
           'workspace.provider_id',
@@ -133,6 +228,8 @@ export const api = new Hono<{
       try {
         const verified = await AccountLink.verifyKeyAuthorization({
           accessKeyAddress: link.access_key_address,
+          chainId: link.chain_id,
+          env: c.env,
           expiresAt: link.access_key_expires_at,
           keyAuthorization: body.keyAuthorization,
           rootAddress: body.address,
@@ -196,13 +293,18 @@ export const api = new Hono<{
             .where('id', '!=', link.member_id)
             .execute()
 
-        await c.var.db.deleteFrom('access_key').where('account_id', '=', account.id).execute()
+        await c.var.db
+          .deleteFrom('access_key')
+          .where('account_id', '=', account.id)
+          .where('chain_id', '=', link.chain_id)
+          .execute()
         await c.var.db
           .insertInto('access_key')
           .values({
             account_id: account.id,
             address: link.access_key_address,
             authorization: verified.serialized,
+            chain_id: link.chain_id,
             ciphertext: link.access_key_ciphertext,
             created_at: now,
             expires_at: link.access_key_expires_at,
