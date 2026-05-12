@@ -75,8 +75,8 @@ jobs:
 
       - name: Build native dependencies
         run: |
-          pnpm rebuild --pending
-          node -e "require('better-sqlite3')"
+          pnpm install --frozen-lockfile
+          node -e "new (require('better-sqlite3'))(':memory:').close()"
 
       - name: Run E2E tests
         run: pnpm test:e2e
