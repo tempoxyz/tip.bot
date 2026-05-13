@@ -28,7 +28,8 @@ if (command === 'manifest') {
 }
 
 function createManifest() {
-  const appName = process.env.SLACK_APP_NAME ?? (appEnv === 'production' ? 'Tipbot' : 'Tipbot tmm')
+  const appName =
+    process.env.SLACK_APP_NAME ?? (appEnv === 'production' ? 'Tipbot' : 'Tipbot (dev)')
   const botDisplayName = process.env.SLACK_BOT_DISPLAY_NAME ?? 'Tipbot'
 
   return {
@@ -47,7 +48,7 @@ function createManifest() {
           command: '/tip',
           description: 'Tip teammates and manage Tipbot',
           should_escape: true,
-          usage_hint: '@account, connect, config, disconnect, help',
+          usage_hint: '@account, connect, disconnect, help, status',
           url: `${baseUrl}/api/chat/slack`,
         },
       ],

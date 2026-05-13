@@ -24,9 +24,7 @@ const migrations = Object.entries(
 beforeAll(async () => {
   server.listen({ onUnhandledRequest: 'bypass' })
   await reset()
-  console.log('workers: running migrations')
   await applyD1Migrations(env.DB, migrations)
-  console.log('workers: ran migrations')
   return () => {
     server.close()
   }

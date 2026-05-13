@@ -957,8 +957,8 @@ function getShortcutCommands(actorId: string, targetActorId: string) {
     { label: 'disconnect', text: '/tip disconnect' },
     { label: 'help', text: '/tip help' },
     { label: 'self tip', text: `/tip <@${actorId}>` },
+    { label: 'status', text: '/tip status' },
     { label: 'tip member', text: `/tip <@${targetActorId}> for coffee` },
-    { label: 'whoami', text: '/tip whoami' },
   ]
 }
 

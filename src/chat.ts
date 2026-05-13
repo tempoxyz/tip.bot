@@ -346,11 +346,11 @@ const handlers = {
   async help(event, _ctx) {
     await event.channel.postEphemeral(
       event.user,
-      'I’m Tipbot: sometime tipper, sometime messenger, always bot.\nTry `/tip @account for coffee`. Subcommands: `/tip connect`, `/tip disconnect`, `/tip config`, `/tip help`, `/tip whoami`.',
+      'I’m Tipbot: sometime tipper, sometime messenger, always bot.\nTry `/tip @account for coffee`. Subcommands: `/tip connect`, `/tip disconnect`, `/tip config`, `/tip help`, `/tip status`.',
       { fallbackToDM: false },
     )
   },
-  async whoami(event, ctx) {
+  async status(event, ctx) {
     const workspace = await ctx.db
       .selectFrom('workspace')
       .selectAll()
@@ -495,7 +495,7 @@ const handlers = {
   (event: SlashCommandEvent, ctx: HandlerContext) => Promise<void>
 >
 
-const commandNames = ['config', 'connect', 'disconnect', 'help', 'whoami'] as const
+const commandNames = ['config', 'connect', 'disconnect', 'help', 'status'] as const
 const commandPattern = new RegExp(`^(${commandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
 
 type HandlerContext = {

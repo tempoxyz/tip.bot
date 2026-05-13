@@ -515,12 +515,12 @@ describe('/tip help', () => {
     await expectSlackMessage('I’m Tipbot: sometime tipper, sometime messenger, always bot.')
     await expectSlackMessage('Try `/tip <@account> for coffee`.')
     await expectSlackMessage(
-      'Subcommands: `/tip connect`, `/tip disconnect`, `/tip config`, `/tip help`, `/tip whoami`.',
+      'Subcommands: `/tip connect`, `/tip disconnect`, `/tip config`, `/tip help`, `/tip status`.',
     )
   })
 })
 
-describe('/tip whoami', () => {
+describe('/tip status', () => {
   test('shows current connected account', async () => {
     const account = await factory.account.insert({})
     const workspace = await db
@@ -534,7 +534,7 @@ describe('/tip whoami', () => {
       workspace_id: workspace.id,
     })
 
-    const response = await postSlashCommand('whoami')
+    const response = await postSlashCommand('status')
 
     expect(response.status).toBe(200)
     await expectSlackMessage(`Account ID: ${account.id}`)
@@ -543,7 +543,7 @@ describe('/tip whoami', () => {
   })
 
   test('handles no connected account', async () => {
-    const response = await postSlashCommand('whoami')
+    const response = await postSlashCommand('status')
 
     expect(response.status).toBe(200)
     await expectSlackMessage('No account is connected.')
@@ -552,7 +552,7 @@ describe('/tip whoami', () => {
   test('handles missing workspace', async () => {
     await db.deleteFrom('workspace').where('provider_id', '=', providerId).execute()
 
-    const response = await postSlashCommand('whoami')
+    const response = await postSlashCommand('status')
     const workspaces = await db
       .selectFrom('workspace')
       .selectAll()
