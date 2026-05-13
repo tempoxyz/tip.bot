@@ -7,7 +7,6 @@ import * as hono from '#/lib/hono.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Slack from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
-import * as Tip from '#/lib/tip.ts'
 import * as DB from '#db/client.ts'
 
 export const api = new Hono<{
@@ -465,11 +464,3 @@ export const api = new Hono<{
     await c.env.DB.prepare('SELECT 1').first()
     return c.json({ ok: true })
   })
-  .post(
-    '/api/relay/:chainId{[0-9]+}',
-    hono.validator('param', z.object({ chainId: z.coerce.number().int() })),
-    async (c) => {
-      const params = c.req.valid('param')
-      return await Tip.handleRelayRequest(c.env, c.req.raw, params.chainId)
-    },
-  )
