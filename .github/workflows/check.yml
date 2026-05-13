@@ -8,7 +8,8 @@ permissions:
   contents: read
 
 env:
-  VITE_NODE_TAG: sha256:80769b5615556fcdb9f158de0c699523613fb3901c2df3e58bc770dab106ead1
+  # Pinned known-good Tempo Docker image. Supports tags or sha256 digests.
+  VITE_TEMPO_IMAGE: sha256:80769b5615556fcdb9f158de0c699523613fb3901c2df3e58bc770dab106ead1
   WRANGLER_SEND_METRICS: false
 
 jobs:
@@ -59,7 +60,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: /tmp/tempo-image.tar
-          key: tempo-image-${{ env.VITE_NODE_TAG }}
+          key: ${{ runner.os }}-tempo-image-${{ env.VITE_TEMPO_IMAGE }}
 
       - name: Load cached Tempo image
         if: steps.docker-cache.outputs.cache-hit == 'true'
@@ -68,8 +69,10 @@ jobs:
       - name: Pull and cache Tempo image
         if: steps.docker-cache.outputs.cache-hit != 'true'
         run: |
-          docker pull ghcr.io/tempoxyz/tempo@${VITE_NODE_TAG}
-          docker save ghcr.io/tempoxyz/tempo@${VITE_NODE_TAG} -o /tmp/tempo-image.tar
+          image="ghcr.io/tempoxyz/tempo:${VITE_TEMPO_IMAGE}"
+          if [[ "${VITE_TEMPO_IMAGE}" == sha256:* ]]; then image="ghcr.io/tempoxyz/tempo@${VITE_TEMPO_IMAGE}"; fi
+          docker pull "${image}"
+          docker save "${image}" -o /tmp/tempo-image.tar
 
       - name: Test
         run: pnpm test

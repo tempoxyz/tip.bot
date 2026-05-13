@@ -1,6 +1,7 @@
 import { createEmulator } from 'emulate'
 import { Server } from 'prool'
 import * as TestContainers from 'prool/testcontainers'
+import { PullPolicy } from 'testcontainers'
 import type { TestProject } from 'vitest/node'
 import { createClient, http, parseUnits } from 'viem'
 import { Account, Actions } from 'viem/tempo'
@@ -28,7 +29,12 @@ export default async function (project: TestProject) {
     } satisfies Pick<TestContainers.Instance.tempo.Parameters, 'blockTime' | 'image' | 'port'>),
     port: rpcPort,
   })
-  await tempo.start()
+  const restorePullPolicy = useDefaultPullPolicy()
+  try {
+    await tempo.start()
+  } finally {
+    restorePullPolicy()
+  }
   console.log('workers: started tempo')
 
   const env = Env.get({
@@ -64,7 +70,15 @@ export default async function (project: TestProject) {
 }
 
 function getTempoImage() {
-  if (process.env.VITE_NODE_TAG?.startsWith('sha256:'))
-    return `ghcr.io/tempoxyz/tempo@${process.env.VITE_NODE_TAG}`
-  return `ghcr.io/tempoxyz/tempo:${process.env.VITE_NODE_TAG || 'latest'}`
+  if (process.env.VITE_TEMPO_IMAGE?.startsWith('sha256:'))
+    return `ghcr.io/tempoxyz/tempo@${process.env.VITE_TEMPO_IMAGE}`
+  return `ghcr.io/tempoxyz/tempo:${process.env.VITE_TEMPO_IMAGE || 'latest'}`
+}
+
+function useDefaultPullPolicy() {
+  const alwaysPull = () => ({ shouldPull: () => true })
+  PullPolicy.alwaysPull = () => PullPolicy.defaultPolicy()
+  return () => {
+    PullPolicy.alwaysPull = alwaysPull
+  }
 }
