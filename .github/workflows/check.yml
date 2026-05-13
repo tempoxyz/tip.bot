@@ -52,6 +52,23 @@ jobs:
       - name: Check types
         run: pnpm check:types
 
+      - name: Build
+        run: pnpm build
+        env:
+          SLACK_APP_ID: ci-placeholder
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: ./.github/actions/setup-pnpm
+
       - name: Setup Docker
         uses: docker/setup-docker-action@b2189fbf2a6592b51fee7cdd93ee2bfaeba733db # v5.1.0
 
@@ -76,11 +93,6 @@ jobs:
 
       - name: Test
         run: pnpm test
-
-      - name: Build
-        run: pnpm build
-        env:
-          SLACK_APP_ID: ci-placeholder
 
   e2e:
     name: E2E

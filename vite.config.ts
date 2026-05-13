@@ -164,7 +164,6 @@ export default defineConfig({
           __SLACK_APP_ID__: JSON.stringify(''),
         },
         plugins: lazyPlugins(async () => {
-          if (!isTest) return []
           const { cloudflareTest } = await import('@cloudflare/vitest-pool-workers')
           const { setupVitestOutputFilter } = await import('./config/vitest.ts')
           const envMod = await import('./test/env.ts')
@@ -173,7 +172,7 @@ export default defineConfig({
             cloudflareTest(async (config) => {
               const env = envMod.Env.parse(config.inject('env'))
               return {
-                main: 'test/entry.workers.ts',
+                main: 'src/entry-server.ts',
                 wrangler: { configPath: 'wrangler.jsonc' },
                 miniflare: {
                   bindings: env,
