@@ -42,3 +42,16 @@ test('rejects text without tip mentions', () => {
   expect(Tip.parseTipText('')).toBe(null)
   expect(Tip.parseTipText('hello')).toBe(null)
 })
+
+test('encodes transfer memos as bytes32', () => {
+  expect(Tip.encodeTransferMemo(null)).toBe(
+    '0x0000000000000000000000000000000000000000000000000000000000000000',
+  )
+  expect(Tip.encodeTransferMemo('coffee')).toBe(
+    '0x636f666665650000000000000000000000000000000000000000000000000000',
+  )
+})
+
+test('rejects transfer memos longer than bytes32', () => {
+  expect(() => Tip.encodeTransferMemo('x'.repeat(33))).toThrow('Memo must be at most 32 bytes.')
+})

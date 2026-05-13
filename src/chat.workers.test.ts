@@ -85,6 +85,24 @@ describe('/tip @account', () => {
     expect(tip.transaction_hash).toEqual(expect.any(String))
   }, 20_000) // 20 seconds
 
+  test('sends tip with memo', async () => {
+    await connectTipAccounts()
+
+    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}> for coffee`)
+    const tip = await db
+      .selectFrom('tip')
+      .select(['confirmed_at', 'memo', 'transaction_hash'])
+      .where('memo', '=', 'coffee')
+      .executeTakeFirstOrThrow()
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(
+      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 pathUSD for coffee.`,
+    )
+    expect(tip.confirmed_at).toEqual(expect.any(String))
+    expect(tip.transaction_hash).toEqual(expect.any(String))
+  }, 20_000) // 20 seconds
+
   test('is idempotent for the same trigger', async () => {
     const triggerId = 'trigger-idempotent-tip'
     await connectTipAccounts()

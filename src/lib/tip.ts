@@ -4,11 +4,10 @@ import { formatAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import type { DB as Database } from '#db/types.gen.ts'
-import { local, Provider as AccountsProvider, Storage } from 'accounts'
-import { Address, Hex } from 'ox'
+import { AbiFunction, Address, Hex } from 'ox'
 import { KeyAuthorization } from 'ox/tempo'
-import { custom } from 'viem'
-import { Actions } from 'viem/tempo'
+import { createClient, http } from 'viem'
+import { Account as TempoAccount, Actions, withRelay } from 'viem/tempo'
 
 export type TipResult =
   | {
@@ -50,8 +49,9 @@ export async function handleTipRequest(
     senderProviderUserId: string
   },
 ): Promise<TipResult> {
+  const db = DB.create(env.DB)
   const workspace =
-    (await DB.create(env.DB)
+    (await db
       .selectFrom('workspace')
       .selectAll()
       .where('provider', '=', input.provider)
@@ -60,7 +60,7 @@ export async function handleTipRequest(
     (await (async () => {
       const id = Nanoid.generate()
       const now = new Date().toISOString()
-      await DB.create(env.DB)
+      await db
         .insertInto('workspace')
         .values({
           chain_id: Tempo.mainnetChainId,
@@ -72,7 +72,7 @@ export async function handleTipRequest(
           updated_at: now,
         })
         .execute()
-      return await DB.create(env.DB)
+      return await db
         .selectFrom('workspace')
         .selectAll()
         .where('id', '=', id)
@@ -89,7 +89,7 @@ export async function handleTipRequest(
       ok: false,
     }
 
-  const existing = await DB.create(env.DB)
+  const existing = await db
     .selectFrom('tip')
     .selectAll()
     .where('idempotency_key', '=', input.idempotencyKey)
@@ -130,9 +130,9 @@ export async function handleTipRequest(
       transactionHash: existing.transaction_hash ?? undefined,
     }
 
-  const sender = await getConnectedMember(env, workspace.id, input.senderProviderUserId)
+  const sender = await getConnectedMember(db, workspace.id, input.senderProviderUserId)
   if (!sender) return { code: 'sender_unconnected', ok: false }
-  const recipient = await getConnectedMember(env, workspace.id, input.recipientProviderUserId)
+  const recipient = await getConnectedMember(db, workspace.id, input.recipientProviderUserId)
   if (!recipient)
     return {
       code: 'recipient_unconnected',
@@ -141,7 +141,7 @@ export async function handleTipRequest(
       senderProviderUserId: input.senderProviderUserId,
     }
 
-  const accessKey = await DB.create(env.DB)
+  const accessKey = await db
     .selectFrom('access_key')
     .selectAll()
     .where('account_id', '=', sender.account.id)
@@ -151,6 +151,9 @@ export async function handleTipRequest(
     .orderBy('created_at', 'desc')
     .executeTakeFirst()
   if (!accessKey)
+    return { chainId: workspace.chain_id, code: 'missing_sender_access_key', ok: false }
+  const keyAuthorization = KeyAuthorization.fromRpc(JSON.parse(accessKey.authorization) as never)
+  if (input.memo && !supportsTransferMemo(keyAuthorization, tokenAddress))
     return { chainId: workspace.chain_id, code: 'missing_sender_access_key', ok: false }
 
   const id = Nanoid.generate()
@@ -164,7 +167,7 @@ export async function handleTipRequest(
     token: tokenAddress,
   })
   const now = new Date().toISOString()
-  await DB.create(env.DB)
+  await db
     .insertInto('tip')
     .values({
       amount: workspace.default_amount,
@@ -189,90 +192,39 @@ export async function handleTipRequest(
     .execute()
 
   try {
-    const keyAuthorization = KeyAuthorization.fromRpc(JSON.parse(accessKey.authorization) as never)
-    const provider = AccountsProvider.create({
-      adapter: local({
-        loadAccounts: async () => ({
-          accounts: [{ address: sender.account.address as `0x${string}` }],
-        }),
-      }),
-      chains: [Tempo.getChain(workspace.chain_id)],
-      storage: Storage.memory({ key: `tipbot-${id}` }),
-      transports: {
-        [workspace.chain_id]: custom({
-          async request(request) {
-            const response = await fetch(`https://${env.HOST}/api/relay/${workspace.chain_id}`, {
-              body: JSON.stringify({
-                id: 1,
-                jsonrpc: '2.0',
-                method: request.method,
-                params: request.params,
-              }),
-              headers: { 'content-type': 'application/json' },
-              method: 'POST',
-            })
-            const json = (await response.json()) as {
-              error?: { message?: string }
-              result?: unknown
-            }
-            if (json.error) throw new Error(json.error.message ?? 'Tempo relay request failed.')
-            return json.result
-          },
-        }),
-      },
-    }) as never as {
-      request: (request: {
-        method: 'eth_sendTransactionSync'
-        params: readonly [unknown]
-      }) => Promise<unknown>
-      store: { setState: (state: unknown) => void }
-    }
-    provider.store.setState({
-      accessKeys: [
-        {
-          access: sender.account.address as never,
-          address: keyAuthorization.address as never,
-          expiry: keyAuthorization.expiry ?? undefined,
-          keyAuthorization: accessKey.authorization_used_at ? undefined : keyAuthorization,
-          keyType: keyAuthorization.type,
-          limits: keyAuthorization.limits as never,
-          privateKey: await AccessKey.decrypt(env, accessKey.ciphertext),
-          scopes: keyAuthorization.scopes as never,
-        },
-      ],
-      accounts: [{ address: sender.account.address as never }],
-      activeAccount: 0,
-      chainId: workspace.chain_id,
-      requestQueue: [],
+    const account = TempoAccount.fromSecp256k1(await AccessKey.decrypt(env, accessKey.ciphertext), {
+      access: sender.account.address as `0x${string}`,
     })
-    const receipt = (await provider.request({
-      method: 'eth_sendTransactionSync',
-      params: [
-        {
-          calls: [
-            Actions.token.transfer.call({
-              amount: BigInt(workspace.default_amount),
-              memo: sponsorshipMemo as Hex.Hex,
-              to: recipient.account.address as never,
-              token: tokenAddress,
-            }),
-          ],
-          feePayer: true,
-        },
-      ],
-    })) as { transactionHash?: string }
-    if (!receipt.transactionHash) throw new Error('Tempo transaction did not return a hash.')
-    await DB.create(env.DB)
+    const client = createClient({
+      chain: Tempo.getChain(workspace.chain_id),
+      transport: withRelay(
+        http(Tempo.getRpcUrl(env, workspace.chain_id)),
+        http(`https://${env.HOST}/api/relay/${workspace.chain_id}`),
+        { policy: 'sign-and-broadcast' },
+      ),
+    })
+    const transfer = await Actions.token.transferSync(client, {
+      account,
+      amount: BigInt(workspace.default_amount),
+      feePayer: true,
+      keyAuthorization: accessKey.authorization_used_at ? undefined : keyAuthorization,
+      ...(input.memo ? { memo: encodeTransferMemo(input.memo) } : {}),
+      to: recipient.account.address as never,
+      token: tokenAddress,
+    })
+    if (!transfer.receipt.transactionHash)
+      throw new Error('Tempo transaction did not return a hash.')
+    await db
       .updateTable('tip')
       .set({
         confirmed_at: new Date().toISOString(),
-        transaction_hash: receipt.transactionHash,
+        transaction_hash: transfer.receipt.transactionHash,
         updated_at: new Date().toISOString(),
       })
       .where('id', '=', id)
       .execute()
     if (!accessKey.authorization_used_at)
-      await DB.create(env.DB)
+      await db
         .updateTable('access_key')
         .set({
           authorization_used_at: new Date().toISOString(),
@@ -291,11 +243,11 @@ export async function handleTipRequest(
       status: 'sent',
       tokenCurrency: tokenMetadata.currency,
       tokenSymbol: tokenMetadata.symbol,
-      transactionHash: receipt.transactionHash,
+      transactionHash: transfer.receipt.transactionHash,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Tip submission failed.'
-    await DB.create(env.DB)
+    await db
       .updateTable('tip')
       .set({
         failed_at: new Date().toISOString(),
@@ -328,6 +280,13 @@ export function parseTipText(value: string) {
   }
 }
 
+export function encodeTransferMemo(memo: string | null) {
+  if (!memo) return Hex.padRight('0x', 32)
+  const hex = Hex.fromString(memo)
+  if (Hex.size(hex) > 32) throw new Error('Memo must be at most 32 bytes.')
+  return Hex.padRight(hex, 32)
+}
+
 export async function verifySponsorshipMemo(
   env: Env,
   tip: Pick<
@@ -351,8 +310,8 @@ export async function verifySponsorshipMemo(
   return memo.toLowerCase() === tip.sponsorship_memo.toLowerCase()
 }
 
-async function getConnectedMember(env: Env, workspaceId: string, providerUserId: string) {
-  return await DB.create(env.DB)
+async function getConnectedMember(db: DB.Type, workspaceId: string, providerUserId: string) {
+  return await db
     .selectFrom('member')
     .innerJoin('account', 'account.id', 'member.account_id')
     .select([
@@ -394,6 +353,21 @@ async function getConnectedMember(env: Env, workspaceId: string, providerUserId:
           }
         : null,
     )
+}
+
+function supportsTransferMemo(
+  authorization: KeyAuthorization.KeyAuthorization,
+  tokenAddress: string,
+) {
+  if (!authorization.scopes) return true
+  return authorization.scopes.some((scope) => {
+    if (!Address.isEqual(scope.address, tokenAddress as Address.Address)) return false
+    if (!scope.selector) return true
+    return (
+      scope.selector.toLowerCase() ===
+      AbiFunction.getSelector('transferWithMemo(address,uint256,bytes32)').toLowerCase()
+    )
+  })
 }
 
 async function createSponsorshipMemo(

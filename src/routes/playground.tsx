@@ -10,9 +10,9 @@ import { api } from '#/api.ts'
 import * as Chat from '#/chat.ts'
 import { createSlackHeaders } from '#/lib/slack.ts'
 
-export const Route = createFileRoute('/emulate/workspace')({
+export const Route = createFileRoute('/playground')({
   component: Component,
-  head: () => ({ meta: [{ title: 'Emulate workspace - Tipbot' }] }),
+  head: () => ({ meta: [{ title: 'Playground - Tipbot' }] }),
   async loader(options) {
     if (__ENV__ !== 'development') return null
     return await getEmulateWorkspaceState({ data: options.deps })

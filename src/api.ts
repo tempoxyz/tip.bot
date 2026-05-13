@@ -23,113 +23,6 @@ export const api = new Hono<{
     c.set('db', DB.create(c.env.DB))
     await next()
   })
-  .get('/api/health', async (c) => {
-    await c.env.DB.prepare('SELECT 1').first()
-    return c.json({ ok: true })
-  })
-  .post(
-    '/api/relay/:chainId{[0-9]+}',
-    hono.validator('param', z.object({ chainId: z.coerce.number().int() })),
-    async (c) => {
-      const params = c.req.valid('param')
-      const privateKey = (() => {
-        if (params.chainId === Tempo.mainnetChainId) return c.env.FEE_PAYER_PRIVATE_KEY_MAINNET
-        if (params.chainId === Tempo.moderatoChainId || params.chainId === Tempo.localnetChainId)
-          return c.env.FEE_PAYER_PRIVATE_KEY_TESTNET
-        return undefined
-      })()
-      if (!privateKey)
-        return c.json(
-          {
-            error: { code: -32603, message: 'Fee payer is not configured for this network.' },
-            id: null,
-            jsonrpc: '2.0',
-          },
-          500,
-        )
-
-      return await Handler.relay({
-        chains: [Tempo.getChain(params.chainId)],
-        transports: {
-          [params.chainId]: http(Tempo.getRpcUrl(c.env, params.chainId)),
-        },
-        feePayer: {
-          account: privateKeyToAccount(privateKey),
-          async validate(request) {
-            const call = (() => {
-              if (!request.calls || request.calls.length !== 1) return undefined
-              return request.calls[0]
-            })()
-            if (!call?.data || !call.to || !request.from) return false
-
-            const decoded = (() => {
-              try {
-                return decodeFunctionData({ abi: Abis.tip20, data: call.data })
-              } catch {
-                return undefined
-              }
-            })()
-            if (decoded?.functionName !== 'transferWithMemo') return false
-
-            const [to, amount, memo] = decoded.args
-            if (typeof to !== 'string' || typeof amount !== 'bigint' || typeof memo !== 'string')
-              return false
-
-            const tip = await c.var.db
-              .selectFrom('tip')
-              .innerJoin('account as sender', 'sender.id', 'tip.sender_id')
-              .innerJoin('account as recipient', 'recipient.id', 'tip.recipient_id')
-              .select([
-                'recipient.address as recipient_address',
-                'sender.address as sender_address',
-                'tip.amount',
-                'tip.chain_id',
-                'tip.confirmed_at',
-                'tip.failed_at',
-                'tip.id',
-                'tip.idempotency_key',
-                'tip.sponsorship_memo',
-                'tip.token_address',
-              ])
-              .where('tip.sponsorship_memo', '=', Hex.trimLeft(memo as Hex.Hex))
-              .executeTakeFirst()
-            if (!tip || tip.confirmed_at || tip.failed_at) return false
-            if (tip.chain_id !== params.chainId) return false
-            if (BigInt(tip.amount) !== amount) return false
-            try {
-              const recipientAddress = tip.recipient_address as Address.Address
-              const senderAddress = tip.sender_address as Address.Address
-              const tokenAddress = tip.token_address as Address.Address
-              if (!Address.isEqual(call.to as Address.Address, tokenAddress)) return false
-              if (!Address.isEqual(to as Address.Address, recipientAddress)) return false
-              if (!Address.isEqual(request.from as Address.Address, senderAddress)) return false
-            } catch {
-              return false
-            }
-            if (!Tempo.isAllowedToken(params.chainId, tip.token_address)) return false
-            return await Tip.verifySponsorshipMemo(c.env, tip)
-          },
-        },
-      }).fetch(new Request(`https://relay.local/${params.chainId}`, c.req.raw))
-    },
-  )
-  .post('/api/chat/slack', async (c) => {
-    const request = c.req.raw
-    return await Chat.getChat().webhooks.slack(
-      new Request(request.url, {
-        body: await request.text(),
-        headers: request.headers,
-        method: request.method,
-      }),
-      {
-        waitUntil(promise) {
-          try {
-            c.executionCtx.waitUntil(promise)
-          } catch {}
-        },
-      },
-    )
-  })
   .get('/api/account/link/:token', async (c) => {
     const link = await c.var.db
       .selectFrom('account_link_token')
@@ -371,6 +264,23 @@ export const api = new Hono<{
       }
     },
   )
+  .post('/api/chat/slack', async (c) => {
+    const request = c.req.raw
+    return await Chat.getChat().webhooks.slack(
+      new Request(request.url, {
+        body: await request.text(),
+        headers: request.headers,
+        method: request.method,
+      }),
+      {
+        waitUntil(promise) {
+          try {
+            c.executionCtx.waitUntil(promise)
+          } catch {}
+        },
+      },
+    )
+  })
   .get('/api/chat/slack/install', async (c) => {
     const redirectUri = `https://${c.env.HOST}/api/chat/slack/oauth/callback`
     const payload = Base64.fromString(
@@ -520,5 +430,119 @@ export const api = new Hono<{
           400,
         )
       }
+    },
+  )
+  .get('/api/health', async (c) => {
+    await c.env.DB.prepare('SELECT 1').first()
+    return c.json({ ok: true })
+  })
+  .post(
+    '/api/relay/:chainId{[0-9]+}',
+    hono.validator('param', z.object({ chainId: z.coerce.number().int() })),
+    async (c) => {
+      const params = c.req.valid('param')
+      const privateKey = (() => {
+        if (params.chainId === Tempo.mainnetChainId) return c.env.FEE_PAYER_PRIVATE_KEY_MAINNET
+        if (params.chainId === Tempo.moderatoChainId || params.chainId === Tempo.localnetChainId)
+          return c.env.FEE_PAYER_PRIVATE_KEY_TESTNET
+        return undefined
+      })()
+      if (!privateKey)
+        return c.json(
+          {
+            error: { code: -32603, message: 'Fee payer is not configured for this network.' },
+            id: null,
+            jsonrpc: '2.0',
+          },
+          500,
+        )
+
+      return await Handler.relay({
+        chains: [Tempo.getChain(params.chainId)],
+        transports: {
+          [params.chainId]: http(Tempo.getRpcUrl(c.env, params.chainId)),
+        },
+        feePayer: {
+          account: privateKeyToAccount(privateKey),
+          async validate(request) {
+            const call = (() => {
+              if (!request.calls || request.calls.length !== 1) return undefined
+              return request.calls[0]
+            })()
+            if (!call?.data || !call.to || !request.from) return false
+
+            const decoded = (() => {
+              try {
+                return decodeFunctionData({ abi: Abis.tip20, data: call.data })
+              } catch {
+                return undefined
+              }
+            })()
+            const transfer = (() => {
+              if (decoded?.functionName === 'transfer') {
+                const [to, amount] = decoded.args
+                if (typeof to !== 'string' || typeof amount !== 'bigint') return null
+                return { amount, memo: null, to }
+              }
+              if (decoded?.functionName === 'transferWithMemo') {
+                const [to, amount, memo] = decoded.args
+                if (
+                  typeof to !== 'string' ||
+                  typeof amount !== 'bigint' ||
+                  typeof memo !== 'string'
+                )
+                  return null
+                return { amount, memo, to }
+              }
+              return null
+            })()
+            if (!transfer) return false
+
+            const tips = await c.var.db
+              .selectFrom('tip')
+              .innerJoin('account as sender', 'sender.id', 'tip.sender_id')
+              .innerJoin('account as recipient', 'recipient.id', 'tip.recipient_id')
+              .select([
+                'recipient.address as recipient_address',
+                'sender.address as sender_address',
+                'tip.amount',
+                'tip.chain_id',
+                'tip.confirmed_at',
+                'tip.failed_at',
+                'tip.id',
+                'tip.idempotency_key',
+                'tip.memo',
+                'tip.sponsorship_memo',
+                'tip.token_address',
+              ])
+              .where('tip.chain_id', '=', params.chainId)
+              .where('tip.confirmed_at', 'is', null)
+              .where('tip.failed_at', 'is', null)
+              .execute()
+            const tip = tips.find((tip) => {
+              if (BigInt(tip.amount) !== transfer.amount) return false
+              try {
+                const recipientAddress = tip.recipient_address as Address.Address
+                const senderAddress = tip.sender_address as Address.Address
+                const tokenAddress = tip.token_address as Address.Address
+                if (!Address.isEqual(call.to as Address.Address, tokenAddress)) return false
+                if (!Address.isEqual(transfer.to as Address.Address, recipientAddress)) return false
+                if (!Address.isEqual(request.from as Address.Address, senderAddress)) return false
+                if (transfer.memo === null && tip.memo) return false
+                if (
+                  transfer.memo !== null &&
+                  Tip.encodeTransferMemo(tip.memo).toLowerCase() !== transfer.memo.toLowerCase()
+                )
+                  return false
+              } catch {
+                return false
+              }
+              return Tempo.isAllowedToken(params.chainId, tip.token_address)
+            })
+            if (!tip) return false
+            return await Tip.verifySponsorshipMemo(c.env, tip)
+          },
+        },
+      }).fetch(new Request(`https://relay.local/${params.chainId}`, c.req.raw))
     },
   )
