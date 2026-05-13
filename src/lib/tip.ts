@@ -56,6 +56,7 @@ export async function handleTipRequest(
     provider: Database.Selectable.workspace['provider']
     providerChannelId: string
     providerId: string
+    recipientProviderLabel?: string
     recipientProviderUserId: string
     senderProviderUserId: string
     tokenAddress?: string
@@ -155,7 +156,7 @@ export async function handleTipRequest(
 }
 
 export function parseAmount(value: string) {
-  const match = value.match(/^(0|[1-9]\d*)(?:\.(\d{1,6}))?$/)
+  const match = value.match(/^\$?(0|[1-9]\d*)(?:\.(\d{1,6}))?$/)
   if (!match) return null
 
   const amount = Number(match[1]) * 1_000_000 + Number((match[2] ?? '').padEnd(6, '0'))
@@ -165,7 +166,7 @@ export function parseAmount(value: string) {
 
 export function parseTipText(value: string) {
   const text = value.trim()
-  const mention = text.match(/<@([A-Z0-9_]+)(?:\|[^>]+)?>/)
+  const mention = text.match(/<@([A-Z0-9_]+)(?:\|([^>]+))?>/)
   if (!mention) return null
   const afterMention = text.slice((mention.index ?? 0) + mention[0].length).trim()
   const [first = '', ...rest] = afterMention.split(/\s+/)
@@ -177,6 +178,7 @@ export function parseTipText(value: string) {
       return {
         amount,
         memo: memoOnly?.[1]?.trim() || null,
+        ...(mention[2]?.trim() ? { recipientProviderLabel: mention[2].trim() } : {}),
         recipientProviderUserId: mention[1]!,
         token: null,
       }
@@ -188,6 +190,7 @@ export function parseTipText(value: string) {
     return {
       amount,
       memo: memo?.[1]?.trim() || null,
+      ...(mention[2]?.trim() ? { recipientProviderLabel: mention[2].trim() } : {}),
       recipientProviderUserId: mention[1]!,
       token,
     }
@@ -195,6 +198,7 @@ export function parseTipText(value: string) {
   return {
     amount: undefined,
     memo: afterMention.replace(/^for\s+/i, '').trim() || null,
+    ...(mention[2]?.trim() ? { recipientProviderLabel: mention[2].trim() } : {}),
     recipientProviderUserId: mention[1]!,
     token: null,
   }
@@ -443,6 +447,7 @@ async function createConfirmationRequired(
     provider: 'slack'
     providerChannelId: string
     providerId: string
+    recipientProviderLabel?: string
     recipientProviderUserId: string
     senderProviderUserId: string
   },
@@ -471,6 +476,7 @@ async function createConfirmationRequired(
     provider: input.provider,
     providerChannelId: input.providerChannelId,
     providerId: input.providerId,
+    recipientProviderLabel: input.recipientProviderLabel,
     recipientProviderUserId: input.recipientProviderUserId,
     senderProviderUserId: input.senderProviderUserId,
     tokenAddress,

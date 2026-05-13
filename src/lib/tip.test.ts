@@ -3,7 +3,9 @@ import * as Tip from '#/lib/tip.ts'
 
 test('parses positive decimal amounts', () => {
   expect(Tip.parseAmount('1')).toBe(1_000_000)
+  expect(Tip.parseAmount('$1')).toBe(1_000_000)
   expect(Tip.parseAmount('1.5')).toBe(1_500_000)
+  expect(Tip.parseAmount('$1.5')).toBe(1_500_000)
   expect(Tip.parseAmount('0.000001')).toBe(1)
   expect(Tip.parseAmount('123.456789')).toBe(123_456_789)
 })
@@ -35,6 +37,7 @@ test('parses tip mentions and memos', () => {
   expect(Tip.parseTipText('<@UMEMBER|member> for great work')).toEqual({
     amount: undefined,
     memo: 'great work',
+    recipientProviderLabel: 'member',
     recipientProviderUserId: 'UMEMBER',
     token: null,
   })
@@ -46,6 +49,12 @@ test('parses tip mentions and memos', () => {
   })
   expect(Tip.parseTipText('<@UMEMBER> 5')).toEqual({
     amount: 5_000_000,
+    memo: null,
+    recipientProviderUserId: 'UMEMBER',
+    token: null,
+  })
+  expect(Tip.parseTipText('<@UMEMBER> $0.002')).toEqual({
+    amount: 2_000,
     memo: null,
     recipientProviderUserId: 'UMEMBER',
     token: null,

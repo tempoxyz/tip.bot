@@ -13,6 +13,7 @@ export const payloadSchema = z.object({
   provider: z.literal('slack'),
   providerChannelId: z.string().min(1),
   providerId: z.string().min(1),
+  recipientProviderLabel: z.string().min(1).optional(),
   recipientProviderUserId: z.string().min(1),
   senderProviderUserId: z.string().min(1),
   tokenAddress: z.string().min(1),

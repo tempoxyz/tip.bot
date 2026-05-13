@@ -24,6 +24,11 @@ function Component() {
   const [error, setError] = React.useState<string | null>(null)
   const [status, setStatus] = React.useState<'idle' | 'confirming' | 'sent'>('idle')
   const [transactionHash, setTransactionHash] = React.useState<string | null>(null)
+  const recipient = data.ok
+    ? data.recipientProviderLabel
+      ? `@${data.recipientProviderLabel}`
+      : data.recipientProviderUserId
+    : null
 
   async function confirm() {
     if (!data.ok) return
@@ -122,16 +127,32 @@ function Component() {
               <div className="space-y-3 text-center">
                 <h1 className="text-3xl font-bold text-gray10 sm:text-4xl">Confirm payment</h1>
                 <p className="text-base text-gray9 sm:text-lg">
-                  Send {formatCurrencyAmount(data.amount, data.tokenCurrency)} {data.tokenSymbol} to{' '}
-                  {data.recipientProviderUserId}
-                  {data.memo ? ` for ${data.memo}` : ''}.
+                  Approve this payment in Tempo Wallet.
                 </p>
               </div>
               <div className="rounded-2xl border border-gray5 bg-bg2 p-6 shadow-xl sm:p-8">
-                <p className="text-base text-gray9">
+                <div className="space-y-4 rounded-xl bg-bg1 p-5">
+                  <div className="flex items-center justify-between gap-6">
+                    <span className="text-sm font-medium text-gray8">Amount</span>
+                    <span className="text-lg font-bold text-gray10">
+                      {formatCurrencyAmount(data.amount, data.tokenCurrency)} {data.tokenSymbol}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-6">
+                    <span className="text-sm font-medium text-gray8">To</span>
+                    <span className="text-lg font-bold text-gray10">{recipient}</span>
+                  </div>
+                  {data.memo ? (
+                    <div className="flex items-center justify-between gap-6">
+                      <span className="text-sm font-medium text-gray8">For</span>
+                      <span className="text-lg font-bold text-gray10">{data.memo}</span>
+                    </div>
+                  ) : null}
+                </div>
+                <p className="mt-6 text-base text-gray9">
                   {data.kind === 'reusable_access_key'
                     ? `Tipbot can send future ${data.tokenSymbol} tips from Slack, up to ${formatCurrencyAmount(data.accessKeyLimit, data.tokenCurrency)} per day. You can disconnect anytime.`
-                    : 'This approval is only for this payment.'}
+                    : 'Tipbot will use this approval once and won’t save a new access key.'}
                 </p>
                 <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
                   <button

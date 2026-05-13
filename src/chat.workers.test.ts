@@ -77,9 +77,11 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001.`,
+      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 Receipt`,
     )
-    await expectSlackMessage('Receipt')
+    await expectSlackMessageNotContaining(
+      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001. Receipt`,
+    )
     expect(tip).toMatchObject({
       amount: 1000,
       recipient_provider_user_id: Constants.slack.memberUserId,
@@ -101,9 +103,11 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for coffee.`,
+      `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for coffee Receipt`,
     )
-    await expectSlackMessage('Receipt')
+    await expectSlackMessageNotContaining(
+      `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for coffee. Receipt`,
+    )
     expect(tip.confirmed_at).toEqual(expect.any(String))
     expect(tip.transaction_hash).toEqual(expect.any(String))
   }, 20_000) // 20 seconds
@@ -111,7 +115,7 @@ describe('/tip @account', () => {
   test('sends tip with custom amount', async () => {
     await connectTipAccounts()
 
-    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}> 0.002`)
+    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}> $0.002`)
     const tip = await db
       .selectFrom('tip')
       .select(['amount', 'confirmed_at', 'transaction_hash'])
@@ -120,9 +124,11 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.002.`,
+      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.002 Receipt`,
     )
-    await expectSlackMessage('Receipt')
+    await expectSlackMessageNotContaining(
+      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.002. Receipt`,
+    )
     expect(tip.confirmed_at).toEqual(expect.any(String))
     expect(tip.transaction_hash).toEqual(expect.any(String))
   }, 20_000) // 20 seconds
@@ -181,8 +187,7 @@ describe('/tip @account', () => {
 
     expect(firstResponse.status).toBe(200)
     expect(secondResponse.status).toBe(200)
-    await expectSlackMessage('Payment sent.')
-    await expectSlackMessage('Receipt')
+    await expectSlackMessage('Payment sent Receipt')
     expect(tips).toHaveLength(1)
   }, 20_000) // 20 seconds
 
@@ -232,7 +237,7 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      'Payment not sent. Your wallet has insufficient funds. Add funds to your Tempo Wallet and try again.',
+      'Payment not sent. Your wallet has insufficient funds. Add funds and try again.',
     )
     const postEphemeralCall = fetchSpy.mock.calls.find((call) => {
       const input = call[0]
@@ -251,7 +256,7 @@ describe('/tip @account', () => {
     expect(blocks).toEqual([
       {
         text: {
-          text: 'Payment not sent. Your wallet has insufficient funds. <https://wallet.tempo.xyz|Add funds> to your Tempo Wallet and try again.',
+          text: 'Payment not sent. Your wallet has insufficient funds. <https://wallet.tempo.xyz|Add funds> and try again.',
           type: 'mrkdwn',
         },
         type: 'section',
@@ -296,7 +301,7 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      'Payment not sent. Your wallet has insufficient funds. Add funds to your Tempo Wallet and try again.',
+      'Payment not sent. Your wallet has insufficient funds. Add funds and try again.',
     )
   })
 

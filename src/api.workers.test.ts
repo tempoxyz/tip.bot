@@ -332,7 +332,16 @@ describe('/api/confirm/:token', () => {
   })
 
   test('confirms one-time payments', async () => {
-    const confirmation = await createConfirmationToken()
+    const confirmation = await createConfirmationToken({
+      amount: 1,
+      memo: `confirmed-${Nanoid.generate()}`,
+    })
+    await Chat.getChat().initialize()
+    await Chat.getSlack().setInstallation(confirmation.payload.providerId, {
+      botToken: Constants.slack.botToken,
+      botUserId: Constants.slack.botUserId,
+      teamName: Constants.slack.teamName,
+    })
     const keyAuthorization = await AccountLink.signKeyAuthorization(confirmation.senderRoot, {
       accessKeyAddress: confirmation.accessKey.address,
       chainId: confirmation.payload.chainId,
@@ -346,6 +355,7 @@ describe('/api/confirm/:token', () => {
       json: { address: confirmation.senderRoot.address, keyAuthorization },
       param: { token: confirmation.token },
     })
+    await Promise.all(waitUntil)
     const tip = await db
       .selectFrom('tip')
       .selectAll()
@@ -356,18 +366,29 @@ describe('/api/confirm/:token', () => {
       .selectAll()
       .where('account_id', '=', confirmation.senderAccount.id)
       .execute()
+    const history = await slack.conversations.history({ channel: Constants.slack.channelId })
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({ ok: true })
     expect(tip.confirmed_at).toEqual(expect.any(String))
     expect(tip.transaction_hash).toEqual(expect.any(String))
     expect(accessKeys).toHaveLength(0)
+    expect(
+      history.messages?.some((message) => message.text?.includes(confirmation.payload.memo!)),
+    ).toBe(true)
   }, 20_000) // 20 seconds
 
   test('confirms reusable access keys', async () => {
     const confirmation = await createConfirmationToken({
       amount: 1,
       kind: 'reusable_access_key',
+      memo: `reusable-${Nanoid.generate()}`,
+    })
+    await Chat.getChat().initialize()
+    await Chat.getSlack().setInstallation(confirmation.payload.providerId, {
+      botToken: Constants.slack.botToken,
+      botUserId: Constants.slack.botUserId,
+      teamName: Constants.slack.teamName,
     })
     const keyAuthorization = await AccountLink.signKeyAuthorization(confirmation.senderRoot, {
       accessKeyAddress: confirmation.accessKey.address,
@@ -380,6 +401,7 @@ describe('/api/confirm/:token', () => {
       json: { address: confirmation.senderRoot.address, keyAuthorization },
       param: { token: confirmation.token },
     })
+    await Promise.all(waitUntil)
     const tip = await db
       .selectFrom('tip')
       .selectAll()
@@ -390,6 +412,7 @@ describe('/api/confirm/:token', () => {
       .selectAll()
       .where('account_id', '=', confirmation.senderAccount.id)
       .execute()
+    const history = await slack.conversations.history({ channel: Constants.slack.channelId })
 
     expect(response.status).toBe(200)
     expect(tip.confirmed_at).toEqual(expect.any(String))
@@ -398,6 +421,9 @@ describe('/api/confirm/:token', () => {
       address: confirmation.accessKey.address,
       token_address: Tempo.addressLookup.pathUsd,
     })
+    expect(
+      history.messages?.some((message) => message.text?.includes(confirmation.payload.memo!)),
+    ).toBe(true)
   }, 20_000) // 20 seconds
 
   test('does not post duplicate receipt when confirmation is retried', async () => {

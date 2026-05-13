@@ -292,6 +292,7 @@ export const api = new Hono<{
         kind: data.payload.kind,
         memo: data.payload.memo,
         ok: true as const,
+        recipientProviderLabel: data.payload.recipientProviderLabel,
         recipientProviderUserId: data.payload.recipientProviderUserId,
         tokenAddress: Address.checksum(data.payload.tokenAddress),
         tokenCurrency: metadata.currency,
@@ -339,6 +340,7 @@ export const api = new Hono<{
         if (result.status === 'sent')
           c.executionCtx.waitUntil(
             (async () => {
+              await Chat.getChat().initialize()
               const installation = await Chat.getSlack().getInstallation(data.payload.providerId)
               if (!installation) return
 
@@ -346,13 +348,14 @@ export const api = new Hono<{
                 ? formatCurrencyAmount(result.amount, result.tokenCurrency)
                 : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
               const text = `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} <@${result.recipientProviderUserId}> ${amount}${result.memo ? ` for ${result.memo}` : ''}.`
+              const receiptText = text.replace(/\.$/, '')
               const body = new URLSearchParams()
               body.set(
                 'blocks',
                 JSON.stringify([
                   {
                     text: {
-                      text: `${text} <${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`,
+                      text: `${receiptText} <${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`,
                       type: 'mrkdwn',
                     },
                     type: 'section',
@@ -360,7 +363,7 @@ export const api = new Hono<{
                 ]),
               )
               body.set('channel', data.payload.providerChannelId.replace(/^slack:/, ''))
-              body.set('text', `${text} Receipt`)
+              body.set('text', `${receiptText} Receipt`)
               body.set('unfurl_links', 'false')
               body.set('unfurl_media', 'false')
               const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
@@ -378,7 +381,9 @@ export const api = new Hono<{
                 await response.json(),
               )
               if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postMessage failed.')
-            })().catch(console.error),
+            })().catch((error) => {
+              console.error('Failed to post Slack receipt after confirmation:', error)
+            }),
           )
         return c.json({ ok: true as const, transactionHash: result.transactionHash })
       } catch (error) {

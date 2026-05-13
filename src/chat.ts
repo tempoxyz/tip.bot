@@ -575,6 +575,7 @@ const handlers = {
       provider: ctx.provider.type,
       providerChannelId: event.channel.id,
       providerId: ctx.provider.id,
+      recipientProviderLabel: parsed.recipientProviderLabel,
       recipientProviderUserId: parsed.recipientProviderUserId,
       senderProviderUserId: event.user.userId,
       tokenAddress: tokenAddress ?? undefined,
@@ -627,7 +628,7 @@ const handlers = {
           return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
         if (result.code === 'pending') return 'Payment still sending.'
         if (result.code === 'insufficient_funds')
-          return 'Payment not sent. Your wallet has insufficient funds. Add funds to your Tempo Wallet and try again.'
+          return 'Payment not sent. Your wallet has insufficient funds. Add funds and try again.'
         return 'Payment failed.'
       })()
       if (result.code === 'insufficient_funds') {
@@ -895,6 +896,7 @@ async function postConnectLink(event: chat.SlashCommandEvent, ctx: HandlerContex
 }
 
 async function postConfirmationLink(event: chat.SlashCommandEvent, confirmUrl: string) {
+  const token = new URL(confirmUrl).pathname.split('/').at(-1) ?? confirmUrl
   await event.channel.postEphemeral(
     event.user,
     {
@@ -905,7 +907,9 @@ async function postConfirmationLink(event: chat.SlashCommandEvent, confirmUrl: s
             chat.LinkButton({ label: 'Confirm payment', style: 'primary', url: confirmUrl }),
             chat.Button({ id: 'confirm_cancel', label: 'Cancel' }),
           ]),
-          chat.CardText(`Link expires in 10 minutes. ${confirmUrl}`, { style: 'muted' }),
+          chat.CardText(`Link expires in 10 minutes. <${confirmUrl}|${token.slice(0, 8)}...>`, {
+            style: 'muted',
+          }),
         ],
       }),
       fallbackText: `Tipbot needs your approval to send this payment.\nConfirm payment: ${confirmUrl}\nLink expires in 10 minutes.`,
@@ -928,10 +932,14 @@ async function postSlackReceiptMessage(
   const installation = await getSlack().getInstallation(ctx.provider.id)
   if (!installation) throw new Error('Tibot app not installed for this workspace.')
 
+  const receiptText = text.replace(/\.$/, '')
   const body = new URLSearchParams()
-  body.set('blocks', JSON.stringify(createReceiptBlocks(text, chainId, transactionHash, context)))
+  body.set(
+    'blocks',
+    JSON.stringify(createReceiptBlocks(receiptText, chainId, transactionHash, context)),
+  )
   body.set('channel', event.channel.id.replace(/^slack:/, ''))
-  body.set('text', `${text}${context ? ` ${context}` : ''} Receipt`)
+  body.set('text', `${receiptText}${context ? ` ${context}` : ''} Receipt`)
   if (user) body.set('user', user.userId)
   else {
     body.set('unfurl_links', 'false')

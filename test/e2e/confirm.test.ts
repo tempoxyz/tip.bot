@@ -23,6 +23,7 @@ test('slack member opens valid confirmation link', async ({ app, page }) => {
     provider: 'slack',
     providerChannelId: 'C000000001',
     providerId: 'T000000001',
+    recipientProviderLabel: 'member',
     recipientProviderUserId: 'U000000002',
     senderProviderUserId: 'U000000001',
     tokenAddress: Tempo.addressLookup.pathUsd,
@@ -32,7 +33,10 @@ test('slack member opens valid confirmation link', async ({ app, page }) => {
   await page.goto(app.url({ params: { token }, to: '/confirm/$token' }))
 
   await expect(page.getByRole('heading', { name: 'Confirm payment' })).toBeVisible()
-  await expect(page.getByText('Send $5.00 PathUSD to U000000002 for lunch.')).toBeVisible()
+  await expect(page.getByText('Approve this payment in Tempo Wallet.')).toBeVisible()
+  await expect(page.getByText('$5.00 PathUSD')).toBeVisible()
+  await expect(page.getByText('@member')).toBeVisible()
+  await expect(page.getByText('lunch')).toBeVisible()
   await expect(page.getByText('Tipbot can send future PathUSD tips from Slack')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Confirm payment' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Cancel' })).toBeVisible()
@@ -53,6 +57,7 @@ test('slack member confirms payment with wallet approval', async ({ app, page })
     provider: 'slack',
     providerChannelId: 'C000000001',
     providerId: 'T000000001',
+    recipientProviderLabel: 'member',
     recipientProviderUserId: 'U000000002',
     senderProviderUserId: 'U000000001',
     tokenAddress: Tempo.addressLookup.pathUsd,
