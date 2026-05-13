@@ -311,22 +311,7 @@ const handlers = {
         .where('revoked_at', 'is', null)
         .executeTakeFirst()
       if (accessKey) {
-        await event.channel.postEphemeral(
-          event.user,
-          {
-            card: chat.Card({
-              children: [
-                chat.CardText(
-                  'Send and receive payments in this workspace.\nUse `/tip disconnect` to disconnect.',
-                ),
-              ],
-              title: 'Already connected to Tipbot',
-            }),
-            fallbackText:
-              'Already connected to Tipbot\nSend and receive payments in this workspace.\nUse `/tip disconnect` to disconnect.',
-          },
-          { fallbackToDM: false },
-        )
+        await event.channel.postEphemeral(event.user, 'Already connected', { fallbackToDM: false })
         return
       }
     }
@@ -335,13 +320,10 @@ const handlers = {
     const token = Nanoid.generate()
     const accessKey = AccessKey.generate()
     const linkAction = member.account_id ? 'Reconnect' : 'Connect'
-    const linkButtonLabel = member.account_id ? 'Refresh connection' : 'Connect Tipbot'
-    const linkDescription = member.account_id
-      ? 'Tipbot connection needs a quick refresh before sending payments.'
-      : 'Connect once to send and receive payments in Slack.'
-    const linkTitle = member.account_id ? 'Refresh Tipbot connection' : 'Connect to Tipbot'
+    const linkButtonLabel = member.account_id ? 'Refresh connection' : 'Connect to Tipbot'
+    const linkDescription = 'Link expires in 10 minutes.'
     const linkUrl = `https://${env.HOST}/connect/${token}`
-    const linkText = `${linkTitle}\n${linkDescription}\nThis private link expires in 10 minutes.\n${linkAction} to Tipbot: ${linkUrl}`
+    const linkText = `${linkAction} to Tipbot: ${linkUrl}\n${linkDescription}`
     const linkExpiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString() // 10 minutes
     const accessKeyExpiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
     await ctx.db
@@ -373,14 +355,13 @@ const handlers = {
       {
         card: chat.Card({
           children: [
-            chat.CardText(`${linkDescription}\nThis private link expires in 10 minutes.`),
-            chat.CardLink({ label: 'Private link', url: linkUrl }),
+            chat.CardLink({ label: `${linkAction} to Tipbot`, url: linkUrl }),
             chat.Actions([
               chat.LinkButton({ label: linkButtonLabel, style: 'primary', url: linkUrl }),
               chat.Button({ id: 'connect_cancel', label: 'Cancel' }),
             ]),
+            chat.CardText(linkDescription, { style: 'muted' }),
           ],
-          title: linkTitle,
         }),
         fallbackText: linkText,
       },
@@ -426,31 +407,52 @@ const handlers = {
       fallbackToDM: false,
     })
   },
-  async help(event, _ctx) {
-    await event.channel.postEphemeral(
-      event.user,
-      {
-        card: chat.Card({
-          children: [
-            chat.Table({
-              headers: ['Command', 'Description'],
-              rows: [
-                ['`/tip @account for coffee`', 'Send a payment in chat'],
-                ['`/tip config`', 'View workspace settings'],
-                ['`/tip connect`', 'Connect Tipbot'],
-                ['`/tip disconnect`', 'Disconnect Tipbot'],
-                ['`/tip help`', 'Show commands'],
-                ['`/tip status`', 'Check Tipbot connection'],
-              ],
-            }),
+  async help(event, ctx) {
+    if (ctx.provider.type !== 'slack') throw new Error('Provider is not implemented yet.')
+
+    const installation = await getSlack().getInstallation(ctx.provider.id)
+    if (!installation) return
+
+    const rows = [
+      ['/tip @account for coffee', 'Send a payment in chat'],
+      ['/tip config', 'View workspace settings'],
+      ['/tip connect', 'Connect Tipbot'],
+      ['/tip disconnect', 'Disconnect Tipbot'],
+      ['/tip help', 'Show commands'],
+      ['/tip status', 'Check Tipbot connection'],
+    ]
+    const body = new URLSearchParams()
+    body.set('channel', event.channel.id.replace(/^slack:/, ''))
+    body.set('text', `Tipbot commands\n${rows.map((row) => `${row[0]} ${row[1]}`).join('\n')}`)
+    body.set(
+      'blocks',
+      JSON.stringify([
+        { text: { emoji: true, text: 'Tipbot commands', type: 'plain_text' }, type: 'header' },
+        {
+          rows: [
+            [slackTableCell('Command'), slackTableCell('Description')],
+            ...rows.map((row) => [slackTableCell(row[0], { code: true }), slackTableCell(row[1])]),
           ],
-          title: 'Tipbot commands',
-        }),
-        fallbackText:
-          'Tipbot commands\n`/tip @account for coffee` Send a payment in chat\n`/tip config` View workspace settings\n`/tip connect` Connect Tipbot\n`/tip disconnect` Disconnect Tipbot\n`/tip help` Show commands\n`/tip status` Check Tipbot connection',
-      },
-      { fallbackToDM: false },
+          type: 'table',
+        },
+      ]),
     )
+    body.set('user', event.user.userId)
+    const response = await getSlack().withBotToken(installation.botToken, () =>
+      fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
+        body,
+        headers: { authorization: `Bearer ${installation.botToken}` },
+        method: 'POST',
+      }),
+    )
+    const json = z.parse(
+      z.object({
+        error: z.string().optional(),
+        ok: z.boolean().optional(),
+      }),
+      await response.json(),
+    )
+    if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postEphemeral failed.')
   },
   async status(event, ctx) {
     const workspace = await ctx.db
@@ -488,7 +490,22 @@ const handlers = {
 
     await event.channel.postEphemeral(
       event.user,
-      `Account ID: ${member.account_id}\nAddress: ${member.account_address}\nProvider user ID: ${member.provider_user_id}`,
+      {
+        card: chat.Card({
+          children: [
+            chat.Table({
+              headers: ['Field', 'Value'],
+              rows: [
+                ['Account ID', member.account_id],
+                ['Address', member.account_address],
+                ['Provider user ID', member.provider_user_id],
+              ],
+            }),
+          ],
+          title: 'Status',
+        }),
+        fallbackText: `Status\nAccount ID ${member.account_id}\nAddress ${member.account_address}\nProvider user ID ${member.provider_user_id}`,
+      },
       { fallbackToDM: false },
     )
   },
@@ -663,14 +680,14 @@ function configCard(
   return {
     card: chat.Card({
       children: [
-        chat.Fields([
-          chat.Field({ label: 'Network', value: networkLabel }),
-          chat.Field({
-            label: 'Default token',
-            value: `<${Tempo.formatTokenLink(workspace.chain_id, tokenAddress)}|${token.symbol}>`,
-          }),
-          chat.Field({ label: 'Default amount', value: formatAmount(workspace.default_amount) }),
-        ]),
+        chat.Table({
+          headers: ['Setting', 'Value'],
+          rows: [
+            ['Network', networkLabel],
+            ['Default token', token.symbol],
+            ['Default amount', formatAmount(workspace.default_amount)],
+          ],
+        }),
         ...(options?.canEdit
           ? [
               chat.Actions([
@@ -687,5 +704,17 @@ function configCard(
       title: options?.title ?? 'Workspace settings',
     }),
     fallbackText: `${options?.title ?? 'Workspace settings'}\nNetwork ${networkLabel}\nDefault token ${token.symbol} ${Tempo.formatTokenLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}`,
+  }
+}
+
+function slackTableCell(text: string, style?: { code?: boolean }) {
+  return {
+    elements: [
+      {
+        elements: [style ? { style, text, type: 'text' } : { text, type: 'text' }],
+        type: 'rich_text_section',
+      },
+    ],
+    type: 'rich_text',
   }
 }

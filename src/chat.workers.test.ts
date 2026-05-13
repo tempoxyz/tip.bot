@@ -176,10 +176,12 @@ describe('/tip config', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage('Workspace settings')
-    await expectSlackMessage('Network: Testnet')
-    await expectSlackMessage('Default token:')
+    await expectSlackMessage('Network')
+    await expectSlackMessage('Testnet')
+    await expectSlackMessage('Default token')
     await expectSlackMessage('pathUSD')
-    await expectSlackMessage('Default amount: 0.001')
+    await expectSlackMessage('Default amount')
+    await expectSlackMessage('0.001')
   })
 
   test('handles missing workspace', async () => {
@@ -357,8 +359,8 @@ describe('/tip connect', () => {
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Connect to Tipbot')
-    await expectSlackMessage('This private link expires in 10 minutes.')
+    await expectSlackMessage('/connect/')
+    await expectSlackMessage('Link expires in 10 minutes.')
     expect(link).toEqual(expect.schemaMatching(Schema.account_link_token))
     expect(member).toEqual(expect.schemaMatching(Schema.member))
     expect(link.access_key_address).toEqual(expect.stringMatching(/^0x[0-9a-fA-F]{40}$/))
@@ -434,8 +436,7 @@ describe('/tip connect', () => {
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Connect to Tipbot')
-    await expectSlackMessage('Connect once to send and receive payments in Slack.')
+    await expectSlackMessage('Link expires in 10 minutes.')
     expect(members).toHaveLength(1)
     expect(link.member_id).toBe(member.id)
   })
@@ -457,8 +458,7 @@ describe('/tip connect', () => {
     const response = await postSlashCommand('connect')
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Already connected to Tipbot')
-    await expectSlackMessage('Send and receive payments in this workspace.')
+    await expectSlackMessage('Already connected')
     await expectSlackMessageNotContaining(account.address)
   })
 
@@ -487,9 +487,7 @@ describe('/tip connect', () => {
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Refresh Tipbot connection')
-    await expectSlackMessage('Tipbot connection needs a quick refresh before sending payments.')
-    await expectSlackMessage('This private link expires in 10 minutes.')
+    await expectSlackMessage('Link expires in 10 minutes.')
     await expectSlackMessageNotContaining('Use `/tip disconnect` to disconnect.')
     expect(link.member_id).toEqual(expect.any(String))
   })
@@ -585,9 +583,12 @@ describe('/tip status', () => {
     const response = await postSlashCommand('status')
 
     expect(response.status).toBe(200)
-    await expectSlackMessage(`Account ID: ${account.id}`)
-    await expectSlackMessage(`Address: ${account.address}`)
-    await expectSlackMessage(`Provider user ID: ${Constants.slack.adminUserId}`)
+    await expectSlackMessage('Account ID')
+    await expectSlackMessage(account.id)
+    await expectSlackMessage('Address')
+    await expectSlackMessage(account.address)
+    await expectSlackMessage('Provider user ID')
+    await expectSlackMessage(Constants.slack.adminUserId)
   })
 
   test('handles no connected account', async () => {

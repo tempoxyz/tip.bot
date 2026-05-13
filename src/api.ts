@@ -1,5 +1,4 @@
 import { Handler } from 'accounts/server'
-import { Card, CardText } from 'chat'
 import { Hono } from 'hono'
 import { Address, Base64, Hex } from 'ox'
 import { decodeFunctionData, http } from 'viem'
@@ -10,6 +9,7 @@ import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as hono from '#/lib/hono.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
+import * as Slack from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
 import * as DB from '#db/client.ts'
@@ -236,22 +236,9 @@ export const api = new Hono<{
                       ? link.provider_channel_id!
                       : `slack:${link.provider_channel_id!}`,
                   )
-                  .postEphemeral(
-                    link.member_provider_user_id,
-                    {
-                      card: Card({
-                        children: [
-                          CardText(
-                            'Send and receive payments in Slack.\nTry `/tip @account for coffee`.',
-                          ),
-                        ],
-                        title: 'Connected to Tipbot',
-                      }),
-                      fallbackText:
-                        'Connected to Tipbot\nSend and receive payments in Slack.\nTry `/tip @account for coffee`.',
-                    },
-                    { fallbackToDM: false },
-                  ),
+                  .postEphemeral(link.member_provider_user_id, 'Connected', {
+                    fallbackToDM: false,
+                  }),
               )
             })().catch((error) => {
               console.error('Failed to notify Slack member after wallet connection:', error)
@@ -272,9 +259,49 @@ export const api = new Hono<{
   )
   .post('/api/chat/slack', async (c) => {
     const request = c.req.raw
+    const body = await request.text()
+    const params = request.headers
+      .get('content-type')
+      ?.includes('application/x-www-form-urlencoded')
+      ? new URLSearchParams(body)
+      : null
+    if (params?.has('command') && !params.has('payload')) {
+      if (
+        !(await Slack.verifySlackSignature({
+          body,
+          signature: request.headers.get('x-slack-signature'),
+          signingSecret: c.env.SLACK_SIGNING_SECRET,
+          timestamp: request.headers.get('x-slack-request-timestamp'),
+        }))
+      )
+        return new Response('Invalid signature', { status: 401 })
+
+      const tasks: Promise<unknown>[] = []
+      const task = (async () => {
+        await Chat.getChat().webhooks.slack(
+          new Request(request.url, {
+            body,
+            headers: request.headers,
+            method: request.method,
+          }),
+          {
+            waitUntil(promise) {
+              tasks.push(promise)
+              try {
+                c.executionCtx.waitUntil(promise)
+              } catch {}
+            },
+          },
+        )
+        await Promise.all(tasks)
+      })()
+      c.executionCtx.waitUntil(task)
+      return new Response('', { status: 200 })
+    }
+
     return await Chat.getChat().webhooks.slack(
       new Request(request.url, {
-        body: await request.text(),
+        body,
         headers: request.headers,
         method: request.method,
       }),
