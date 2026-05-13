@@ -121,11 +121,15 @@ const actions = {
       return
     }
 
-    const tokenAddress = workspace.default_token_address ?? Tempo.pathUsdAddress
+    const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
     const tokenValue = (() => {
-      if (tokenAddress.toLowerCase() === Tempo.alphaUsdAddress.toLowerCase()) return 'AlphaUSD'
-      if (tokenAddress.toLowerCase() === Tempo.betaUsdAddress.toLowerCase()) return 'BetaUSD'
-      if (tokenAddress.toLowerCase() === Tempo.thetaUsdAddress.toLowerCase()) return 'ThetaUSD'
+      if (tokenAddress.toLowerCase() === Tempo.addressLookup.usdcE.toLowerCase()) return 'USDC.e'
+      if (tokenAddress.toLowerCase() === Tempo.addressLookup.usdt0.toLowerCase()) return 'USDT0'
+      if (tokenAddress.toLowerCase() === Tempo.addressLookup.alphaUsd.toLowerCase())
+        return 'AlphaUSD'
+      if (tokenAddress.toLowerCase() === Tempo.addressLookup.betaUsd.toLowerCase()) return 'BetaUSD'
+      if (tokenAddress.toLowerCase() === Tempo.addressLookup.thetaUsd.toLowerCase())
+        return 'ThetaUSD'
       return 'pathUSD'
     })()
     await event.openModal(
@@ -134,7 +138,7 @@ const actions = {
         children: [
           chat.Select({
             id: 'network',
-            initialOption: workspace.chain_id === Tempo.mainnetChainId ? 'mainnet' : 'testnet',
+            initialOption: workspace.chain_id === Tempo.chainLookup.mainnet ? 'mainnet' : 'testnet',
             label: 'Network',
             options: [
               chat.SelectOption({ label: 'Mainnet', value: 'mainnet' }),
@@ -147,6 +151,8 @@ const actions = {
             label: 'Default token',
             options: [
               chat.SelectOption({ label: 'PathUSD', value: 'pathUSD' }),
+              chat.SelectOption({ label: 'USDC.e', value: 'USDC.e' }),
+              chat.SelectOption({ label: 'USDT0', value: 'USDT0' }),
               chat.SelectOption({ label: 'AlphaUSD', value: 'AlphaUSD' }),
               chat.SelectOption({ label: 'BetaUSD', value: 'BetaUSD' }),
               chat.SelectOption({ label: 'ThetaUSD', value: 'ThetaUSD' }),
@@ -167,6 +173,9 @@ const actions = {
   async connect_cancel(event) {
     await event.adapter.deleteMessage(event.threadId, event.messageId)
   },
+  async confirm_cancel(event) {
+    await event.adapter.deleteMessage(event.threadId, event.messageId)
+  },
 } as const satisfies Record<
   (typeof actionNames)[number],
   (event: chat.ActionEvent) => Promise<void>
@@ -183,15 +192,17 @@ const modalSubmits = {
     if (!(await isSlackAdmin(metadata.providerId, event.user.userId))) return
 
     const chainId = (() => {
-      if (event.values.network === 'mainnet') return Tempo.mainnetChainId
-      if (event.values.network === 'testnet') return Tempo.moderatoChainId
+      if (event.values.network === 'mainnet') return Tempo.chainLookup.mainnet
+      if (event.values.network === 'testnet') return Tempo.chainLookup.testnet
       return null
     })()
     const tokenAddress = (() => {
-      if (event.values.default_token === 'pathUSD') return Tempo.pathUsdAddress
-      if (event.values.default_token === 'AlphaUSD') return Tempo.alphaUsdAddress
-      if (event.values.default_token === 'BetaUSD') return Tempo.betaUsdAddress
-      if (event.values.default_token === 'ThetaUSD') return Tempo.thetaUsdAddress
+      if (event.values.default_token === 'pathUSD') return Tempo.addressLookup.pathUsd
+      if (event.values.default_token === 'USDC.e') return Tempo.addressLookup.usdcE
+      if (event.values.default_token === 'USDT0') return Tempo.addressLookup.usdt0
+      if (event.values.default_token === 'AlphaUSD') return Tempo.addressLookup.alphaUsd
+      if (event.values.default_token === 'BetaUSD') return Tempo.addressLookup.betaUsd
+      if (event.values.default_token === 'ThetaUSD') return Tempo.addressLookup.thetaUsd
       return null
     })()
     const amount = Tip.parseAmount(event.values.default_amount ?? '')
@@ -303,8 +314,8 @@ const handlers = {
     const installation = await getSlack().getInstallation(ctx.provider.id)
     if (!installation) return
 
-    const rows = [
-      ['/tip @account for coffee', 'Send payment in chat'],
+    const commandRows = [
+      ['/tip @account [amount] [token] [for memo]', 'Send payment in chat'],
       ['/tip config', 'Manage workspace configuration'],
       ['/tip connect', 'Connect to Tipbot'],
       ['/tip disconnect', 'Disconnect from Tipbot'],
@@ -312,16 +323,49 @@ const handlers = {
       ['/tip leaderboard', 'Show top tippers and recipients'],
       ['/tip status', 'Check connection status'],
     ]
+    const paymentRows = [
+      ['/tip @account', 'Send the default amount'],
+      ['/tip @account for coffee', 'Send default amount with memo'],
+      ['/tip @account 0.005', 'Send custom amount'],
+      ['/tip @account 0.005 for coffee', 'Send custom amount with memo'],
+      ['/tip @account 0.005 USDC', 'Send custom token'],
+      ['/tip @account 0.005 USDC for coffee', 'Send custom token with memo'],
+    ]
     const body = new URLSearchParams()
     body.set('channel', event.channel.id.replace(/^slack:/, ''))
-    body.set('text', rows.map((row) => `${row[0]} ${row[1]}`).join('\n'))
+    body.set(
+      'text',
+      [
+        commandRows.map((row) => `${row[0]} ${row[1]}`).join('\n'),
+        '',
+        'Payment examples',
+        paymentRows.map((row) => `${row[0]} ${row[1]}`).join('\n'),
+      ].join('\n'),
+    )
     body.set(
       'blocks',
       JSON.stringify([
         {
           rows: [
             [slackTableCell('Command'), slackTableCell('Description')],
-            ...rows.map((row) => [slackTableCell(row[0], { code: true }), slackTableCell(row[1])]),
+            ...commandRows.map((row) => [
+              slackTableCell(row[0], { code: true }),
+              slackTableCell(row[1]),
+            ]),
+          ],
+          type: 'table',
+        },
+        {
+          text: { text: 'Payment examples', type: 'mrkdwn' },
+          type: 'section',
+        },
+        {
+          rows: [
+            [slackTableCell('Example'), slackTableCell('Description')],
+            ...paymentRows.map((row) => [
+              slackTableCell(row[0], { code: true }),
+              slackTableCell(row[1]),
+            ]),
           ],
           type: 'table',
         },
@@ -375,9 +419,7 @@ const handlers = {
       workspaceId: workspace.id,
     })
     if (received.length === 0 && sent.length === 0) {
-      await event.channel.postEphemeral(event.user, 'No confirmed tips yet.', {
-        fallbackToDM: false,
-      })
+      await event.channel.post('No confirmed tips yet.')
       return
     }
 
@@ -418,7 +460,7 @@ const handlers = {
             [slackTableCell('Rank'), slackTableCell('Account'), slackTableCell('Tips')],
             ...received.map((row, index) => [
               slackTableCell(String(index + 1)),
-              slackTableCell(`<@${row.providerUserId}>`),
+              slackTableUserCell(row.providerUserId),
               slackTableCell(String(row.tipCount)),
             ]),
           ],
@@ -433,7 +475,7 @@ const handlers = {
             [slackTableCell('Rank'), slackTableCell('Account'), slackTableCell('Tips')],
             ...sent.map((row, index) => [
               slackTableCell(String(index + 1)),
-              slackTableCell(`<@${row.providerUserId}>`),
+              slackTableUserCell(row.providerUserId),
               slackTableCell(String(row.tipCount)),
             ]),
           ],
@@ -441,9 +483,10 @@ const handlers = {
         },
       ]),
     )
-    body.set('user', event.user.userId)
+    body.set('unfurl_links', 'false')
+    body.set('unfurl_media', 'false')
     const response = await getSlack().withBotToken(installation.botToken, () =>
-      fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
+      fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
         body,
         headers: { authorization: `Bearer ${installation.botToken}` },
         method: 'POST',
@@ -456,7 +499,7 @@ const handlers = {
       }),
       await response.json(),
     )
-    if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postEphemeral failed.')
+    if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postMessage failed.')
   },
   async status(event, ctx) {
     const workspace = await ctx.db
@@ -507,13 +550,34 @@ const handlers = {
       return
     }
 
+    const workspace = await ctx.db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', ctx.provider.type)
+      .where('provider_id', '=', ctx.provider.id)
+      .executeTakeFirst()
+    const tokenAddress = parsed.token
+      ? Tempo.getTokenAddress(workspace?.chain_id ?? Tempo.chainLookup.mainnet, parsed.token)
+      : null
+    if (parsed.token && !tokenAddress) {
+      await event.channel.postEphemeral(
+        event.user,
+        'Payment not sent. This token is not supported on this network.',
+        { fallbackToDM: false },
+      )
+      return
+    }
+
     const result = await Tip.handleTipRequest(env, {
+      amount: parsed.amount,
       idempotencyKey: `command:${ctx.provider.id}:${event.triggerId}`,
       memo: parsed.memo,
       provider: ctx.provider.type,
+      providerChannelId: event.channel.id,
       providerId: ctx.provider.id,
       recipientProviderUserId: parsed.recipientProviderUserId,
       senderProviderUserId: event.user.userId,
+      tokenAddress: tokenAddress ?? undefined,
     }).catch(
       (error) =>
         ({
@@ -548,6 +612,10 @@ const handlers = {
           : undefined,
       )
     else {
+      if (result.code === 'confirmation_required' && result.confirmUrl) {
+        await postConfirmationLink(event, result.confirmUrl)
+        return
+      }
       if (result.code === 'sender_unconnected' || result.code === 'missing_sender_access_key') {
         await postConnectLink(event, ctx)
         return
@@ -623,7 +691,7 @@ const handlers = {
 
 const commandNames = ['config', 'connect', 'disconnect', 'help', 'leaderboard', 'status'] as const
 const commandPattern = new RegExp(`^(${commandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
-const actionNames = ['config_edit', 'connect_cancel'] as const
+const actionNames = ['config_edit', 'connect_cancel', 'confirm_cancel'] as const
 const modalSubmitNames = ['config_edit'] as const
 
 type HandlerContext = {
@@ -755,14 +823,20 @@ async function postConnectLink(event: chat.SlashCommandEvent, ctx: HandlerContex
   }
 
   if (member.account_id) {
-    const accessKey = await ctx.db
+    const accessKeys = await ctx.db
       .selectFrom('access_key')
-      .select(['id'])
+      .select(['id', 'token_address'])
       .where('account_id', '=', member.account_id)
       .where('chain_id', '=', workspace.chain_id)
       .where('expires_at', '>', new Date().toISOString())
       .where('revoked_at', 'is', null)
-      .executeTakeFirst()
+      .execute()
+    const accessKey = accessKeys.find(
+      (row) =>
+        !row.token_address ||
+        row.token_address.toLowerCase() ===
+          (workspace.default_token_address ?? Tempo.addressLookup.pathUsd).toLowerCase(),
+    )
     if (accessKey) {
       await event.channel.postEphemeral(event.user, 'Already connected', { fallbackToDM: false })
       return
@@ -815,6 +889,26 @@ async function postConnectLink(event: chat.SlashCommandEvent, ctx: HandlerContex
         ],
       }),
       fallbackText: linkText,
+    },
+    { fallbackToDM: false },
+  )
+}
+
+async function postConfirmationLink(event: chat.SlashCommandEvent, confirmUrl: string) {
+  await event.channel.postEphemeral(
+    event.user,
+    {
+      card: chat.Card({
+        children: [
+          chat.CardText('Tipbot needs your approval to send this payment.'),
+          chat.Actions([
+            chat.LinkButton({ label: 'Confirm payment', style: 'primary', url: confirmUrl }),
+            chat.Button({ id: 'confirm_cancel', label: 'Cancel' }),
+          ]),
+          chat.CardText(`Link expires in 10 minutes. ${confirmUrl}`, { style: 'muted' }),
+        ],
+      }),
+      fallbackText: `Tipbot needs your approval to send this payment.\nConfirm payment: ${confirmUrl}\nLink expires in 10 minutes.`,
     },
     { fallbackToDM: false },
   )
@@ -917,18 +1011,20 @@ function configCard(
   workspace: DB_gen.Selectable.workspace,
   options?: { canEdit?: boolean; updated?: boolean },
 ) {
-  const tokenAddress = workspace.default_token_address ?? Tempo.pathUsdAddress
+  const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
   const token = Tempo.getTokenMetadataFallback(tokenAddress)
-  const networkLabel = workspace.chain_id === Tempo.mainnetChainId ? 'Mainnet' : 'Testnet'
-  const tokenLink = `<${Tempo.formatTokenLink(workspace.chain_id, tokenAddress)}|${token.symbol}>`
+  const networkLabel = workspace.chain_id === Tempo.chainLookup.mainnet ? 'Mainnet' : 'Testnet'
   return {
     card: chat.Card({
       children: [
-        chat.Fields([
-          chat.Field({ label: 'Network', value: networkLabel }),
-          chat.Field({ label: 'Default token', value: tokenLink }),
-          chat.Field({ label: 'Default amount', value: formatAmount(workspace.default_amount) }),
-        ]),
+        chat.Table({
+          headers: ['Setting', 'Value'],
+          rows: [
+            ['Network', networkLabel],
+            ['Default token', token.symbol],
+            ['Default amount', formatAmount(workspace.default_amount)],
+          ],
+        }),
         ...(options?.canEdit
           ? [
               chat.Actions([
@@ -953,6 +1049,18 @@ function slackTableCell(text: string, style?: { code?: boolean }) {
     elements: [
       {
         elements: [style ? { style, text, type: 'text' } : { text, type: 'text' }],
+        type: 'rich_text_section',
+      },
+    ],
+    type: 'rich_text',
+  }
+}
+
+function slackTableUserCell(providerUserId: string) {
+  return {
+    elements: [
+      {
+        elements: [{ type: 'user', user_id: providerUserId }],
         type: 'rich_text_section',
       },
     ],

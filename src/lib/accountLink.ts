@@ -5,6 +5,12 @@ import { verifyHash } from 'viem/actions'
 import { Account as TempoAccount } from 'viem/tempo'
 import * as Tempo from '#/lib/tempo.ts'
 
+export const reusableAccessKeyLimit = 10_000_000
+export const reusableAccessKeyLimitText = '10'
+export const reusableAccessKeyPeriodSeconds = 24 * 60 * 60 // 1 day
+export const reusableAccessKeyTtlMs = 30 * 24 * 60 * 60 * 1000 // 30 days
+export const confirmationLinkTtlMs = 10 * 60 * 1000 // 10 minutes
+
 export async function hashToken(env: Pick<Env, 'SECRET_KEY'>, token: string) {
   const key = await crypto.subtle.importKey(
     'raw',
@@ -19,7 +25,14 @@ export async function hashToken(env: Pick<Env, 'SECRET_KEY'>, token: string) {
 
 export async function signKeyAuthorization(
   account: ReturnType<typeof TempoAccount.fromSecp256k1>,
-  input: { accessKeyAddress: string; chainId: number; expiresAt: string; tokenAddress: string },
+  input: {
+    accessKeyAddress: string
+    chainId: number
+    expiresAt: string
+    limit?: bigint
+    periodSeconds?: number
+    tokenAddress: string
+  },
 ) {
   const tokenAddress = Address.checksum(input.tokenAddress)
   const policy = (() => {
@@ -28,8 +41,8 @@ export async function signKeyAuthorization(
       expiry: Math.floor(new Date(input.expiresAt).getTime() / 1000),
       limits: [
         {
-          limit: parseUnits('10', 6),
-          period: 24 * 60 * 60, // 1 day
+          limit: input.limit ?? parseUnits(reusableAccessKeyLimitText, 6),
+          period: input.periodSeconds ?? reusableAccessKeyPeriodSeconds,
           token: tokenAddress,
         },
       ],
@@ -61,6 +74,8 @@ export async function verifyKeyAuthorization(input: {
   env: Pick<Env, 'RPC_URL_MAINNET' | 'RPC_URL_TESTNET'>
   expiresAt: string
   keyAuthorization: unknown
+  limit?: bigint
+  periodSeconds?: number
   rootAddress: string
   tokenAddress: string
 }) {
@@ -74,8 +89,8 @@ export async function verifyKeyAuthorization(input: {
       expiry: Math.floor(new Date(input.expiresAt).getTime() / 1000),
       limits: [
         {
-          limit: parseUnits('10', 6),
-          period: 24 * 60 * 60, // 1 day
+          limit: input.limit ?? parseUnits(reusableAccessKeyLimitText, 6),
+          period: input.periodSeconds ?? reusableAccessKeyPeriodSeconds,
           token: tokenAddress,
         },
       ],

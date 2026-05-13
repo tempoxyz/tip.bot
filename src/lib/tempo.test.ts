@@ -2,57 +2,75 @@ import { expect, test } from 'vitest'
 import * as Tempo from '#/lib/tempo.ts'
 
 test('returns supported Tempo chains', () => {
-  expect(Tempo.getChain(Tempo.mainnetChainId).id).toBe(Tempo.mainnetChainId)
-  expect(Tempo.getChain(Tempo.moderatoChainId).id).toBe(Tempo.moderatoChainId)
-  expect(Tempo.getChain(Tempo.localnetChainId).id).toBe(Tempo.localnetChainId)
+  expect(Tempo.getChain(Tempo.chainLookup.mainnet).id).toBe(Tempo.chainLookup.mainnet)
+  expect(Tempo.getChain(Tempo.chainLookup.testnet).id).toBe(Tempo.chainLookup.testnet)
+  expect(Tempo.getChain(Tempo.chainLookup.localnet).id).toBe(Tempo.chainLookup.localnet)
   expect(() => Tempo.getChain(1)).toThrow('Unsupported Tempo chain 1.')
 })
 
 test('returns optional RPC URLs by chain', () => {
   expect(
-    Tempo.getRpcUrl({ RPC_URL_MAINNET: 'https://mainnet.example' }, Tempo.mainnetChainId),
+    Tempo.getRpcUrl({ RPC_URL_MAINNET: 'https://mainnet.example' }, Tempo.chainLookup.mainnet),
   ).toBe('https://mainnet.example')
   expect(
-    Tempo.getRpcUrl({ RPC_URL_TESTNET: 'https://testnet.example' }, Tempo.moderatoChainId),
+    Tempo.getRpcUrl({ RPC_URL_TESTNET: 'https://testnet.example' }, Tempo.chainLookup.testnet),
   ).toBe('https://testnet.example')
   expect(
-    Tempo.getRpcUrl({ RPC_URL_TESTNET: 'https://testnet.example' }, Tempo.localnetChainId),
+    Tempo.getRpcUrl({ RPC_URL_TESTNET: 'https://testnet.example' }, Tempo.chainLookup.localnet),
   ).toBe('https://testnet.example')
-  expect(Tempo.getRpcUrl({}, Tempo.mainnetChainId)).toBe(undefined)
+  expect(Tempo.getRpcUrl({}, Tempo.chainLookup.mainnet)).toBe(undefined)
   expect(Tempo.getRpcUrl({}, 1)).toBe(undefined)
 })
 
 test('checks allowed tokens by chain', () => {
-  expect(Tempo.isAllowedToken(Tempo.mainnetChainId, Tempo.pathUsdAddress)).toBe(true)
-  expect(Tempo.isAllowedToken(Tempo.mainnetChainId, Tempo.alphaUsdAddress)).toBe(false)
-  expect(Tempo.isAllowedToken(Tempo.moderatoChainId, Tempo.pathUsdAddress)).toBe(true)
-  expect(Tempo.isAllowedToken(Tempo.moderatoChainId, Tempo.alphaUsdAddress)).toBe(true)
-  expect(Tempo.isAllowedToken(Tempo.moderatoChainId, Tempo.betaUsdAddress)).toBe(true)
-  expect(Tempo.isAllowedToken(Tempo.moderatoChainId, Tempo.thetaUsdAddress)).toBe(true)
-  expect(Tempo.isAllowedToken(Tempo.localnetChainId, Tempo.pathUsdAddress)).toBe(true)
-  expect(Tempo.isAllowedToken(1, Tempo.pathUsdAddress)).toBe(false)
+  expect(Tempo.isAllowedToken(Tempo.chainLookup.mainnet, Tempo.addressLookup.pathUsd)).toBe(true)
+  expect(Tempo.isAllowedToken(Tempo.chainLookup.mainnet, Tempo.addressLookup.usdcE)).toBe(true)
+  expect(Tempo.isAllowedToken(Tempo.chainLookup.mainnet, Tempo.addressLookup.usdt0)).toBe(true)
+  expect(Tempo.isAllowedToken(Tempo.chainLookup.mainnet, Tempo.addressLookup.alphaUsd)).toBe(false)
+  expect(Tempo.isAllowedToken(Tempo.chainLookup.testnet, Tempo.addressLookup.pathUsd)).toBe(true)
+  expect(Tempo.isAllowedToken(Tempo.chainLookup.testnet, Tempo.addressLookup.alphaUsd)).toBe(true)
+  expect(Tempo.isAllowedToken(Tempo.chainLookup.testnet, Tempo.addressLookup.betaUsd)).toBe(true)
+  expect(Tempo.isAllowedToken(Tempo.chainLookup.testnet, Tempo.addressLookup.thetaUsd)).toBe(true)
+  expect(Tempo.isAllowedToken(Tempo.chainLookup.localnet, Tempo.addressLookup.pathUsd)).toBe(true)
+  expect(Tempo.isAllowedToken(1, Tempo.addressLookup.pathUsd)).toBe(false)
+})
+
+test('resolves supported token aliases', () => {
+  expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'USDC.e')).toBe(Tempo.addressLookup.usdcE)
+  expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'usdc')).toBe(Tempo.addressLookup.usdcE)
+  expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'USDT')).toBe(Tempo.addressLookup.usdt0)
+  expect(Tempo.getTokenAddress(Tempo.chainLookup.testnet, 'beta')).toBe(Tempo.addressLookup.betaUsd)
+  expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'beta')).toBe(null)
 })
 
 test('formats Tempo token symbols and transaction links', () => {
-  expect(Tempo.getTokenMetadataFallback(Tempo.pathUsdAddress)).toEqual({
+  expect(Tempo.getTokenMetadataFallback(Tempo.addressLookup.pathUsd)).toEqual({
     currency: 'USD',
     symbol: 'PathUSD',
   })
-  expect(Tempo.getTokenMetadataFallback(Tempo.alphaUsdAddress)).toEqual({
+  expect(Tempo.getTokenMetadataFallback(Tempo.addressLookup.alphaUsd)).toEqual({
     currency: 'USD',
     symbol: 'AlphaUSD',
   })
-  expect(Tempo.getTokenMetadataFallback(Tempo.betaUsdAddress)).toEqual({
+  expect(Tempo.getTokenMetadataFallback(Tempo.addressLookup.betaUsd)).toEqual({
     currency: 'USD',
     symbol: 'BetaUSD',
   })
-  expect(Tempo.getTokenMetadataFallback(Tempo.thetaUsdAddress)).toEqual({
+  expect(Tempo.getTokenMetadataFallback(Tempo.addressLookup.thetaUsd)).toEqual({
     currency: 'USD',
     symbol: 'ThetaUSD',
+  })
+  expect(Tempo.getTokenMetadataFallback(Tempo.addressLookup.usdcE)).toEqual({
+    currency: 'USD',
+    symbol: 'USDC.e',
+  })
+  expect(Tempo.getTokenMetadataFallback(Tempo.addressLookup.usdt0)).toEqual({
+    currency: 'USD',
+    symbol: 'USDT0',
   })
   expect(Tempo.getTokenMetadataFallback('0x0000000000000000000000000000000000000002')).toEqual({
     currency: 'USD',
     symbol: '0x0000…0002',
   })
-  expect(Tempo.formatTxLink(Tempo.moderatoChainId, '0xabc')).toContain('/tx/0xabc')
+  expect(Tempo.formatTxLink(Tempo.chainLookup.testnet, '0xabc')).toContain('/tx/0xabc')
 })

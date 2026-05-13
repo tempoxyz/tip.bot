@@ -13,6 +13,7 @@ import { Route as PlaygroundRouteImport } from './routes/playground'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as InstallSlackRouteImport } from './routes/install/slack'
 import { Route as ConnectTokenRouteImport } from './routes/connect/$token'
+import { Route as ConfirmTokenRouteImport } from './routes/confirm/$token'
 
 const PlaygroundRoute = PlaygroundRouteImport.update({
   id: '/playground',
@@ -34,16 +35,23 @@ const ConnectTokenRoute = ConnectTokenRouteImport.update({
   path: '/connect/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ConfirmTokenRoute = ConfirmTokenRouteImport.update({
+  id: '/confirm/$token',
+  path: '/confirm/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/playground': typeof PlaygroundRoute
+  '/confirm/$token': typeof ConfirmTokenRoute
   '/connect/$token': typeof ConnectTokenRoute
   '/install/slack': typeof InstallSlackRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/playground': typeof PlaygroundRoute
+  '/confirm/$token': typeof ConfirmTokenRoute
   '/connect/$token': typeof ConnectTokenRoute
   '/install/slack': typeof InstallSlackRoute
 }
@@ -51,20 +59,38 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/playground': typeof PlaygroundRoute
+  '/confirm/$token': typeof ConfirmTokenRoute
   '/connect/$token': typeof ConnectTokenRoute
   '/install/slack': typeof InstallSlackRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/playground' | '/connect/$token' | '/install/slack'
+  fullPaths:
+    | '/'
+    | '/playground'
+    | '/confirm/$token'
+    | '/connect/$token'
+    | '/install/slack'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/playground' | '/connect/$token' | '/install/slack'
-  id: '__root__' | '/' | '/playground' | '/connect/$token' | '/install/slack'
+  to:
+    | '/'
+    | '/playground'
+    | '/confirm/$token'
+    | '/connect/$token'
+    | '/install/slack'
+  id:
+    | '__root__'
+    | '/'
+    | '/playground'
+    | '/confirm/$token'
+    | '/connect/$token'
+    | '/install/slack'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   PlaygroundRoute: typeof PlaygroundRoute
+  ConfirmTokenRoute: typeof ConfirmTokenRoute
   ConnectTokenRoute: typeof ConnectTokenRoute
   InstallSlackRoute: typeof InstallSlackRoute
 }
@@ -99,12 +125,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ConnectTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/confirm/$token': {
+      id: '/confirm/$token'
+      path: '/confirm/$token'
+      fullPath: '/confirm/$token'
+      preLoaderRoute: typeof ConfirmTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   PlaygroundRoute: PlaygroundRoute,
+  ConfirmTokenRoute: ConfirmTokenRoute,
   ConnectTokenRoute: ConnectTokenRoute,
   InstallSlackRoute: InstallSlackRoute,
 }

@@ -8,6 +8,8 @@ import * as Tip from '#/lib/tip.ts'
 import { WebClient } from '@slack/web-api'
 import { env } from 'cloudflare:workers'
 import { testClient } from 'hono/testing'
+import { AbiFunction } from 'ox'
+import { KeyAuthorization } from 'ox/tempo'
 import { Account } from 'viem/tempo'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { api } from '#/api.ts'
@@ -48,7 +50,7 @@ beforeEach(async () => {
     teamName: Constants.slack.teamName,
   })
   await factory.workspace.insert({
-    chain_id: Tempo.localnetChainId,
+    chain_id: Tempo.chainLookup.localnet,
     provider_id: providerId,
   })
 })
@@ -105,6 +107,61 @@ describe('/tip @account', () => {
     expect(tip.confirmed_at).toEqual(expect.any(String))
     expect(tip.transaction_hash).toEqual(expect.any(String))
   }, 20_000) // 20 seconds
+
+  test('sends tip with custom amount', async () => {
+    await connectTipAccounts()
+
+    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}> 0.002`)
+    const tip = await db
+      .selectFrom('tip')
+      .select(['amount', 'confirmed_at', 'transaction_hash'])
+      .where('amount', '=', 2000)
+      .executeTakeFirstOrThrow()
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(
+      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.002.`,
+    )
+    await expectSlackMessage('Receipt')
+    expect(tip.confirmed_at).toEqual(expect.any(String))
+    expect(tip.transaction_hash).toEqual(expect.any(String))
+  }, 20_000) // 20 seconds
+
+  test('shows confirmation action for token without access key', async () => {
+    await connectTipAccounts()
+
+    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}> 0.002 BetaUSD`)
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('Tipbot needs your approval to send this payment.')
+    await expectSlackMessage('/confirm/')
+    await expectSlackMessage('Link expires in 10 minutes.')
+    await expectSlackMessageNotContaining('Receipt')
+  })
+
+  test('shows confirmation action for amount above access key limit', async () => {
+    await connectTipAccounts()
+
+    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}> 11`)
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('Tipbot needs your approval to send this payment.')
+    await expectSlackMessage('/confirm/')
+    await expectSlackMessage('Link expires in 10 minutes.')
+    await expectSlackMessageNotContaining('Receipt')
+  })
+
+  test('shows confirmation action when memo needs approval', async () => {
+    await connectTipAccounts({ memoScope: false })
+
+    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}> for lunch`)
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('Tipbot needs your approval to send this payment.')
+    await expectSlackMessage('/confirm/')
+    await expectSlackMessage('Link expires in 10 minutes.')
+    await expectSlackMessageNotContaining('Receipt')
+  })
 
   test('is idempotent for the same trigger', async () => {
     const triggerId = 'trigger-idempotent-tip'
@@ -204,6 +261,45 @@ describe('/tip @account', () => {
     fetchSpy.mockRestore()
   })
 
+  test('handles recorded insufficient funds failure', async () => {
+    const triggerId = 'trigger-recorded-insufficient-funds'
+    const workspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', providerId)
+      .executeTakeFirstOrThrow()
+    const senderAccount = await factory.account.insert({})
+    const recipientAccount = await factory.account.insert({})
+    const senderMember = await factory.member.insert({
+      account_id: senderAccount.id,
+      provider_user_id: Constants.slack.adminUserId,
+      workspace_id: workspace.id,
+    })
+    const recipientMember = await factory.member.insert({
+      account_id: recipientAccount.id,
+      provider_user_id: Constants.slack.memberUserId,
+      workspace_id: workspace.id,
+    })
+    await factory.tip.insert({
+      chain_id: Tempo.chainLookup.localnet,
+      failed_at: new Date().toISOString(),
+      failure_reason: 'execution reverted: insufficient balance',
+      idempotency_key: `command:${providerId}:${triggerId}`,
+      recipient_id: recipientAccount.id,
+      recipient_member_id: recipientMember.id,
+      sender_id: senderAccount.id,
+      sender_member_id: senderMember.id,
+      workspace_id: workspace.id,
+    })
+
+    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}>`, { triggerId })
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(
+      'Payment not sent. Your wallet has insufficient funds. Add funds to your Tempo Wallet and try again.',
+    )
+  })
+
   test('handles recorded tip without transaction', async () => {
     const triggerId = 'trigger-recorded-without-transaction'
     const workspace = await db
@@ -224,7 +320,7 @@ describe('/tip @account', () => {
       workspace_id: workspace.id,
     })
     await factory.tip.insert({
-      chain_id: Tempo.localnetChainId,
+      chain_id: Tempo.chainLookup.localnet,
       idempotency_key: `command:${providerId}:${triggerId}`,
       recipient_id: recipientAccount.id,
       recipient_member_id: recipientMember.id,
@@ -248,11 +344,12 @@ describe('/tip config', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessageNotContaining('Workspace settings')
+    await expectSlackMessage('Setting')
+    await expectSlackMessage('Value')
     await expectSlackMessage('Network')
     await expectSlackMessage('Testnet')
     await expectSlackMessage('Default token')
     await expectSlackMessage('PathUSD')
-    await expectSlackMessage(Tempo.formatTokenLink(Tempo.localnetChainId, Tempo.pathUsdAddress))
     await expectSlackMessage('Default amount')
     await expectSlackMessage('0.001')
   })
@@ -333,9 +430,9 @@ describe('/tip config', () => {
 
     expect(response.status).toBe(200)
     expect(await response.text()).toBe('')
-    expect(workspace.chain_id).toBe(Tempo.moderatoChainId)
+    expect(workspace.chain_id).toBe(Tempo.chainLookup.testnet)
     expect(workspace.default_amount).toBe(2000)
-    expect(workspace.default_token_address).toBe(Tempo.betaUsdAddress)
+    expect(workspace.default_token_address).toBe(Tempo.addressLookup.betaUsd)
   })
 
   test('rejects invalid edit modal amount', async () => {
@@ -546,7 +643,7 @@ describe('/tip connect', () => {
       provider_user_id: Constants.slack.adminUserId,
       workspace_id: workspace.id,
     })
-    await factory.access_key.insert({ account_id: account.id, chain_id: Tempo.mainnetChainId })
+    await factory.access_key.insert({ account_id: account.id, chain_id: Tempo.chainLookup.mainnet })
 
     const response = await postSlashCommand('connect')
     const link = await db
@@ -629,7 +726,14 @@ describe('/tip help', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessageNotContaining('Tipbot commands')
+    await expectSlackMessage('/tip @account [amount] [token] [for memo]')
+    await expectSlackMessage('/tip @account')
     await expectSlackMessage('/tip @account for coffee')
+    await expectSlackMessage('/tip @account 0.005')
+    await expectSlackMessage('/tip @account 0.005 for coffee')
+    await expectSlackMessage('/tip @account 0.005 USDC')
+    await expectSlackMessage('/tip @account 0.005 USDC for coffee')
+    await expectSlackMessage('Payment examples')
     await expectSlackMessage('/tip config')
     await expectSlackMessage('/tip connect')
     await expectSlackMessage('/tip disconnect')
@@ -731,6 +835,7 @@ describe('/tip leaderboard', () => {
     const response = await postSlashCommand('leaderboard')
 
     expect(response.status).toBe(200)
+    await expectSlackPublicMessage('Tips received')
     await expectSlackMessage('Tips received')
     await expectSlackMessage(`1 <@${Constants.slack.memberUserId}> 3`)
     await expectSlackMessage(`2 <@${Constants.slack.adminUserId}> 1`)
@@ -745,6 +850,7 @@ describe('/tip leaderboard', () => {
     const response = await postSlashCommand('leaderboard')
 
     expect(response.status).toBe(200)
+    await expectSlackPublicMessage('No confirmed tips yet.')
     await expectSlackMessage('No confirmed tips yet.')
   })
 })
@@ -834,7 +940,7 @@ describe('/tip usage', () => {
 
 ////////////////////////////////////////////////////////////////////////////
 
-async function connectTipAccounts(options: { recipient?: boolean } = {}) {
+async function connectTipAccounts(options: { memoScope?: boolean; recipient?: boolean } = {}) {
   const workspace = await db
     .selectFrom('workspace')
     .selectAll()
@@ -847,6 +953,7 @@ async function connectTipAccounts(options: { recipient?: boolean } = {}) {
   const senderAccount = await findOrCreateAccount(senderRoot.address)
   const recipientAccount = await findOrCreateAccount(recipientRoot.address)
 
+  await db.deleteFrom('access_key').where('account_id', '=', senderAccount.id).execute()
   await factory.member.insert({
     account_id: senderAccount.id,
     provider_user_id: Constants.slack.adminUserId,
@@ -862,16 +969,40 @@ async function connectTipAccounts(options: { recipient?: boolean } = {}) {
     account_id: senderAccount.id,
     address: accessKey.address,
     authorization: JSON.stringify(
-      await AccountLink.signKeyAuthorization(senderRoot, {
-        accessKeyAddress: accessKey.address,
-        chainId: Tempo.localnetChainId,
-        expiresAt: accessKeyExpiresAt,
-        tokenAddress: Tempo.pathUsdAddress,
-      }),
+      (options.memoScope ?? true)
+        ? await AccountLink.signKeyAuthorization(senderRoot, {
+            accessKeyAddress: accessKey.address,
+            chainId: Tempo.chainLookup.localnet,
+            expiresAt: accessKeyExpiresAt,
+            tokenAddress: Tempo.addressLookup.pathUsd,
+          })
+        : KeyAuthorization.toRpc(
+            await senderRoot.signKeyAuthorization(
+              { accessKeyAddress: accessKey.address, keyType: 'secp256k1' },
+              {
+                chainId: BigInt(Tempo.chainLookup.localnet),
+                expiry: Math.floor(new Date(accessKeyExpiresAt).getTime() / 1000),
+                limits: [
+                  {
+                    limit: BigInt(AccountLink.reusableAccessKeyLimit),
+                    period: AccountLink.reusableAccessKeyPeriodSeconds,
+                    token: Tempo.addressLookup.pathUsd,
+                  },
+                ],
+                scopes: [
+                  {
+                    address: Tempo.addressLookup.pathUsd,
+                    selector: AbiFunction.getSelector('transfer(address,uint256)'),
+                  },
+                ],
+              },
+            ),
+          ),
     ),
-    chain_id: Tempo.localnetChainId,
+    chain_id: Tempo.chainLookup.localnet,
     ciphertext: await AccessKey.encrypt(env, accessKey.privateKey),
     expires_at: accessKeyExpiresAt,
+    token_address: Tempo.addressLookup.pathUsd,
   })
 }
 
@@ -891,6 +1022,18 @@ async function expectSlackMessage(text: string) {
   expect(history.ok).toBe(true)
   expect(
     history.messages?.some((message) => message.text?.includes(text)),
+    JSON.stringify(history.messages),
+  ).toBe(true)
+}
+
+async function expectSlackPublicMessage(text: string) {
+  const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+
+  expect(history.ok).toBe(true)
+  expect(
+    history.messages?.some(
+      (message) => message.text?.includes(text) && message.subtype !== 'ephemeral',
+    ),
     JSON.stringify(history.messages),
   ).toBe(true)
 }

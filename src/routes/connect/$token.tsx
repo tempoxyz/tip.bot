@@ -43,7 +43,7 @@ function Component() {
               adapter: dangerous_secp256k1({ privateKey: __PLAYWRIGHT_ACCOUNT_PRIVATE_KEY__ }),
             }
           : {}),
-        testnet: data.chainId !== Tempo.mainnetChainId,
+        testnet: data.chainId !== Tempo.chainLookup.mainnet,
       })
       const result = await provider.request({
         method: 'wallet_connect',
@@ -290,7 +290,7 @@ const getConnectData = createServerFn({ method: 'GET' })
         ...json,
         tokenCurrency: 'USD',
         tokenSymbol:
-          json.tokenAddress.toLowerCase() === Tempo.pathUsdAddress.toLowerCase()
+          json.tokenAddress.toLowerCase() === Tempo.addressLookup.pathUsd.toLowerCase()
             ? 'USD'
             : `${json.tokenAddress.slice(0, 6)}…${json.tokenAddress.slice(-4)}`,
       }

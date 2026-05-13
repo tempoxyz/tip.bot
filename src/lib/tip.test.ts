@@ -21,26 +21,47 @@ test('rejects invalid decimal amounts', () => {
 
 test('parses tip mentions and memos', () => {
   expect(Tip.parseTipText('<@UMEMBER>')).toEqual({
+    amount: undefined,
     memo: null,
     recipientProviderUserId: 'UMEMBER',
+    token: null,
   })
   expect(Tip.parseTipText('<@UMEMBER> for great work')).toEqual({
+    amount: undefined,
     memo: 'great work',
     recipientProviderUserId: 'UMEMBER',
+    token: null,
   })
   expect(Tip.parseTipText('<@UMEMBER|member> for great work')).toEqual({
+    amount: undefined,
     memo: 'great work',
     recipientProviderUserId: 'UMEMBER',
+    token: null,
   })
   expect(Tip.parseTipText('<@UMEMBER> coffee')).toEqual({
+    amount: undefined,
     memo: 'coffee',
     recipientProviderUserId: 'UMEMBER',
+    token: null,
+  })
+  expect(Tip.parseTipText('<@UMEMBER> 5')).toEqual({
+    amount: 5_000_000,
+    memo: null,
+    recipientProviderUserId: 'UMEMBER',
+    token: null,
+  })
+  expect(Tip.parseTipText('<@UMEMBER> 5 USDC.e for lunch')).toEqual({
+    amount: 5_000_000,
+    memo: 'lunch',
+    recipientProviderUserId: 'UMEMBER',
+    token: 'USDC.e',
   })
 })
 
 test('rejects text without tip mentions', () => {
   expect(Tip.parseTipText('')).toBe(null)
   expect(Tip.parseTipText('hello')).toBe(null)
+  expect(Tip.parseTipText('<@UMEMBER> 5 USDC.e lunch')).toBe(null)
 })
 
 test('encodes transfer memos as bytes32', () => {

@@ -92,6 +92,7 @@ const defaultConfig: Partial<{
       created_at: now,
       expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(), // 15 minutes
       revoked_at: null,
+      token_address: null,
       updated_at: now,
     }
   },

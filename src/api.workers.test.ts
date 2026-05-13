@@ -8,6 +8,7 @@ import { api } from '#/api.ts'
 import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as AccessKey from '#/lib/accessKey.ts'
+import * as Confirmation from '#/lib/confirmation.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import { createSlackHeaders } from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
@@ -118,7 +119,7 @@ describe('/api/account/link/:token', () => {
       accessKeyAddress: pending.accessKey.address,
       accessKeyPublicKey: pending.accessKey.publicKey,
       ok: true,
-      tokenAddress: Tempo.pathUsdAddress,
+      tokenAddress: Tempo.addressLookup.pathUsd,
     })
   })
 
@@ -303,6 +304,147 @@ describe('/api/account/link/:token', () => {
   })
 })
 
+describe('/api/confirm/:token', () => {
+  test('returns confirmation metadata', async () => {
+    const confirmation = await createConfirmationToken()
+
+    const response = await client.api.confirm[':token'].$get({
+      param: { token: confirmation.token },
+    })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      accessKeyAddress: confirmation.accessKey.address,
+      accessKeyPublicKey: confirmation.accessKey.publicKey,
+      amount: '5',
+      kind: 'onetime_payment',
+      ok: true,
+      tokenAddress: Tempo.addressLookup.pathUsd,
+      tokenSymbol: 'PathUSD',
+    })
+  })
+
+  test('rejects invalid confirmation links generically', async () => {
+    const response = await client.api.confirm[':token'].$get({ param: { token: 'missing' } })
+
+    expect(response.status).toBe(404)
+    await expect(response.json()).resolves.toMatchObject({ ok: false })
+  })
+
+  test('confirms one-time payments', async () => {
+    const confirmation = await createConfirmationToken()
+    const keyAuthorization = await AccountLink.signKeyAuthorization(confirmation.senderRoot, {
+      accessKeyAddress: confirmation.accessKey.address,
+      chainId: confirmation.payload.chainId,
+      expiresAt: confirmation.payload.expiresAt,
+      limit: BigInt(confirmation.payload.amount),
+      periodSeconds: AccountLink.confirmationLinkTtlMs / 1000,
+      tokenAddress: confirmation.payload.tokenAddress,
+    })
+
+    const response = await client.api.confirm[':token'].$post({
+      json: { address: confirmation.senderRoot.address, keyAuthorization },
+      param: { token: confirmation.token },
+    })
+    const tip = await db
+      .selectFrom('tip')
+      .selectAll()
+      .where('idempotency_key', '=', confirmation.payload.idempotencyKey)
+      .executeTakeFirstOrThrow()
+    const accessKeys = await db
+      .selectFrom('access_key')
+      .selectAll()
+      .where('account_id', '=', confirmation.senderAccount.id)
+      .execute()
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true })
+    expect(tip.confirmed_at).toEqual(expect.any(String))
+    expect(tip.transaction_hash).toEqual(expect.any(String))
+    expect(accessKeys).toHaveLength(0)
+  }, 20_000) // 20 seconds
+
+  test('confirms reusable access keys', async () => {
+    const confirmation = await createConfirmationToken({
+      amount: 1,
+      kind: 'reusable_access_key',
+    })
+    const keyAuthorization = await AccountLink.signKeyAuthorization(confirmation.senderRoot, {
+      accessKeyAddress: confirmation.accessKey.address,
+      chainId: confirmation.payload.chainId,
+      expiresAt: confirmation.payload.accessKeyExpiresAt!,
+      tokenAddress: confirmation.payload.tokenAddress,
+    })
+
+    const response = await client.api.confirm[':token'].$post({
+      json: { address: confirmation.senderRoot.address, keyAuthorization },
+      param: { token: confirmation.token },
+    })
+    const tip = await db
+      .selectFrom('tip')
+      .selectAll()
+      .where('idempotency_key', '=', confirmation.payload.idempotencyKey)
+      .executeTakeFirstOrThrow()
+    const accessKeys = await db
+      .selectFrom('access_key')
+      .selectAll()
+      .where('account_id', '=', confirmation.senderAccount.id)
+      .execute()
+
+    expect(response.status).toBe(200)
+    expect(tip.confirmed_at).toEqual(expect.any(String))
+    expect(accessKeys).toHaveLength(1)
+    expect(accessKeys[0]).toMatchObject({
+      address: confirmation.accessKey.address,
+      token_address: Tempo.addressLookup.pathUsd,
+    })
+  }, 20_000) // 20 seconds
+
+  test('does not post duplicate receipt when confirmation is retried', async () => {
+    const memo = `duplicate-${Nanoid.generate()}`
+    const confirmation = await createConfirmationToken({ amount: 1, memo })
+    await factory.tip.insert({
+      amount: confirmation.payload.amount,
+      chain_id: confirmation.payload.chainId,
+      confirmed_at: new Date().toISOString(),
+      idempotency_key: confirmation.payload.idempotencyKey,
+      memo,
+      recipient_id: confirmation.recipientAccount.id,
+      recipient_member_id: confirmation.recipientMember.id,
+      sender_id: confirmation.senderAccount.id,
+      sender_member_id: confirmation.senderMember.id,
+      token_address: confirmation.payload.tokenAddress,
+      transaction_hash: `0x${'1'.repeat(64)}`,
+      workspace_id: confirmation.workspace.id,
+    })
+    const keyAuthorization = await AccountLink.signKeyAuthorization(confirmation.senderRoot, {
+      accessKeyAddress: confirmation.accessKey.address,
+      chainId: confirmation.payload.chainId,
+      expiresAt: confirmation.payload.expiresAt,
+      limit: BigInt(confirmation.payload.amount),
+      periodSeconds: AccountLink.confirmationLinkTtlMs / 1000,
+      tokenAddress: confirmation.payload.tokenAddress,
+    })
+    const json = { address: confirmation.senderRoot.address, keyAuthorization }
+
+    const first = await client.api.confirm[':token'].$post({
+      json,
+      param: { token: confirmation.token },
+    })
+    await Promise.all(waitUntil)
+    waitUntil = []
+    const second = await client.api.confirm[':token'].$post({
+      json,
+      param: { token: confirmation.token },
+    })
+    await Promise.all(waitUntil)
+
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(200)
+    expect(executionCtx.waitUntil).not.toHaveBeenCalled()
+  }, 20_000) // 20 seconds
+})
+
 describe('/api/chat/slack/oauth/callback', () => {
   test('rejects missing code or state', async () => {
     const response = await client.api.chat.slack.oauth.callback.$get({ query: {} as never })
@@ -465,6 +607,84 @@ async function createPendingAccountLink(
   return { accessKey, link, member, token, workspace }
 }
 
+async function createConfirmationToken(
+  options: {
+    amount?: number
+    kind?: Confirmation.Payload['kind']
+    memo?: string | null
+    providerId?: string
+  } = {},
+) {
+  const providerId = options.providerId ?? `T${Nanoid.generate()}`
+  const senderRoot = Account.fromSecp256k1(Constants.tip.senderRootPrivateKey)
+  const recipientRoot = Account.fromSecp256k1(Constants.tip.recipientRootPrivateKey)
+  const workspace = await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    provider_id: providerId,
+  })
+  const senderAccount = await findOrCreateAccount(senderRoot.address)
+  const recipientAccount = await findOrCreateAccount(recipientRoot.address)
+  const senderMember = await factory.member.insert({
+    account_id: senderAccount.id,
+    provider_user_id: Constants.slack.adminUserId,
+    workspace_id: workspace.id,
+  })
+  const recipientMember = await factory.member.insert({
+    account_id: recipientAccount.id,
+    provider_user_id: Constants.slack.memberUserId,
+    workspace_id: workspace.id,
+  })
+  const nonce = Nanoid.generate()
+  const kind = options.kind ?? 'onetime_payment'
+  const amount = options.amount ?? 5_000_000
+  const payload = {
+    ...(kind === 'reusable_access_key'
+      ? {
+          accessKeyExpiresAt: new Date(
+            Date.now() + AccountLink.reusableAccessKeyTtlMs,
+          ).toISOString(), // 30 days
+        }
+      : {}),
+    amount,
+    chainId: Tempo.chainLookup.localnet,
+    expiresAt: new Date(Date.now() + AccountLink.confirmationLinkTtlMs).toISOString(), // 10 minutes
+    idempotencyKey: `confirm:${nonce}`,
+    kind,
+    memo: options.memo ?? null,
+    nonce,
+    provider: 'slack',
+    providerChannelId: Constants.slack.channelId,
+    providerId,
+    recipientProviderUserId: Constants.slack.memberUserId,
+    senderProviderUserId: Constants.slack.adminUserId,
+    tokenAddress: Tempo.addressLookup.pathUsd,
+    workspaceId: workspace.id,
+  } satisfies Confirmation.Payload
+  const token = await Confirmation.encrypt(env, payload)
+  const accessKey = await Confirmation.deriveAccessKey(env, payload.nonce)
+  return {
+    accessKey,
+    payload,
+    recipientAccount,
+    recipientMember,
+    senderAccount,
+    senderMember,
+    senderRoot,
+    token,
+    workspace,
+  }
+}
+
+async function findOrCreateAccount(address: string) {
+  const existing = await db
+    .selectFrom('account')
+    .selectAll()
+    .where('address', '=', address)
+    .executeTakeFirst()
+  if (existing) return existing
+  return await factory.account.insert({ address })
+}
+
 async function deleteSlackOauthWorkspace() {
   await db.deleteFrom('workspace').where('provider_id', '=', Constants.slack.teamId).execute()
 }
@@ -484,6 +704,8 @@ async function signKeyAuthorization(
     accessKeyAddress: pending.accessKey.address,
     chainId: pending.workspace.chain_id,
     expiresAt: pending.link.access_key_expires_at,
-    tokenAddress: Address.checksum(pending.workspace.default_token_address ?? Tempo.pathUsdAddress),
+    tokenAddress: Address.checksum(
+      pending.workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+    ),
   })
 }

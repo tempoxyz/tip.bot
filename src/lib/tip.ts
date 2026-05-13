@@ -1,4 +1,6 @@
 import * as AccessKey from '#/lib/accessKey.ts'
+import * as AccountLink from '#/lib/accountLink.ts'
+import * as Confirmation from '#/lib/confirmation.ts'
 import * as DB from '#db/client.ts'
 import { formatAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
@@ -29,6 +31,7 @@ export type TipResult =
   | {
       code:
         | 'failed'
+        | 'confirmation_required'
         | 'insufficient_funds'
         | 'missing_sender_access_key'
         | 'pending'
@@ -37,6 +40,7 @@ export type TipResult =
         | 'sender_unconnected'
       message?: string
       ok: false
+      confirmUrl?: string
       recipientProviderUserId?: string
       senderProviderUserId?: string
       transactionHash?: string | undefined
@@ -46,12 +50,15 @@ export type TipResult =
 export async function handleTipRequest(
   env: Env,
   input: {
+    amount?: number
     idempotencyKey: string
     memo: string | null
     provider: Database.Selectable.workspace['provider']
+    providerChannelId: string
     providerId: string
     recipientProviderUserId: string
     senderProviderUserId: string
+    tokenAddress?: string
   },
 ): Promise<TipResult> {
   const db = DB.create(env.DB)
@@ -68,7 +75,7 @@ export async function handleTipRequest(
       await db
         .insertInto('workspace')
         .values({
-          chain_id: Tempo.mainnetChainId,
+          chain_id: Tempo.chainLookup.mainnet,
           created_at: now,
           default_amount: 1000,
           id,
@@ -86,7 +93,10 @@ export async function handleTipRequest(
   if (input.senderProviderUserId === input.recipientProviderUserId)
     return { code: 'self_tip', ok: false }
 
-  const tokenAddress = Address.checksum(workspace.default_token_address ?? Tempo.pathUsdAddress)
+  const amount = input.amount ?? workspace.default_amount
+  const tokenAddress = Address.checksum(
+    input.tokenAddress ?? workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+  )
   if (!Tempo.isAllowedToken(workspace.chain_id, tokenAddress))
     return {
       code: 'failed',
@@ -94,48 +104,8 @@ export async function handleTipRequest(
       ok: false,
     }
 
-  const existing = await db
-    .selectFrom('tip')
-    .selectAll()
-    .where('idempotency_key', '=', input.idempotencyKey)
-    .executeTakeFirst()
-  if (existing?.confirmed_at && existing.transaction_hash) {
-    const tokenMetadata = await Tempo.getTokenMetadata(
-      env,
-      existing.chain_id,
-      existing.token_address,
-    )
-    return {
-      amount: formatAmount(existing.amount),
-      chainId: existing.chain_id,
-      feePayer: 'sponsor',
-      isDefaultToken: Address.isEqual(Address.checksum(existing.token_address), tokenAddress),
-      memo: existing.memo,
-      ok: true,
-      recipientProviderUserId: input.recipientProviderUserId,
-      senderProviderUserId: input.senderProviderUserId,
-      status: 'duplicate',
-      tokenCurrency: tokenMetadata.currency,
-      tokenSymbol: tokenMetadata.symbol,
-      transactionHash: existing.transaction_hash,
-    }
-  }
-  if (existing?.failed_at)
-    return {
-      chainId: existing.chain_id,
-      code: 'failed',
-      message: existing.failure_reason ?? 'Tip failed. Try again.',
-      ok: false,
-      transactionHash: existing.transaction_hash ?? undefined,
-    }
-  if (existing)
-    return {
-      chainId: existing.chain_id,
-      code: 'pending',
-      message: 'Tip is still sending.',
-      ok: false,
-      transactionHash: existing.transaction_hash ?? undefined,
-    }
+  const existing = await getExistingTipResult(env, db, input, tokenAddress)
+  if (existing) return existing
 
   const sender = await getConnectedMember(db, workspace.id, input.senderProviderUserId)
   if (!sender) return { code: 'sender_unconnected', ok: false }
@@ -148,7 +118,7 @@ export async function handleTipRequest(
       senderProviderUserId: input.senderProviderUserId,
     }
 
-  const accessKey = await db
+  const accessKeys = await db
     .selectFrom('access_key')
     .selectAll()
     .where('account_id', '=', sender.account.id)
@@ -156,135 +126,32 @@ export async function handleTipRequest(
     .where('revoked_at', 'is', null)
     .where('expires_at', '>', new Date().toISOString())
     .orderBy('created_at', 'desc')
-    .executeTakeFirst()
-  if (!accessKey)
-    return { chainId: workspace.chain_id, code: 'missing_sender_access_key', ok: false }
-  const keyAuthorization = KeyAuthorization.fromRpc(JSON.parse(accessKey.authorization) as never)
-  if (input.memo && !supportsTransferMemo(keyAuthorization, tokenAddress))
-    return { chainId: workspace.chain_id, code: 'missing_sender_access_key', ok: false }
-
-  const id = Nanoid.generate()
-  const sponsorshipMemo = await createSponsorshipMemo(env, {
-    amount: workspace.default_amount,
-    chainId: workspace.chain_id,
-    id,
-    idempotencyKey: input.idempotencyKey,
-    recipient: recipient.account.address,
-    sender: sender.account.address,
-    token: tokenAddress,
-  })
-  const now = new Date().toISOString()
-  await db
-    .insertInto('tip')
-    .values({
-      amount: workspace.default_amount,
-      chain_id: workspace.chain_id,
-      confirmed_at: null,
-      created_at: now,
-      failed_at: null,
-      failure_reason: null,
-      id,
-      idempotency_key: input.idempotencyKey,
-      memo: input.memo,
-      recipient_id: recipient.account.id,
-      recipient_member_id: recipient.member.id,
-      sender_id: sender.account.id,
-      sender_member_id: sender.member.id,
-      sponsorship_memo: sponsorshipMemo,
-      token_address: tokenAddress,
-      transaction_hash: null,
-      updated_at: now,
-      workspace_id: workspace.id,
-    })
     .execute()
-
-  try {
-    const feePayerPrivateKey = getFeePayerPrivateKey(env, workspace.chain_id)
-    const account = TempoAccount.fromSecp256k1(await AccessKey.decrypt(env, accessKey.ciphertext), {
-      access: sender.account.address as `0x${string}`,
-    })
-    const client = createClient({
-      chain: Tempo.getChain(workspace.chain_id),
-      transport: http(Tempo.getRpcUrl(env, workspace.chain_id)),
-    })
-    const parameters = {
-      account,
-      amount: BigInt(workspace.default_amount),
-      keyAuthorization: accessKey.authorization_used_at ? undefined : keyAuthorization,
-      ...(input.memo ? { memo: encodeTransferMemo(input.memo) } : {}),
-      to: recipient.account.address as never,
-      token: tokenAddress,
-    }
-    const [transfer, feePayer] = await (async () => {
-      if (!feePayerPrivateKey)
-        return [
-          await Actions.token.transferSync(client, { ...parameters, feeToken: tokenAddress }),
-          'sender' as const,
-        ] as const
-
-      const feePayerAccount = privateKeyToAccount(feePayerPrivateKey)
-      try {
-        return [
-          await Actions.token.transferSync(client, { ...parameters, feePayer: feePayerAccount }),
-          'sponsor' as const,
-        ] as const
-      } catch (error) {
-        if (!isInsufficientFundsError(error)) throw error
-        return [
-          await Actions.token.transferSync(client, { ...parameters, feeToken: tokenAddress }),
-          'sender' as const,
-        ] as const
-      }
-    })()
-    if (!transfer.receipt.transactionHash)
-      throw new Error('Tempo transaction did not return a hash.')
-    await db
-      .updateTable('tip')
-      .set({
-        confirmed_at: new Date().toISOString(),
-        transaction_hash: transfer.receipt.transactionHash,
-        updated_at: new Date().toISOString(),
-      })
-      .where('id', '=', id)
-      .execute()
-    if (!accessKey.authorization_used_at)
-      await db
-        .updateTable('access_key')
-        .set({
-          authorization_used_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .where('id', '=', accessKey.id)
-        .execute()
-    const tokenMetadata = await Tempo.getTokenMetadata(env, workspace.chain_id, tokenAddress)
-    return {
-      amount: formatAmount(workspace.default_amount),
-      chainId: workspace.chain_id,
-      feePayer,
-      isDefaultToken: true,
+  const accessKey = accessKeys.find((row) =>
+    supportsTip(KeyAuthorization.fromRpc(JSON.parse(row.authorization) as never), {
+      amount,
       memo: input.memo,
-      ok: true,
-      recipientProviderUserId: input.recipientProviderUserId,
-      senderProviderUserId: input.senderProviderUserId,
-      status: 'sent',
-      tokenCurrency: tokenMetadata.currency,
-      tokenSymbol: tokenMetadata.symbol,
-      transactionHash: transfer.receipt.transactionHash,
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Tip submission failed.'
-    const code = isInsufficientFundsError(error) ? 'insufficient_funds' : 'failed'
-    await db
-      .updateTable('tip')
-      .set({
-        failed_at: new Date().toISOString(),
-        failure_reason: message,
-        updated_at: new Date().toISOString(),
-      })
-      .where('id', '=', id)
-      .execute()
-    return { chainId: workspace.chain_id, code, message, ok: false }
-  }
+      tokenAddress,
+    }),
+  )
+  if (!accessKey)
+    return await createConfirmationRequired(env, input, workspace, amount, tokenAddress)
+
+  return await submitTip(env, db, {
+    accessKeyId: accessKey.id,
+    accessKeyPrivateKey: await AccessKey.decrypt(env, accessKey.ciphertext),
+    amount,
+    authorizationUsedAt: accessKey.authorization_used_at,
+    idempotencyKey: input.idempotencyKey,
+    keyAuthorization: KeyAuthorization.fromRpc(JSON.parse(accessKey.authorization) as never),
+    memo: input.memo,
+    recipient,
+    recipientProviderUserId: input.recipientProviderUserId,
+    sender,
+    senderProviderUserId: input.senderProviderUserId,
+    tokenAddress,
+    workspace,
+  })
 }
 
 export function parseAmount(value: string) {
@@ -301,9 +168,35 @@ export function parseTipText(value: string) {
   const mention = text.match(/<@([A-Z0-9_]+)(?:\|[^>]+)?>/)
   if (!mention) return null
   const afterMention = text.slice((mention.index ?? 0) + mention[0].length).trim()
+  const [first = '', ...rest] = afterMention.split(/\s+/)
+  const amount = parseAmount(first)
+  if (amount !== null) {
+    const remaining = rest.join(' ').trim()
+    const memoOnly = remaining.match(/^for\s+([\s\S]+)$/i)
+    if (!remaining || memoOnly)
+      return {
+        amount,
+        memo: memoOnly?.[1]?.trim() || null,
+        recipientProviderUserId: mention[1]!,
+        token: null,
+      }
+
+    const [token = '', ...tokenRest] = remaining.split(/\s+/)
+    const afterToken = tokenRest.join(' ').trim()
+    const memo = afterToken.match(/^for\s+([\s\S]+)$/i)
+    if (afterToken && !memo) return null
+    return {
+      amount,
+      memo: memo?.[1]?.trim() || null,
+      recipientProviderUserId: mention[1]!,
+      token,
+    }
+  }
   return {
+    amount: undefined,
     memo: afterMention.replace(/^for\s+/i, '').trim() || null,
     recipientProviderUserId: mention[1]!,
+    token: null,
   }
 }
 
@@ -335,6 +228,105 @@ export async function verifySponsorshipMemo(
     token: tip.token_address,
   })
   return memo.toLowerCase() === tip.sponsorship_memo.toLowerCase()
+}
+
+export async function getConfirmationData(env: Env, token: string) {
+  const payload = await Confirmation.decrypt(env, token)
+  if (Date.now() > new Date(payload.expiresAt).getTime())
+    throw new Error('Confirmation link expired')
+  const accessKey = await Confirmation.deriveAccessKey(env, payload.nonce)
+  return { accessKey, payload }
+}
+
+export async function confirmTipRequest(
+  env: Env,
+  input: { address: string; keyAuthorization: unknown; token: string },
+) {
+  const db = DB.create(env.DB)
+  const { accessKey, payload } = await getConfirmationData(env, input.token)
+  if (!Tempo.isAllowedToken(payload.chainId, payload.tokenAddress))
+    throw new Error('This token is not supported on this network.')
+
+  const workspace = await db
+    .selectFrom('workspace')
+    .selectAll()
+    .where('id', '=', payload.workspaceId)
+    .executeTakeFirstOrThrow()
+  const sender = await getConnectedMember(db, workspace.id, payload.senderProviderUserId)
+  if (!sender) throw new Error('Reconnect Tipbot and try again.')
+  const recipient = await getConnectedMember(db, workspace.id, payload.recipientProviderUserId)
+  if (!recipient) throw new Error('Recipient needs to connect Tipbot before receiving payments.')
+  const accessKeyExpiresAt =
+    payload.kind === 'reusable_access_key'
+      ? (payload.accessKeyExpiresAt ?? payload.expiresAt)
+      : payload.expiresAt
+  const accessKeyLimit =
+    payload.kind === 'reusable_access_key'
+      ? BigInt(AccountLink.reusableAccessKeyLimit)
+      : BigInt(payload.amount)
+  const accessKeyPeriodSeconds =
+    payload.kind === 'reusable_access_key'
+      ? AccountLink.reusableAccessKeyPeriodSeconds
+      : AccountLink.confirmationLinkTtlMs / 1000 // 10 minutes
+
+  const verified = await AccountLink.verifyKeyAuthorization({
+    accessKeyAddress: accessKey.address,
+    chainId: payload.chainId,
+    env,
+    expiresAt: accessKeyExpiresAt,
+    keyAuthorization: input.keyAuthorization,
+    limit: accessKeyLimit,
+    periodSeconds: accessKeyPeriodSeconds,
+    rootAddress: input.address,
+    tokenAddress: payload.tokenAddress,
+  })
+  if (!Address.isEqual(verified.rootAddress, sender.account.address as Address.Address))
+    throw new Error('Reconnect Tipbot and try again.')
+
+  let accessKeyId: string | undefined
+  if (payload.kind === 'reusable_access_key') {
+    const now = new Date().toISOString()
+    await db
+      .deleteFrom('access_key')
+      .where('account_id', '=', sender.account.id)
+      .where('chain_id', '=', payload.chainId)
+      .where('token_address', '=', Address.checksum(payload.tokenAddress))
+      .execute()
+    accessKeyId = Nanoid.generate()
+    await db
+      .insertInto('access_key')
+      .values({
+        account_id: sender.account.id,
+        address: accessKey.address,
+        authorization: verified.serialized,
+        authorization_used_at: null,
+        chain_id: payload.chainId,
+        ciphertext: await AccessKey.encrypt(env, accessKey.privateKey),
+        created_at: now,
+        expires_at: accessKeyExpiresAt,
+        id: accessKeyId,
+        revoked_at: null,
+        token_address: Address.checksum(payload.tokenAddress),
+        updated_at: now,
+      })
+      .execute()
+  }
+
+  return await submitTip(env, db, {
+    accessKeyId,
+    accessKeyPrivateKey: accessKey.privateKey,
+    amount: payload.amount,
+    authorizationUsedAt: null,
+    idempotencyKey: payload.idempotencyKey,
+    keyAuthorization: verified.authorization,
+    memo: payload.memo,
+    recipient,
+    recipientProviderUserId: payload.recipientProviderUserId,
+    sender,
+    senderProviderUserId: payload.senderProviderUserId,
+    tokenAddress: Address.checksum(payload.tokenAddress),
+    workspace,
+  })
 }
 
 async function getConnectedMember(db: DB.Type, workspaceId: string, providerUserId: string) {
@@ -382,6 +374,281 @@ async function getConnectedMember(db: DB.Type, workspaceId: string, providerUser
     )
 }
 
+type ConnectedMember = NonNullable<Awaited<ReturnType<typeof getConnectedMember>>>
+
+async function getExistingTipResult(
+  env: Env,
+  db: DB.Type,
+  input: {
+    idempotencyKey: string
+    recipientProviderUserId: string
+    senderProviderUserId: string
+  },
+  defaultTokenAddress: string,
+): Promise<TipResult | null> {
+  const existing = await db
+    .selectFrom('tip')
+    .selectAll()
+    .where('idempotency_key', '=', input.idempotencyKey)
+    .executeTakeFirst()
+  if (existing?.confirmed_at && existing.transaction_hash) {
+    const tokenMetadata = await Tempo.getTokenMetadata(
+      env,
+      existing.chain_id,
+      existing.token_address,
+    )
+    return {
+      amount: formatAmount(existing.amount),
+      chainId: existing.chain_id,
+      feePayer: 'sponsor',
+      isDefaultToken: Address.isEqual(
+        Address.checksum(existing.token_address),
+        defaultTokenAddress as Address.Address,
+      ),
+      memo: existing.memo,
+      ok: true,
+      recipientProviderUserId: input.recipientProviderUserId,
+      senderProviderUserId: input.senderProviderUserId,
+      status: 'duplicate',
+      tokenCurrency: tokenMetadata.currency,
+      tokenSymbol: tokenMetadata.symbol,
+      transactionHash: existing.transaction_hash,
+    }
+  }
+  if (existing?.failed_at)
+    return {
+      chainId: existing.chain_id,
+      code: existing.failure_reason ? getFailureCodeFromReason(existing.failure_reason) : 'failed',
+      message: existing.failure_reason ?? 'Tip failed. Try again.',
+      ok: false,
+      transactionHash: existing.transaction_hash ?? undefined,
+    }
+  if (existing)
+    return {
+      chainId: existing.chain_id,
+      code: 'pending',
+      message: 'Tip is still sending.',
+      ok: false,
+      transactionHash: existing.transaction_hash ?? undefined,
+    }
+  return null
+}
+
+async function createConfirmationRequired(
+  env: Env,
+  input: {
+    amount?: number
+    idempotencyKey: string
+    memo: string | null
+    provider: 'slack'
+    providerChannelId: string
+    providerId: string
+    recipientProviderUserId: string
+    senderProviderUserId: string
+  },
+  workspace: Database.Selectable.workspace,
+  amount: number,
+  tokenAddress: string,
+): Promise<TipResult> {
+  const nonce = Nanoid.generate()
+  const expiresAt = new Date(Date.now() + AccountLink.confirmationLinkTtlMs).toISOString()
+  const isReusable = amount <= AccountLink.reusableAccessKeyLimit
+  const token = await Confirmation.encrypt(env, {
+    ...(isReusable
+      ? {
+          accessKeyExpiresAt: new Date(
+            Date.now() + AccountLink.reusableAccessKeyTtlMs,
+          ).toISOString(),
+        }
+      : {}),
+    amount,
+    chainId: workspace.chain_id,
+    expiresAt,
+    idempotencyKey: `confirm:${nonce}`,
+    kind: isReusable ? 'reusable_access_key' : 'onetime_payment',
+    memo: input.memo,
+    nonce,
+    provider: input.provider,
+    providerChannelId: input.providerChannelId,
+    providerId: input.providerId,
+    recipientProviderUserId: input.recipientProviderUserId,
+    senderProviderUserId: input.senderProviderUserId,
+    tokenAddress,
+    workspaceId: workspace.id,
+  })
+  return {
+    chainId: workspace.chain_id,
+    code: 'confirmation_required',
+    confirmUrl: `https://${env.HOST}/confirm/${token}`,
+    ok: false,
+  }
+}
+
+async function submitTip(
+  env: Env,
+  db: DB.Type,
+  input: {
+    accessKeyId?: string
+    accessKeyPrivateKey: `0x${string}`
+    amount: number
+    authorizationUsedAt: string | null
+    idempotencyKey: string
+    keyAuthorization: KeyAuthorization.Signed
+    memo: string | null
+    recipient: ConnectedMember
+    recipientProviderUserId: string
+    sender: ConnectedMember
+    senderProviderUserId: string
+    tokenAddress: string
+    workspace: Database.Selectable.workspace
+  },
+): Promise<TipResult> {
+  const existing = await getExistingTipResult(env, db, input, input.tokenAddress)
+  if (existing) return existing
+
+  const id = Nanoid.generate()
+  const sponsorshipMemo = await createSponsorshipMemo(env, {
+    amount: input.amount,
+    chainId: input.workspace.chain_id,
+    id,
+    idempotencyKey: input.idempotencyKey,
+    recipient: input.recipient.account.address,
+    sender: input.sender.account.address,
+    token: input.tokenAddress,
+  })
+  const now = new Date().toISOString()
+  await db
+    .insertInto('tip')
+    .values({
+      amount: input.amount,
+      chain_id: input.workspace.chain_id,
+      confirmed_at: null,
+      created_at: now,
+      failed_at: null,
+      failure_reason: null,
+      id,
+      idempotency_key: input.idempotencyKey,
+      memo: input.memo,
+      recipient_id: input.recipient.account.id,
+      recipient_member_id: input.recipient.member.id,
+      sender_id: input.sender.account.id,
+      sender_member_id: input.sender.member.id,
+      sponsorship_memo: sponsorshipMemo,
+      token_address: input.tokenAddress,
+      transaction_hash: null,
+      updated_at: now,
+      workspace_id: input.workspace.id,
+    })
+    .execute()
+
+  try {
+    const feePayerPrivateKey = getFeePayerPrivateKey(env, input.workspace.chain_id)
+    const account = TempoAccount.fromSecp256k1(input.accessKeyPrivateKey, {
+      access: input.sender.account.address as `0x${string}`,
+    })
+    const client = createClient({
+      chain: Tempo.getChain(input.workspace.chain_id),
+      transport: http(Tempo.getRpcUrl(env, input.workspace.chain_id)),
+    })
+    const balance = await Actions.token.getBalance(client, {
+      account: input.sender.account.address as Address.Address,
+      token: input.tokenAddress as Address.Address,
+    })
+    if (balance < BigInt(input.amount)) throw new InsufficientFundsError()
+
+    const parameters = {
+      account,
+      amount: BigInt(input.amount),
+      keyAuthorization: input.authorizationUsedAt ? undefined : input.keyAuthorization,
+      ...(input.memo ? { memo: encodeTransferMemo(input.memo) } : {}),
+      to: input.recipient.account.address as never,
+      token: input.tokenAddress as Address.Address,
+    }
+    const [transfer, feePayer] = await (async () => {
+      if (!feePayerPrivateKey)
+        return [
+          await Actions.token.transferSync(client, {
+            ...parameters,
+            feeToken: input.tokenAddress as Address.Address,
+          }),
+          'sender' as const,
+        ] as const
+
+      const feePayerAccount = privateKeyToAccount(feePayerPrivateKey)
+      try {
+        return [
+          await Actions.token.transferSync(client, { ...parameters, feePayer: feePayerAccount }),
+          'sponsor' as const,
+        ] as const
+      } catch (error) {
+        if (!isInsufficientFundsError(error)) throw error
+        return [
+          await Actions.token.transferSync(client, {
+            ...parameters,
+            feeToken: input.tokenAddress as Address.Address,
+          }),
+          'sender' as const,
+        ] as const
+      }
+    })()
+    if (!transfer.receipt.transactionHash)
+      throw new Error('Tempo transaction did not return a hash.')
+    await db
+      .updateTable('tip')
+      .set({
+        confirmed_at: new Date().toISOString(),
+        transaction_hash: transfer.receipt.transactionHash,
+        updated_at: new Date().toISOString(),
+      })
+      .where('id', '=', id)
+      .execute()
+    if (input.accessKeyId && !input.authorizationUsedAt)
+      await db
+        .updateTable('access_key')
+        .set({
+          authorization_used_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .where('id', '=', input.accessKeyId)
+        .execute()
+    const tokenMetadata = await Tempo.getTokenMetadata(
+      env,
+      input.workspace.chain_id,
+      input.tokenAddress,
+    )
+    return {
+      amount: formatAmount(input.amount),
+      chainId: input.workspace.chain_id,
+      feePayer,
+      isDefaultToken: Address.isEqual(
+        Address.checksum(input.tokenAddress),
+        Address.checksum(input.workspace.default_token_address ?? Tempo.addressLookup.pathUsd),
+      ),
+      memo: input.memo,
+      ok: true,
+      recipientProviderUserId: input.recipientProviderUserId,
+      senderProviderUserId: input.senderProviderUserId,
+      status: 'sent',
+      tokenCurrency: tokenMetadata.currency,
+      tokenSymbol: tokenMetadata.symbol,
+      transactionHash: transfer.receipt.transactionHash,
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Tip submission failed.'
+    const code = isInsufficientFundsError(error) ? 'insufficient_funds' : 'failed'
+    await db
+      .updateTable('tip')
+      .set({
+        failed_at: new Date().toISOString(),
+        failure_reason: message,
+        updated_at: new Date().toISOString(),
+      })
+      .where('id', '=', id)
+      .execute()
+    return { chainId: input.workspace.chain_id, code, message, ok: false }
+  }
+}
+
 function supportsTransferMemo(
   authorization: KeyAuthorization.KeyAuthorization,
   tokenAddress: string,
@@ -397,9 +664,31 @@ function supportsTransferMemo(
   })
 }
 
+function supportsTip(
+  authorization: KeyAuthorization.KeyAuthorization,
+  input: { amount: number; memo: string | null; tokenAddress: string },
+) {
+  if (
+    authorization.scopes &&
+    !authorization.scopes.some((scope) => {
+      if (!Address.isEqual(scope.address, input.tokenAddress as Address.Address)) return false
+      if (!scope.selector) return true
+      return scope.selector.toLowerCase() === AbiFunction.getSelector('transfer(address,uint256)')
+    })
+  )
+    return false
+  if (input.memo && !supportsTransferMemo(authorization, input.tokenAddress)) return false
+  if (!authorization.limits) return true
+  return authorization.limits.some(
+    (limit) =>
+      Address.isEqual(limit.token as Address.Address, input.tokenAddress as Address.Address) &&
+      limit.limit >= BigInt(input.amount),
+  )
+}
+
 function getFeePayerPrivateKey(env: Env, chainId: number) {
-  if (chainId === Tempo.mainnetChainId) return env.FEE_PAYER_PRIVATE_KEY_MAINNET
-  if (chainId === Tempo.moderatoChainId || chainId === Tempo.localnetChainId)
+  if (chainId === Tempo.chainLookup.mainnet) return env.FEE_PAYER_PRIVATE_KEY_MAINNET
+  if (chainId === Tempo.chainLookup.testnet || chainId === Tempo.chainLookup.localnet)
     return env.FEE_PAYER_PRIVATE_KEY_TESTNET
   return undefined
 }
@@ -414,9 +703,18 @@ function isInsufficientFundsError(error: unknown) {
   if (error instanceof Error)
     return (
       getNodeError(new BaseError('Transaction failed.', { details: error.message }), {}) instanceof
-      InsufficientFundsError
+        InsufficientFundsError || isInsufficientFundsMessage(error.message)
     )
   return false
+}
+
+function isInsufficientFundsMessage(message: string) {
+  return /insufficient (?:funds|balance)|exceeds .* balance/i.test(message)
+}
+
+function getFailureCodeFromReason(reason: string): 'failed' | 'insufficient_funds' {
+  if (isInsufficientFundsMessage(reason)) return 'insufficient_funds'
+  return 'failed'
 }
 
 async function createSponsorshipMemo(

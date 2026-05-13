@@ -13,6 +13,7 @@ export const access_key = z.object({
   expires_at: z.string(),
   id: z.string(),
   revoked_at: z.string().nullable(),
+  token_address: z.string().nullable(),
   updated_at: z.string(),
 })
 

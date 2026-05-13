@@ -3,10 +3,12 @@ import { Address, Base64, Hex } from 'ox'
 import { z } from 'zod'
 import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
+import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as hono from '#/lib/hono.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Slack from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
+import * as Tip from '#/lib/tip.ts'
 import * as DB from '#db/client.ts'
 
 export const api = new Hono<{
@@ -56,14 +58,14 @@ export const api = new Hono<{
     return c.json({
       accessKeyAddress: link.access_key_address,
       accessKeyExpiry: link.access_key_expires_at,
-      accessKeyLimit: '10',
-      accessKeyLimitPeriodSeconds: 24 * 60 * 60, // 1 day
+      accessKeyLimit: AccountLink.reusableAccessKeyLimitText,
+      accessKeyLimitPeriodSeconds: AccountLink.reusableAccessKeyPeriodSeconds,
       accessKeyPublicKey: link.access_key_public_key as `0x${string}`,
       chainId: link.chain_id,
       chainName: Tempo.getChainName(link.chain_id),
       expiresAt: link.expires_at,
       ok: true as const,
-      tokenAddress: Address.checksum(link.default_token_address ?? Tempo.pathUsdAddress),
+      tokenAddress: Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
     })
   })
   .post(
@@ -122,7 +124,7 @@ export const api = new Hono<{
           expiresAt: link.access_key_expires_at,
           keyAuthorization: body.keyAuthorization,
           rootAddress: body.address,
-          tokenAddress: Address.checksum(link.default_token_address ?? Tempo.pathUsdAddress),
+          tokenAddress: Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
         })
         const now = new Date().toISOString()
         const existingAccount = await c.var.db
@@ -186,6 +188,17 @@ export const api = new Hono<{
           .deleteFrom('access_key')
           .where('account_id', '=', account.id)
           .where('chain_id', '=', link.chain_id)
+          .where(
+            'token_address',
+            '=',
+            Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
+          )
+          .execute()
+        await c.var.db
+          .deleteFrom('access_key')
+          .where('account_id', '=', account.id)
+          .where('chain_id', '=', link.chain_id)
+          .where('token_address', 'is', null)
           .execute()
         await c.var.db
           .insertInto('access_key')
@@ -199,6 +212,9 @@ export const api = new Hono<{
             expires_at: link.access_key_expires_at,
             id: Nanoid.generate(),
             revoked_at: null,
+            token_address: Address.checksum(
+              link.default_token_address ?? Tempo.addressLookup.pathUsd,
+            ),
             updated_at: now,
           })
           .execute()
@@ -246,6 +262,131 @@ export const api = new Hono<{
           {
             code: 'invalid_key_authorization' as const,
             message: error instanceof Error ? error.message : 'Invalid key authorization.',
+          },
+          400,
+        )
+      }
+    },
+  )
+  .get('/api/confirm/:token', async (c) => {
+    try {
+      const data = await Tip.getConfirmationData(c.env, c.req.param('token'))
+      const metadata = Tempo.getTokenMetadataFallback(data.payload.tokenAddress)
+      return c.json({
+        accessKeyAddress: data.accessKey.address,
+        accessKeyExpiry:
+          data.payload.kind === 'reusable_access_key'
+            ? (data.payload.accessKeyExpiresAt ?? data.payload.expiresAt)
+            : data.payload.expiresAt,
+        accessKeyLimit:
+          data.payload.kind === 'reusable_access_key'
+            ? AccountLink.reusableAccessKeyLimitText
+            : formatAmount(data.payload.amount),
+        accessKeyLimitPeriodSeconds:
+          data.payload.kind === 'reusable_access_key'
+            ? AccountLink.reusableAccessKeyPeriodSeconds
+            : AccountLink.confirmationLinkTtlMs / 1000,
+        accessKeyPublicKey: data.accessKey.publicKey as `0x${string}`,
+        amount: formatAmount(data.payload.amount),
+        chainId: data.payload.chainId,
+        kind: data.payload.kind,
+        memo: data.payload.memo,
+        ok: true as const,
+        recipientProviderUserId: data.payload.recipientProviderUserId,
+        tokenAddress: Address.checksum(data.payload.tokenAddress),
+        tokenCurrency: metadata.currency,
+        tokenSymbol: metadata.symbol,
+      })
+    } catch (error) {
+      return c.json(
+        {
+          code: 'invalid_confirmation' as const,
+          message: error instanceof Error ? error.message : 'Confirmation link expired',
+          ok: false as const,
+        },
+        404,
+      )
+    }
+  })
+  .post(
+    '/api/confirm/:token',
+    hono.validator(
+      'json',
+      z.object({
+        address: z.string().min(1),
+        keyAuthorization: z.unknown(),
+      }),
+    ),
+    async (c) => {
+      try {
+        const body = c.req.valid('json')
+        const data = await Tip.getConfirmationData(c.env, c.req.param('token'))
+        const result = await Tip.confirmTipRequest(c.env, {
+          address: body.address,
+          keyAuthorization: body.keyAuthorization,
+          token: c.req.param('token'),
+        })
+        if (!result.ok)
+          return c.json(
+            {
+              code: result.code,
+              message: result.message ?? 'Payment failed.',
+              ok: false as const,
+            },
+            400,
+          )
+
+        if (result.status === 'sent')
+          c.executionCtx.waitUntil(
+            (async () => {
+              const installation = await Chat.getSlack().getInstallation(data.payload.providerId)
+              if (!installation) return
+
+              const amount = result.isDefaultToken
+                ? formatCurrencyAmount(result.amount, result.tokenCurrency)
+                : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
+              const text = `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} <@${result.recipientProviderUserId}> ${amount}${result.memo ? ` for ${result.memo}` : ''}.`
+              const body = new URLSearchParams()
+              body.set(
+                'blocks',
+                JSON.stringify([
+                  {
+                    text: {
+                      text: `${text} <${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`,
+                      type: 'mrkdwn',
+                    },
+                    type: 'section',
+                  },
+                ]),
+              )
+              body.set('channel', data.payload.providerChannelId.replace(/^slack:/, ''))
+              body.set('text', `${text} Receipt`)
+              body.set('unfurl_links', 'false')
+              body.set('unfurl_media', 'false')
+              const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
+                fetch(`${c.env.SLACK_API_URL}/chat.postMessage`, {
+                  body,
+                  headers: { authorization: `Bearer ${installation.botToken}` },
+                  method: 'POST',
+                }),
+              )
+              const json = z.parse(
+                z.object({
+                  error: z.string().optional(),
+                  ok: z.boolean().optional(),
+                }),
+                await response.json(),
+              )
+              if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postMessage failed.')
+            })().catch(console.error),
+          )
+        return c.json({ ok: true as const, transactionHash: result.transactionHash })
+      } catch (error) {
+        return c.json(
+          {
+            code: 'confirmation_failed' as const,
+            message: error instanceof Error ? error.message : 'Payment failed.',
+            ok: false as const,
           },
           400,
         )

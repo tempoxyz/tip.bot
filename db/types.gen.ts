@@ -22,6 +22,7 @@ type access_key = {
   expires_at: string
   id: string
   revoked_at: string | null
+  token_address: string | null
   updated_at: k.Generated<string>
 }
 

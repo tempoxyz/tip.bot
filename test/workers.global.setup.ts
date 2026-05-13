@@ -45,14 +45,14 @@ export default async function (project: TestProject) {
   console.log('workers: minting fee payer')
   await Actions.token.mintSync(
     createClient({
-      chain: Tempo.getChain(Tempo.localnetChainId),
+      chain: Tempo.getChain(Tempo.chainLookup.localnet),
       transport: http(env.RPC_URL_TESTNET),
     }),
     {
       account: Account.fromSecp256k1(env.FEE_PAYER_PRIVATE_KEY_TESTNET),
       amount: parseUnits('10', 6),
       to: Account.fromSecp256k1(Constants.tip.senderRootPrivateKey).address,
-      token: Tempo.pathUsdAddress,
+      token: Tempo.addressLookup.pathUsd,
     },
   )
   console.log('workers: minted fee payer')
