@@ -4,10 +4,12 @@ import { formatAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import type { DB as Database } from '#db/types.gen.ts'
+import { Handler } from 'accounts/server'
 import { AbiFunction, Address, Hex } from 'ox'
 import { KeyAuthorization } from 'ox/tempo'
-import { createClient, http } from 'viem'
-import { Account as TempoAccount, Actions, withRelay } from 'viem/tempo'
+import { createClient, custom, decodeFunctionData, http, stringify } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
+import { Abis, Account as TempoAccount, Actions, withRelay } from 'viem/tempo'
 
 export type TipResult =
   | {
@@ -199,7 +201,7 @@ export async function handleTipRequest(
       chain: Tempo.getChain(workspace.chain_id),
       transport: withRelay(
         http(Tempo.getRpcUrl(env, workspace.chain_id)),
-        http(`https://${env.HOST}/api/relay/${workspace.chain_id}`),
+        createRelayTransport(env, workspace.chain_id),
       ),
     })
     const transfer = await Actions.token.transferSync(client, {
@@ -257,6 +259,104 @@ export async function handleTipRequest(
       .execute()
     return { chainId: workspace.chain_id, code: 'failed', message, ok: false }
   }
+}
+
+export async function handleRelayRequest(env: Env, request: Request, chainId: number) {
+  const privateKey = getFeePayerPrivateKey(env, chainId)
+  if (!privateKey)
+    return Response.json(
+      {
+        error: { code: -32603, message: 'Fee payer is not configured for this network.' },
+        id: null,
+        jsonrpc: '2.0',
+      },
+      { status: 500 },
+    )
+
+  const db = DB.create(env.DB)
+  return await Handler.relay({
+    chains: [Tempo.getChain(chainId)],
+    transports: {
+      [chainId]: http(Tempo.getRpcUrl(env, chainId)),
+    },
+    feePayer: {
+      account: privateKeyToAccount(privateKey),
+      async validate(request) {
+        const call = (() => {
+          if (!request.calls || request.calls.length !== 1) return undefined
+          return request.calls[0]
+        })()
+        if (!call?.data || !call.to || !request.from) return false
+
+        const decoded = (() => {
+          try {
+            return decodeFunctionData({ abi: Abis.tip20, data: call.data })
+          } catch {
+            return undefined
+          }
+        })()
+        const transfer = (() => {
+          if (decoded?.functionName === 'transfer') {
+            const [to, amount] = decoded.args
+            if (typeof to !== 'string' || typeof amount !== 'bigint') return null
+            return { amount, memo: null, to }
+          }
+          if (decoded?.functionName === 'transferWithMemo') {
+            const [to, amount, memo] = decoded.args
+            if (typeof to !== 'string' || typeof amount !== 'bigint' || typeof memo !== 'string')
+              return null
+            return { amount, memo, to }
+          }
+          return null
+        })()
+        if (!transfer) return false
+
+        const tips = await db
+          .selectFrom('tip')
+          .innerJoin('account as sender', 'sender.id', 'tip.sender_id')
+          .innerJoin('account as recipient', 'recipient.id', 'tip.recipient_id')
+          .select([
+            'recipient.address as recipient_address',
+            'sender.address as sender_address',
+            'tip.amount',
+            'tip.chain_id',
+            'tip.confirmed_at',
+            'tip.failed_at',
+            'tip.id',
+            'tip.idempotency_key',
+            'tip.memo',
+            'tip.sponsorship_memo',
+            'tip.token_address',
+          ])
+          .where('tip.chain_id', '=', chainId)
+          .where('tip.confirmed_at', 'is', null)
+          .where('tip.failed_at', 'is', null)
+          .execute()
+        const tip = tips.find((tip) => {
+          if (BigInt(tip.amount) !== transfer.amount) return false
+          try {
+            const recipientAddress = tip.recipient_address as Address.Address
+            const senderAddress = tip.sender_address as Address.Address
+            const tokenAddress = tip.token_address as Address.Address
+            if (!Address.isEqual(call.to as Address.Address, tokenAddress)) return false
+            if (!Address.isEqual(transfer.to as Address.Address, recipientAddress)) return false
+            if (!Address.isEqual(request.from as Address.Address, senderAddress)) return false
+            if (transfer.memo === null && tip.memo) return false
+            if (
+              transfer.memo !== null &&
+              encodeTransferMemo(tip.memo).toLowerCase() !== transfer.memo.toLowerCase()
+            )
+              return false
+          } catch {
+            return false
+          }
+          return Tempo.isAllowedToken(chainId, tip.token_address)
+        })
+        if (!tip) return false
+        return await verifySponsorshipMemo(env, tip)
+      },
+    },
+  }).fetch(new Request(`https://relay.local/${chainId}`, request))
 }
 
 export function parseAmount(value: string) {
@@ -367,6 +467,46 @@ function supportsTransferMemo(
       AbiFunction.getSelector('transferWithMemo(address,uint256,bytes32)').toLowerCase()
     )
   })
+}
+
+function createRelayTransport(env: Env, chainId: number) {
+  return custom(
+    {
+      async request(request) {
+        const response = await handleRelayRequest(
+          env,
+          new Request(`https://relay.local/${chainId}`, {
+            body: stringify(request),
+            headers: { 'content-type': 'application/json' },
+            method: 'POST',
+          }),
+          chainId,
+        )
+        const json = (await response.json()) as {
+          error?: { code?: number | undefined; message?: string | undefined } | undefined
+          result?: unknown
+        }
+        if (!response.ok)
+          throw new Error(
+            json.error?.message ?? `Relay request failed with HTTP ${response.status}.`,
+          )
+        if (json.error)
+          throw new Error(
+            json.error.message ??
+              `Relay request failed${json.error.code ? ` with code ${json.error.code}` : ''}.`,
+          )
+        return json.result
+      },
+    },
+    { name: 'Tipbot Relay', retryCount: 0 },
+  )
+}
+
+function getFeePayerPrivateKey(env: Env, chainId: number) {
+  if (chainId === Tempo.mainnetChainId) return env.FEE_PAYER_PRIVATE_KEY_MAINNET
+  if (chainId === Tempo.moderatoChainId || chainId === Tempo.localnetChainId)
+    return env.FEE_PAYER_PRIVATE_KEY_TESTNET
+  return undefined
 }
 
 async function createSponsorshipMemo(
