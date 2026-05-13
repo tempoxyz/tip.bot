@@ -38,7 +38,7 @@ jobs:
           pnpm run db:codegen
           pnpm run gen:types
         env:
-          SECRET_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+          SECRET_KEY: testMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
           SLACK_CLIENT_ID: ci-placeholder
           SLACK_CLIENT_SECRET: ci-placeholder
           SLACK_SIGNING_SECRET: ci-placeholder
@@ -93,6 +93,13 @@ jobs:
 
       - name: Test
         run: pnpm test
+        env:
+          FEE_PAYER_PRIVATE_KEY_MAINNET: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
+          FEE_PAYER_PRIVATE_KEY_TESTNET: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
+          SECRET_KEY: testMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+          SLACK_CLIENT_ID: ci-placeholder
+          SLACK_CLIENT_SECRET: ci-placeholder
+          SLACK_SIGNING_SECRET: ci-placeholder
 
   e2e:
     name: E2E

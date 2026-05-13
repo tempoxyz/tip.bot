@@ -8,14 +8,14 @@ import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
 import { createCloudflareState } from '#/vendor/chatStateCloudflareDO.ts'
 import { createSlackAdapter } from '@chat-adapter/slack'
+import * as chat from 'chat'
 import { env } from 'cloudflare:workers'
-import { Actions, Card, CardText, Chat, LinkButton, type SlashCommandEvent } from 'chat'
 import { z } from 'zod'
 
-let chat: Chat | null = null
+let bot: chat.Chat | null = null
 export function getChat() {
-  if (chat) return chat
-  chat = new Chat({
+  if (bot) return bot
+  bot = new chat.Chat({
     adapters: { slack: getSlack() },
     state: createCloudflareState({
       name: 'tipbot',
@@ -26,7 +26,7 @@ export function getChat() {
     }),
     userName: 'tipbot',
   })
-  chat.onSlashCommand('/tip', async (event) => {
+  bot.onSlashCommand('/tip', async (event) => {
     const context = {
       db: DB.create(env.DB),
       provider: getProvider(event),
@@ -41,7 +41,18 @@ export function getChat() {
     }
     await handlers.default(event, context)
   })
-  return chat
+  bot.onAction(async (event) => {
+    const action = z.safeParse(z.enum(actionNames), event.actionId)
+    if (!action.success) return
+    await actions[action.data](event)
+  })
+  bot.onModalSubmit(async (event) => {
+    const modalSubmit = z.enum(modalSubmitNames).safeParse(event.callbackId)
+    if (!modalSubmit.success) return
+
+    return await modalSubmits[modalSubmit.data](event)
+  })
+  return bot
 }
 
 let slack: ReturnType<typeof createSlackAdapter> | null = null
@@ -56,6 +67,171 @@ export function getSlack() {
   })
   return slack
 }
+
+const actions = {
+  async config_edit(event) {
+    if (event.adapter !== getSlack()) throw new Error('Provider is not implemented yet.')
+    const raw = z.parse(
+      z.object({
+        channel: z.object({ id: z.string().min(1) }).optional(),
+        container: z.object({ channel_id: z.string().min(1).optional() }).optional(),
+        team: z.object({ id: z.string().min(1) }),
+      }),
+      event.raw,
+    )
+    const workspace = await DB.create(env.DB)
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', 'slack')
+      .where('provider_id', '=', raw.team.id)
+      .executeTakeFirst()
+    if (!workspace) return
+
+    if (!(await isSlackAdmin(raw.team.id, event.user.userId))) {
+      const channelId = raw.channel?.id ?? raw.container?.channel_id
+      if (channelId)
+        await getChat()
+          .channel(`slack:${channelId}`)
+          .postEphemeral(
+            event.user,
+            {
+              card: chat.Card({
+                children: [chat.CardText('Only Slack admins can change Tipbot settings.')],
+                title: 'Admin permission required',
+              }),
+              fallbackText:
+                'Admin permission required\nOnly Slack admins can change Tipbot settings.',
+            },
+            { fallbackToDM: false },
+          )
+      else if (event.thread)
+        await event.thread.postEphemeral(
+          event.user,
+          {
+            card: chat.Card({
+              children: [chat.CardText('Only Slack admins can change Tipbot settings.')],
+              title: 'Admin permission required',
+            }),
+            fallbackText:
+              'Admin permission required\nOnly Slack admins can change Tipbot settings.',
+          },
+          { fallbackToDM: false },
+        )
+      return
+    }
+
+    const tokenAddress = workspace.default_token_address ?? Tempo.pathUsdAddress
+    const tokenValue = (() => {
+      if (tokenAddress.toLowerCase() === Tempo.alphaUsdAddress.toLowerCase()) return 'AlphaUSD'
+      if (tokenAddress.toLowerCase() === Tempo.betaUsdAddress.toLowerCase()) return 'BetaUSD'
+      if (tokenAddress.toLowerCase() === Tempo.thetaUsdAddress.toLowerCase()) return 'ThetaUSD'
+      return 'pathUSD'
+    })()
+    await event.openModal(
+      chat.Modal({
+        callbackId: 'config_edit',
+        children: [
+          chat.Select({
+            id: 'network',
+            initialOption: workspace.chain_id === Tempo.mainnetChainId ? 'mainnet' : 'testnet',
+            label: 'Network',
+            options: [
+              chat.SelectOption({ label: 'Mainnet', value: 'mainnet' }),
+              chat.SelectOption({ label: 'Testnet', value: 'testnet' }),
+            ],
+          }),
+          chat.Select({
+            id: 'default_token',
+            initialOption: tokenValue,
+            label: 'Default token',
+            options: [
+              chat.SelectOption({ label: 'pathUSD', value: 'pathUSD' }),
+              chat.SelectOption({ label: 'AlphaUSD', value: 'AlphaUSD' }),
+              chat.SelectOption({ label: 'BetaUSD', value: 'BetaUSD' }),
+              chat.SelectOption({ label: 'ThetaUSD', value: 'ThetaUSD' }),
+            ],
+          }),
+          chat.TextInput({
+            id: 'default_amount',
+            initialValue: formatAmount(workspace.default_amount),
+            label: 'Default amount',
+          }),
+        ],
+        privateMetadata: JSON.stringify({ providerId: raw.team.id }),
+        submitLabel: 'Save',
+        title: 'Edit workspace settings',
+      }),
+    )
+  },
+  async connect_cancel(event) {
+    await event.adapter.deleteMessage(event.threadId, event.messageId)
+  },
+} as const satisfies Record<
+  (typeof actionNames)[number],
+  (event: chat.ActionEvent) => Promise<void>
+>
+
+const modalSubmits = {
+  async config_edit(event) {
+    const metadata = z.parse(
+      z.object({
+        providerId: z.string().min(1),
+      }),
+      JSON.parse(event.privateMetadata ?? '{}'),
+    )
+    if (!(await isSlackAdmin(metadata.providerId, event.user.userId))) return
+
+    const chainId = (() => {
+      if (event.values.network === 'mainnet') return Tempo.mainnetChainId
+      if (event.values.network === 'testnet') return Tempo.moderatoChainId
+      return null
+    })()
+    const tokenAddress = (() => {
+      if (event.values.default_token === 'pathUSD') return Tempo.pathUsdAddress
+      if (event.values.default_token === 'AlphaUSD') return Tempo.alphaUsdAddress
+      if (event.values.default_token === 'BetaUSD') return Tempo.betaUsdAddress
+      if (event.values.default_token === 'ThetaUSD') return Tempo.thetaUsdAddress
+      return null
+    })()
+    const amount = Tip.parseAmount(event.values.default_amount ?? '')
+    const errors: Record<string, string> = {}
+    if (chainId === null) errors.network = 'Choose Mainnet or Testnet.'
+    if (tokenAddress === null) errors.default_token = 'Choose a default token.'
+    if (amount === null)
+      errors.default_amount = 'Enter a positive amount with up to 6 decimal places. Example: 0.005'
+    if (chainId !== null && tokenAddress !== null && !Tempo.isAllowedToken(chainId, tokenAddress))
+      errors.default_token = 'This token isn’t available on the selected network.'
+    if (Object.keys(errors).length > 0) return { action: 'errors' as const, errors }
+    if (amount === null || chainId === null || tokenAddress === null) return
+
+    const now = new Date().toISOString()
+    await DB.create(env.DB)
+      .updateTable('workspace')
+      .set({
+        chain_id: chainId,
+        default_amount: amount,
+        default_token_address: tokenAddress,
+        updated_at: now,
+      })
+      .where('provider', '=', 'slack')
+      .where('provider_id', '=', metadata.providerId)
+      .execute()
+
+    const workspace = await DB.create(env.DB)
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', 'slack')
+      .where('provider_id', '=', metadata.providerId)
+      .executeTakeFirstOrThrow()
+    if (event.relatedMessage)
+      await event.relatedMessage.edit(
+        configCard(workspace, { canEdit: true, title: 'Workspace settings updated' }),
+      )
+  },
+} as const satisfies Record<
+  (typeof modalSubmitNames)[number],
+  (event: chat.ModalSubmitEvent) => Promise<chat.ModalResponse | void | undefined>
+>
 
 const handlers = {
   async config(event, ctx) {
@@ -74,125 +250,11 @@ const handlers = {
       return
     }
 
-    const parts = ctx.text.trim().split(/\s+/)
-    const key = parts[0]
-    const value = parts[1]
-    if (!key) {
-      await event.channel.postEphemeral(
-        event.user,
-        `Current config: amount ${formatAmount(workspace.default_amount)}, network ${Tempo.getChainName(workspace.chain_id)}`,
-        { fallbackToDM: false },
-      )
-      return
-    }
-    if (key === 'network' && !value) {
-      await event.channel.postEphemeral(
-        event.user,
-        `Current network: ${Tempo.getChainName(workspace.chain_id)}`,
-        { fallbackToDM: false },
-      )
-      return
-    }
-    if (!value) {
-      await event.channel.postEphemeral(event.user, 'Config keys: amount, network.', {
-        fallbackToDM: false,
-      })
-      return
-    }
-
-    if (ctx.provider.type !== 'slack') throw new Error('Provider is not implemented yet.')
-
-    const installation = await getSlack().getInstallation(ctx.provider.id)
-    if (!installation) throw new Error('Slack app is not installed for this workspace.')
-
-    const body = new URLSearchParams()
-    body.set('user', event.user.userId)
-    const response = await getSlack().withBotToken(installation.botToken, () =>
-      fetch(`${env.SLACK_API_URL}/users.info`, {
-        body,
-        headers: { authorization: `Bearer ${installation.botToken}` },
-        method: 'POST',
-      }),
+    await event.channel.postEphemeral(
+      event.user,
+      configCard(workspace, { canEdit: await isSlackAdmin(ctx.provider.id, event.user.userId) }),
+      { fallbackToDM: false },
     )
-    const info = z.parse(
-      z.object({
-        error: z.string().optional(),
-        ok: z.boolean().optional(),
-        user: z
-          .object({
-            is_admin: z.boolean().optional(),
-            is_owner: z.boolean().optional(),
-          })
-          .optional(),
-      }),
-      await response.json(),
-    )
-    if (!info.ok) throw new Error(info.error ?? 'Slack API users.info failed.')
-
-    if (!info.user?.is_admin && !info.user?.is_owner) {
-      await event.channel.postEphemeral(event.user, 'Only Slack admins can change tip config.', {
-        fallbackToDM: false,
-      })
-      return
-    }
-
-    if (key !== 'amount' && key !== 'network') {
-      await event.channel.postEphemeral(event.user, 'Config keys: amount, network.', {
-        fallbackToDM: false,
-      })
-      return
-    }
-
-    if (key === 'network') {
-      const chainId = (() => {
-        if (value === 'mainnet') return Tempo.mainnetChainId
-        if (value === 'moderato' || value === 'testnet') return Tempo.moderatoChainId
-        return null
-      })()
-      if (chainId === null) {
-        await event.channel.postEphemeral(event.user, 'Network must be mainnet or moderato.', {
-          fallbackToDM: false,
-        })
-        return
-      }
-
-      await ctx.db
-        .updateTable('workspace')
-        .set({
-          chain_id: chainId,
-          updated_at: new Date().toISOString(),
-        })
-        .where('id', '=', workspace.id)
-        .execute()
-
-      await event.channel.postEphemeral(
-        event.user,
-        `Network updated to ${Tempo.getChainName(chainId)}. Members without a matching key must run \`/tip connect\`.`,
-        { fallbackToDM: false },
-      )
-      return
-    }
-
-    const amount = Tip.parseAmount(value)
-    if (amount === null) {
-      await event.channel.postEphemeral(
-        event.user,
-        'Amount must be a positive decimal with at most 6 decimal places.',
-        { fallbackToDM: false },
-      )
-      return
-    }
-
-    await ctx.db
-      .updateTable('workspace')
-      .set({
-        default_amount: amount,
-        updated_at: new Date().toISOString(),
-      })
-      .where('id', '=', workspace.id)
-      .execute()
-
-    await event.channel.postEphemeral(event.user, `Updated ${key}.`, { fallbackToDM: false })
   },
   async connect(event, ctx) {
     const workspace = await ctx.db
@@ -251,7 +313,18 @@ const handlers = {
       if (accessKey) {
         await event.channel.postEphemeral(
           event.user,
-          'Connected to Tipbot\nUse `/tip disconnect` to disconnect.',
+          {
+            card: chat.Card({
+              children: [
+                chat.CardText(
+                  'Send and receive payments in this workspace.\nUse `/tip disconnect` to disconnect.',
+                ),
+              ],
+              title: 'Already connected to Tipbot',
+            }),
+            fallbackText:
+              'Already connected to Tipbot\nSend and receive payments in this workspace.\nUse `/tip disconnect` to disconnect.',
+          },
           { fallbackToDM: false },
         )
         return
@@ -262,8 +335,13 @@ const handlers = {
     const token = Nanoid.generate()
     const accessKey = AccessKey.generate()
     const linkAction = member.account_id ? 'Reconnect' : 'Connect'
+    const linkButtonLabel = member.account_id ? 'Refresh connection' : 'Connect Tipbot'
+    const linkDescription = member.account_id
+      ? 'Tipbot connection needs a quick refresh before sending payments.'
+      : 'Connect once to send and receive payments in Slack.'
+    const linkTitle = member.account_id ? 'Refresh Tipbot connection' : 'Connect to Tipbot'
     const linkUrl = `https://${env.HOST}/connect/${token}`
-    const linkText = `${linkAction} to Tipbot: ${linkUrl}\nThis link expires in 10 minutes.`
+    const linkText = `${linkTitle}\n${linkDescription}\nThis private link expires in 10 minutes.\n${linkAction} to Tipbot: ${linkUrl}`
     const linkExpiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString() // 10 minutes
     const accessKeyExpiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
     await ctx.db
@@ -293,11 +371,16 @@ const handlers = {
     await event.channel.postEphemeral(
       event.user,
       {
-        card: Card({
+        card: chat.Card({
           children: [
-            CardText(linkText),
-            Actions([LinkButton({ label: linkAction, url: linkUrl })]),
+            chat.CardText(`${linkDescription}\nThis private link expires in 10 minutes.`),
+            chat.CardLink({ label: 'Private link', url: linkUrl }),
+            chat.Actions([
+              chat.LinkButton({ label: linkButtonLabel, style: 'primary', url: linkUrl }),
+              chat.Button({ id: 'connect_cancel', label: 'Cancel' }),
+            ]),
           ],
+          title: linkTitle,
         }),
         fallbackText: linkText,
       },
@@ -346,7 +429,26 @@ const handlers = {
   async help(event, _ctx) {
     await event.channel.postEphemeral(
       event.user,
-      'I’m Tipbot: sometime tipper, sometime messenger, always bot.\nTry `/tip @account for coffee`. Subcommands: `/tip connect`, `/tip disconnect`, `/tip config`, `/tip help`, `/tip status`.',
+      {
+        card: chat.Card({
+          children: [
+            chat.Table({
+              headers: ['Command', 'Description'],
+              rows: [
+                ['`/tip @account for coffee`', 'Send a payment in chat'],
+                ['`/tip config`', 'View workspace settings'],
+                ['`/tip connect`', 'Connect Tipbot'],
+                ['`/tip disconnect`', 'Disconnect Tipbot'],
+                ['`/tip help`', 'Show commands'],
+                ['`/tip status`', 'Check Tipbot connection'],
+              ],
+            }),
+          ],
+          title: 'Tipbot commands',
+        }),
+        fallbackText:
+          'Tipbot commands\n`/tip @account for coffee` Send a payment in chat\n`/tip config` View workspace settings\n`/tip connect` Connect Tipbot\n`/tip disconnect` Disconnect Tipbot\n`/tip help` Show commands\n`/tip status` Check Tipbot connection',
+      },
       { fallbackToDM: false },
     )
   },
@@ -424,9 +526,7 @@ const handlers = {
       await event.channel.postEphemeral(
         event.user,
         'Could not send tip: missing Slack request ID.',
-        {
-          fallbackToDM: false,
-        },
+        { fallbackToDM: false },
       )
       return
     }
@@ -492,11 +592,13 @@ const handlers = {
   },
 } as const satisfies Record<
   (typeof commandNames)[number] | 'default',
-  (event: SlashCommandEvent, ctx: HandlerContext) => Promise<void>
+  (event: chat.SlashCommandEvent, ctx: HandlerContext) => Promise<void>
 >
 
 const commandNames = ['config', 'connect', 'disconnect', 'help', 'status'] as const
 const commandPattern = new RegExp(`^(${commandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
+const actionNames = ['config_edit', 'connect_cancel'] as const
+const modalSubmitNames = ['config_edit'] as const
 
 type HandlerContext = {
   db: DB.Type
@@ -504,7 +606,7 @@ type HandlerContext = {
   text: string
 }
 
-function getProvider(event: SlashCommandEvent): {
+function getProvider(event: chat.SlashCommandEvent): {
   id: string
   type: DB_gen.Selectable.workspace['provider']
 } {
@@ -519,4 +621,71 @@ function getProvider(event: SlashCommandEvent): {
     }
   }
   throw new Error('Provider is not implemented yet.')
+}
+
+//////////////////////////////////////////////////////////////////////////////////////
+
+async function isSlackAdmin(providerId: string, providerUserId: string) {
+  const installation = await getSlack().getInstallation(providerId)
+  if (!installation) return false
+
+  const body = new URLSearchParams()
+  body.set('user', providerUserId)
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/users.info`, {
+      body,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const info = z.parse(
+    z.object({
+      ok: z.boolean().optional(),
+      user: z
+        .object({
+          is_admin: z.boolean().optional(),
+          is_owner: z.boolean().optional(),
+        })
+        .optional(),
+    }),
+    await response.json(),
+  )
+  return Boolean(info.ok && (info.user?.is_admin || info.user?.is_owner))
+}
+
+function configCard(
+  workspace: DB_gen.Selectable.workspace,
+  options?: { canEdit?: boolean; title?: string },
+) {
+  const tokenAddress = workspace.default_token_address ?? Tempo.pathUsdAddress
+  const token = Tempo.getTokenMetadataFallback(tokenAddress)
+  const networkLabel = workspace.chain_id === Tempo.mainnetChainId ? 'Mainnet' : 'Testnet'
+  return {
+    card: chat.Card({
+      children: [
+        chat.Fields([
+          chat.Field({ label: 'Network', value: networkLabel }),
+          chat.Field({
+            label: 'Default token',
+            value: `<${Tempo.formatTokenLink(workspace.chain_id, tokenAddress)}|${token.symbol}>`,
+          }),
+          chat.Field({ label: 'Default amount', value: formatAmount(workspace.default_amount) }),
+        ]),
+        ...(options?.canEdit
+          ? [
+              chat.Actions([
+                chat.Button({
+                  actionType: 'modal',
+                  id: 'config_edit',
+                  label: 'Edit settings',
+                  style: 'primary',
+                }),
+              ]),
+            ]
+          : []),
+      ],
+      title: options?.title ?? 'Workspace settings',
+    }),
+    fallbackText: `${options?.title ?? 'Workspace settings'}\nNetwork ${networkLabel}\nDefault token ${token.symbol} ${Tempo.formatTokenLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}`,
+  }
 }

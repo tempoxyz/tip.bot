@@ -5,6 +5,8 @@ import { tempo, tempoLocalnet, tempoModerato } from 'viem/chains'
 
 export const pathUsdAddress = Address.checksum('0x20c0000000000000000000000000000000000000')
 export const alphaUsdAddress = Address.checksum('0x20c0000000000000000000000000000000000001')
+export const betaUsdAddress = Address.checksum('0x20c0000000000000000000000000000000000002')
+export const thetaUsdAddress = Address.checksum('0x20c0000000000000000000000000000000000003')
 
 export const mainnetChainId = tempo.id
 export const moderatoChainId = tempoModerato.id
@@ -33,11 +35,18 @@ export function formatTxLink(chainId: number, transactionHash: string) {
   return `${chain.blockExplorers?.default.url ?? chain.rpcUrls.default.http[0]}/tx/${transactionHash}`
 }
 
+export function formatTokenLink(chainId: number, tokenAddress: string) {
+  const chain = getChain(chainId)
+  return `${chain.blockExplorers?.default.url ?? chain.rpcUrls.default.http[0]}/address/${tokenAddress}`
+}
+
 export function isAllowedToken(chainId: number, tokenAddress: string) {
   const token = Address.checksum(tokenAddress)
   if (chainId === tempo.id) return Address.isEqual(token, pathUsdAddress)
   if (chainId === tempoModerato.id || chainId === tempoLocalnet.id)
-    return [pathUsdAddress, alphaUsdAddress].some((allowed) => Address.isEqual(token, allowed))
+    return [pathUsdAddress, alphaUsdAddress, betaUsdAddress, thetaUsdAddress].some((allowed) =>
+      Address.isEqual(token, allowed),
+    )
   return false
 }
 
@@ -69,6 +78,10 @@ export function getTokenMetadataFallback(tokenAddress: string) {
   if (Address.isEqual(Address.checksum(tokenAddress), pathUsdAddress))
     return { currency: 'USD', symbol: 'pathUSD' }
   if (Address.isEqual(Address.checksum(tokenAddress), alphaUsdAddress))
-    return { currency: 'USD', symbol: 'alphaUSD' }
+    return { currency: 'USD', symbol: 'AlphaUSD' }
+  if (Address.isEqual(Address.checksum(tokenAddress), betaUsdAddress))
+    return { currency: 'USD', symbol: 'BetaUSD' }
+  if (Address.isEqual(Address.checksum(tokenAddress), thetaUsdAddress))
+    return { currency: 'USD', symbol: 'ThetaUSD' }
   return { currency: 'USD', symbol: `${tokenAddress.slice(0, 6)}…${tokenAddress.slice(-4)}` }
 }

@@ -172,24 +172,14 @@ describe('/tip @account', () => {
 
 describe('/tip config', () => {
   test('shows current config', async () => {
-    const response = await client.api.chat.slack.$post(
-      {},
-      await createSlashCommandRequestInit('config'),
-    )
-    await Promise.all(waitUntil)
+    const response = await postSlashCommand('config')
 
     expect(response.status).toBe(200)
-    await expect(
-      slack.conversations.history({ channel: Constants.slack.channelId }),
-    ).resolves.toMatchObject({
-      messages: [
-        expect.objectContaining({
-          subtype: 'ephemeral',
-          text: 'Current config: amount 0.001, network Tempo',
-        }),
-      ],
-      ok: true,
-    })
+    await expectSlackMessage('Workspace settings')
+    await expectSlackMessage('Network: Testnet')
+    await expectSlackMessage('Default token:')
+    await expectSlackMessage('pathUSD')
+    await expectSlackMessage('Default amount: 0.001')
   })
 
   test('handles missing workspace', async () => {
@@ -212,7 +202,7 @@ describe('/tip config', () => {
   test('handles missing Slack installation', async () => {
     await Chat.getSlack().deleteInstallation(providerId)
 
-    const response = await postSlashCommand('config amount 0.002')
+    const response = await postSlashCommand('config')
     const workspace = await db
       .selectFrom('workspace')
       .selectAll()
@@ -239,7 +229,7 @@ describe('/tip config', () => {
     expect(workspace.default_amount).toBe(1000)
   })
 
-  test('updates amount', async () => {
+  test('ignores removed config arguments', async () => {
     const response = await postSlashCommand('config amount 0.002')
     const workspace = await db
       .selectFrom('workspace')
@@ -248,12 +238,18 @@ describe('/tip config', () => {
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Updated amount.')
-    expect(workspace.default_amount).toBe(2000)
+    await expectSlackMessage('Workspace settings')
+    expect(workspace.default_amount).toBe(1000)
   })
 
-  test('updates amount with extra whitespace', async () => {
-    const response = await postSlashCommand('  config   amount 0.002  ')
+  test('updates settings from edit modal', async () => {
+    const response = await postSlackInteraction(
+      createViewSubmissionPayload({
+        amount: '0.002',
+        network: 'testnet',
+        token: 'BetaUSD',
+      }),
+    )
     const workspace = await db
       .selectFrom('workspace')
       .selectAll()
@@ -261,55 +257,85 @@ describe('/tip config', () => {
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Updated amount.')
+    expect(await response.text()).toBe('')
+    expect(workspace.chain_id).toBe(Tempo.moderatoChainId)
     expect(workspace.default_amount).toBe(2000)
+    expect(workspace.default_token_address).toBe(Tempo.betaUsdAddress)
   })
 
-  test('rejects unknown key', async () => {
-    const response = await postSlashCommand('config unknown value')
+  test('rejects invalid edit modal amount', async () => {
+    const response = await postSlackInteraction(
+      createViewSubmissionPayload({
+        amount: '0',
+        network: 'testnet',
+        token: 'pathUSD',
+      }),
+    )
+    const workspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', providerId)
+      .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Config keys: amount, network.')
+    await expect(response.json()).resolves.toEqual({
+      errors: {
+        default_amount: 'Enter a positive amount with up to 6 decimal places. Example: 0.005',
+      },
+      response_action: 'errors',
+    })
+    expect(workspace.default_amount).toBe(1000)
   })
 
-  test('rejects zero amount', async () => {
-    const response = await postSlashCommand('config amount 0')
+  test('rejects unavailable token for selected network', async () => {
+    const response = await postSlackInteraction(
+      createViewSubmissionPayload({
+        amount: '0.001',
+        network: 'mainnet',
+        token: 'AlphaUSD',
+      }),
+    )
+    const workspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', providerId)
+      .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Amount must be a positive decimal with at most 6 decimal places.')
+    await expect(response.json()).resolves.toEqual({
+      errors: { default_token: 'This token isn’t available on the selected network.' },
+      response_action: 'errors',
+    })
+    expect(workspace.default_token_address).toBe(null)
   })
 
-  test('rejects non-numeric amount', async () => {
-    const response = await postSlashCommand('config amount abc')
-
-    expect(response.status).toBe(200)
-    await expectSlackMessage('Amount must be a positive decimal with at most 6 decimal places.')
-  })
-
-  test('rejects amount with too many decimals', async () => {
-    const response = await postSlashCommand('config amount 0.0000001')
-
-    expect(response.status).toBe(200)
-    await expectSlackMessage('Amount must be a positive decimal with at most 6 decimal places.')
-  })
-
-  test('denies non-admin amount update', async () => {
+  test('denies non-admin edit action', async () => {
+    await postSlashCommand('config')
+    const messageTs = await findSlackMessageTs('Workspace settings')
     const userList = await slack.users.list({})
-    const member = userList.members?.find((member) => member.id && !member.is_admin)
+    const member = userList.members?.find(
+      (member) => member.id && !member.is_admin && !member.is_owner,
+    )
     if (!member?.id) throw new Error('Expected Slack emulator to seed a non-admin member.')
 
-    const response = await postSlashCommand('config amount 0.002', {
-      userId: member.id,
+    const response = await postSlackInteraction({
+      actions: [{ action_id: 'config_edit', type: 'button' }],
+      channel: { id: Constants.slack.channelId },
+      container: {
+        channel_id: Constants.slack.channelId,
+        message_ts: messageTs,
+        type: 'message',
+      },
+      message: { ts: messageTs },
+      team: { id: providerId },
+      trigger_id: 'config-edit-trigger',
+      type: 'block_actions',
+      user: { id: member.id, name: member.name },
     })
-    const workspace = await db
-      .selectFrom('workspace')
-      .selectAll()
-      .where('provider_id', '=', providerId)
-      .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Only Slack admins can change tip config.')
-    expect(workspace.default_amount).toBe(1000)
+    await expectSlackMessage('Admin permission required')
+    await expectSlackMessage('Only Slack admins can change Tipbot settings.')
   })
 })
 
@@ -331,8 +357,8 @@ describe('/tip connect', () => {
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
-    await expectSlackMessage(`Connect to Tipbot: https://${env.HOST}/connect/`)
-    await expectSlackMessage('This link expires in 10 minutes.')
+    await expectSlackMessage('Connect to Tipbot')
+    await expectSlackMessage('This private link expires in 10 minutes.')
     expect(link).toEqual(expect.schemaMatching(Schema.account_link_token))
     expect(member).toEqual(expect.schemaMatching(Schema.member))
     expect(link.access_key_address).toEqual(expect.stringMatching(/^0x[0-9a-fA-F]{40}$/))
@@ -408,7 +434,8 @@ describe('/tip connect', () => {
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
-    await expectSlackMessage(`Connect to Tipbot: https://${env.HOST}/connect/`)
+    await expectSlackMessage('Connect to Tipbot')
+    await expectSlackMessage('Connect once to send and receive payments in Slack.')
     expect(members).toHaveLength(1)
     expect(link.member_id).toBe(member.id)
   })
@@ -430,8 +457,8 @@ describe('/tip connect', () => {
     const response = await postSlashCommand('connect')
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Connected to Tipbot')
-    await expectSlackMessage('Use `/tip disconnect` to disconnect.')
+    await expectSlackMessage('Already connected to Tipbot')
+    await expectSlackMessage('Send and receive payments in this workspace.')
     await expectSlackMessageNotContaining(account.address)
   })
 
@@ -460,8 +487,9 @@ describe('/tip connect', () => {
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
-    await expectSlackMessage(`Reconnect to Tipbot: https://${env.HOST}/connect/`)
-    await expectSlackMessage('This link expires in 10 minutes.')
+    await expectSlackMessage('Refresh Tipbot connection')
+    await expectSlackMessage('Tipbot connection needs a quick refresh before sending payments.')
+    await expectSlackMessage('This private link expires in 10 minutes.')
     await expectSlackMessageNotContaining('Use `/tip disconnect` to disconnect.')
     expect(link.member_id).toEqual(expect.any(String))
   })
@@ -530,11 +558,13 @@ describe('/tip help', () => {
     const response = await postSlashCommand('help')
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('I’m Tipbot: sometime tipper, sometime messenger, always bot.')
-    await expectSlackMessage('Try `/tip <@account> for coffee`.')
-    await expectSlackMessage(
-      'Subcommands: `/tip connect`, `/tip disconnect`, `/tip config`, `/tip help`, `/tip status`.',
-    )
+    await expectSlackMessage('Tipbot commands')
+    await expectSlackMessage('/tip @account for coffee')
+    await expectSlackMessage('/tip config')
+    await expectSlackMessage('/tip connect')
+    await expectSlackMessage('/tip disconnect')
+    await expectSlackMessage('/tip help')
+    await expectSlackMessage('/tip status')
   })
 })
 
@@ -676,6 +706,15 @@ async function expectSlackMessage(text: string) {
   expect(history.messages?.some((message) => message.text?.includes(text))).toBe(true)
 }
 
+async function findSlackMessageTs(text: string) {
+  const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+  const message = history.messages?.find((message) => message.text?.includes(text))
+
+  expect(history.ok).toBe(true)
+  if (!message?.ts) throw new Error(`Expected Slack message containing ${text}.`)
+  return message.ts
+}
+
 async function expectSlackMessageNotContaining(text: string) {
   const history = await slack.conversations.history({ channel: Constants.slack.channelId })
 
@@ -705,6 +744,60 @@ async function postSlashCommand(
   )
   await Promise.all(waitUntil)
   return response
+}
+
+async function postSlackInteraction(payload: unknown) {
+  const body = new URLSearchParams({ payload: JSON.stringify(payload) }).toString()
+  const response = await client.api.chat.slack.$post(
+    {},
+    {
+      headers: {
+        ...(await createSlackHeaders(body, env.SLACK_SIGNING_SECRET)),
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      init: { body },
+    },
+  )
+  await Promise.all(waitUntil)
+  return response
+}
+
+function createViewSubmissionPayload(input: { amount: string; network: string; token: string }) {
+  return {
+    team: { id: providerId },
+    type: 'view_submission',
+    user: { id: Constants.slack.adminUserId, name: 'admin' },
+    view: {
+      callback_id: 'config_edit',
+      id: `V${Nanoid.generate()}`,
+      private_metadata: JSON.stringify({ m: JSON.stringify({ providerId }) }),
+      state: {
+        values: {
+          default_amount: {
+            default_amount: { type: 'plain_text_input', value: input.amount },
+          },
+          default_token: {
+            default_token: {
+              selected_option: {
+                text: { text: input.token, type: 'plain_text' },
+                value: input.token,
+              },
+              type: 'static_select',
+            },
+          },
+          network: {
+            network: {
+              selected_option: {
+                text: { text: input.network, type: 'plain_text' },
+                value: input.network,
+              },
+              type: 'static_select',
+            },
+          },
+        },
+      },
+    },
+  }
 }
 
 async function createSlashCommandRequestInit(

@@ -34,7 +34,7 @@ export const Env = {
   get(overrides: Partial<Input> = {}) {
     return {
       HOST: 'tip.bot',
-      SECRET_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=',
+      SECRET_KEY: 'testMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=',
       SLACK_API_URL: 'https://slack.com/api',
       SLACK_APP_ID: 'A000000001',
       SLACK_CLIENT_ID: '123.456',

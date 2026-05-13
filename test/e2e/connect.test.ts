@@ -62,10 +62,8 @@ async function getConnectToken(app: { slackUrl: string }) {
   while (Date.now() < deadline) {
     const history = await slack.conversations.history({ channel: Constants.slack.channelId })
     messages = (history.messages ?? []).flatMap((message) => (message.text ? [message.text] : []))
-    const text = history.messages?.find((message) =>
-      message.text?.includes('Connect to Tipbot:'),
-    )?.text
-    const token = text?.match(/\/connect\/([^\s]+)/)?.[1]
+    const text = JSON.stringify(history.messages ?? [])
+    const token = text.match(/\/connect\/([^\s"\\)]+)/)?.[1]
     if (token) return token
     await new Promise((resolve) => setTimeout(resolve, 100))
   }

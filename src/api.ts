@@ -1,17 +1,18 @@
-import { Hono } from 'hono'
 import { Handler } from 'accounts/server'
+import { Card, CardText } from 'chat'
+import { Hono } from 'hono'
 import { Address, Base64, Hex } from 'ox'
 import { decodeFunctionData, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Abis } from 'viem/tempo'
 import { z } from 'zod'
-import * as DB from '#db/client.ts'
 import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
+import * as hono from '#/lib/hono.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
-import * as hono from '#/lib/hono.ts'
+import * as DB from '#db/client.ts'
 
 export const api = new Hono<{
   Bindings: Env
@@ -228,25 +229,30 @@ export const api = new Hono<{
               const installation = await Chat.getSlack().getInstallation(link.provider_id)
               if (!installation) return
 
-              const body = new URLSearchParams()
-              body.set('channel', link.provider_channel_id!.replace(/^slack:/, ''))
-              body.set('text', 'Connected to Tipbot\nUse `/tip disconnect` to disconnect.')
-              body.set('user', link.member_provider_user_id)
-              const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
-                fetch(`${c.env.SLACK_API_URL}/chat.postEphemeral`, {
-                  body,
-                  headers: { authorization: `Bearer ${installation.botToken}` },
-                  method: 'POST',
-                }),
+              await Chat.getSlack().withBotToken(installation.botToken, () =>
+                Chat.getChat()
+                  .channel(
+                    link.provider_channel_id!.startsWith('slack:')
+                      ? link.provider_channel_id!
+                      : `slack:${link.provider_channel_id!}`,
+                  )
+                  .postEphemeral(
+                    link.member_provider_user_id,
+                    {
+                      card: Card({
+                        children: [
+                          CardText(
+                            'Send and receive payments in Slack.\nTry `/tip @account for coffee`.',
+                          ),
+                        ],
+                        title: 'Connected to Tipbot',
+                      }),
+                      fallbackText:
+                        'Connected to Tipbot\nSend and receive payments in Slack.\nTry `/tip @account for coffee`.',
+                    },
+                    { fallbackToDM: false },
+                  ),
               )
-              const json = z.parse(
-                z.object({
-                  error: z.string().optional(),
-                  ok: z.boolean().optional(),
-                }),
-                await response.json(),
-              )
-              if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postEphemeral failed.')
             })().catch((error) => {
               console.error('Failed to notify Slack member after wallet connection:', error)
             }),

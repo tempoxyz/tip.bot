@@ -206,7 +206,7 @@ describe('/api/account/link/:token', () => {
     expect(response.status).toBe(200)
     expect(initialize).toHaveBeenCalled()
     await expectSlackMessage(channelId, 'Connected to Tipbot')
-    await expectSlackMessage(channelId, 'Use `/tip disconnect` to disconnect.')
+    await expectSlackMessage(channelId, 'Send and receive payments in Slack.')
   })
 
   test('rejects token reuse', async () => {
