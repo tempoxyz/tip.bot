@@ -6,9 +6,10 @@ import * as Tempo from '#/lib/tempo.ts'
 import type { DB as Database } from '#db/types.gen.ts'
 import { AbiFunction, Address, Hex } from 'ox'
 import { KeyAuthorization } from 'ox/tempo'
-import { createClient, http } from 'viem'
+import { BaseError, InsufficientFundsError, createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { Account as TempoAccount, Actions } from 'viem/tempo'
+import { getNodeError } from 'viem/utils'
 
 export type TipResult =
   | {
@@ -28,6 +29,7 @@ export type TipResult =
   | {
       code:
         | 'failed'
+        | 'insufficient_funds'
         | 'missing_sender_access_key'
         | 'pending'
         | 'recipient_unconnected'
@@ -227,7 +229,7 @@ export async function handleTipRequest(
           'sponsor' as const,
         ] as const
       } catch (error) {
-        if (!isFeePayerFundingError(error, feePayerAccount.address)) throw error
+        if (!isInsufficientFundsError(error)) throw error
         return [
           await Actions.token.transferSync(client, { ...parameters, feeToken: tokenAddress }),
           'sender' as const,
@@ -271,6 +273,7 @@ export async function handleTipRequest(
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Tip submission failed.'
+    const code = isInsufficientFundsError(error) ? 'insufficient_funds' : 'failed'
     await db
       .updateTable('tip')
       .set({
@@ -280,7 +283,7 @@ export async function handleTipRequest(
       })
       .where('id', '=', id)
       .execute()
-    return { chainId: workspace.chain_id, code: 'failed', message, ok: false }
+    return { chainId: workspace.chain_id, code, message, ok: false }
   }
 }
 
@@ -401,14 +404,19 @@ function getFeePayerPrivateKey(env: Env, chainId: number) {
   return undefined
 }
 
-function isFeePayerFundingError(error: unknown, feePayerAddress: string) {
-  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase()
-  return (
-    (message.includes('fee payer') ||
-      message.includes('feepayer') ||
-      message.includes(feePayerAddress.toLowerCase())) &&
-    (message.includes('balance') || message.includes('fund') || message.includes('insufficient'))
-  )
+function isInsufficientFundsError(error: unknown) {
+  if (error instanceof InsufficientFundsError) return true
+  if (error instanceof BaseError)
+    return (
+      Boolean(error.walk((cause) => cause instanceof InsufficientFundsError)) ||
+      getNodeError(error, {}) instanceof InsufficientFundsError
+    )
+  if (error instanceof Error)
+    return (
+      getNodeError(new BaseError('Transaction failed.', { details: error.message }), {}) instanceof
+      InsufficientFundsError
+    )
+  return false
 }
 
 async function createSponsorshipMemo(

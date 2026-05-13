@@ -48,7 +48,7 @@ function createManifest() {
           command: '/tip',
           description: 'Tip teammates and manage Tipbot',
           should_escape: true,
-          usage_hint: '@account, connect, disconnect, help, status',
+          usage_hint: '@account, connect, disconnect, help, leaderboard, status',
           url: `${baseUrl}/api/chat/slack`,
         },
       ],

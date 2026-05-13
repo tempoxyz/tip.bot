@@ -10,6 +10,7 @@ import { createCloudflareState } from '#/vendor/chatStateCloudflareDO.ts'
 import { createSlackAdapter } from '@chat-adapter/slack'
 import * as chat from 'chat'
 import { env } from 'cloudflare:workers'
+import { sql } from 'kysely'
 import { z } from 'zod'
 
 let bot: chat.Chat | null = null
@@ -308,6 +309,7 @@ const handlers = {
       ['/tip connect', 'Connect to Tipbot'],
       ['/tip disconnect', 'Disconnect from Tipbot'],
       ['/tip help', 'Show help message'],
+      ['/tip leaderboard', 'Show top tippers and recipients'],
       ['/tip status', 'Check connection status'],
     ]
     const body = new URLSearchParams()
@@ -320,6 +322,120 @@ const handlers = {
           rows: [
             [slackTableCell('Command'), slackTableCell('Description')],
             ...rows.map((row) => [slackTableCell(row[0], { code: true }), slackTableCell(row[1])]),
+          ],
+          type: 'table',
+        },
+      ]),
+    )
+    body.set('user', event.user.userId)
+    const response = await getSlack().withBotToken(installation.botToken, () =>
+      fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
+        body,
+        headers: { authorization: `Bearer ${installation.botToken}` },
+        method: 'POST',
+      }),
+    )
+    const json = z.parse(
+      z.object({
+        error: z.string().optional(),
+        ok: z.boolean().optional(),
+      }),
+      await response.json(),
+    )
+    if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postEphemeral failed.')
+  },
+  async leaderboard(event, ctx) {
+    if (ctx.text) {
+      await postInvalidUsage(event, ctx)
+      return
+    }
+    if (ctx.provider.type !== 'slack') throw new Error('Provider not implemented yet.')
+
+    const workspace = await ctx.db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', ctx.provider.type)
+      .where('provider_id', '=', ctx.provider.id)
+      .executeTakeFirst()
+    if (!workspace) {
+      await event.channel.postEphemeral(
+        event.user,
+        'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+        { fallbackToDM: false },
+      )
+      return
+    }
+
+    const received = await getLeaderboardRows(ctx, {
+      memberIdColumn: 'tip.recipient_member_id',
+      workspaceId: workspace.id,
+    })
+    const sent = await getLeaderboardRows(ctx, {
+      memberIdColumn: 'tip.sender_member_id',
+      workspaceId: workspace.id,
+    })
+    if (received.length === 0 && sent.length === 0) {
+      await event.channel.postEphemeral(event.user, 'No confirmed tips yet.', {
+        fallbackToDM: false,
+      })
+      return
+    }
+
+    const installation = await getSlack().getInstallation(ctx.provider.id)
+    if (!installation) return
+
+    const body = new URLSearchParams()
+    body.set('channel', event.channel.id.replace(/^slack:/, ''))
+    body.set(
+      'text',
+      [
+        'Tips received',
+        [
+          'Rank Account Tips',
+          ...received.map((row, index) =>
+            [String(index + 1), `<@${row.providerUserId}>`, String(row.tipCount)].join(' '),
+          ),
+        ].join('\n'),
+        '',
+        'Tips sent',
+        [
+          'Rank Account Tips',
+          ...sent.map((row, index) =>
+            [String(index + 1), `<@${row.providerUserId}>`, String(row.tipCount)].join(' '),
+          ),
+        ].join('\n'),
+      ].join('\n'),
+    )
+    body.set(
+      'blocks',
+      JSON.stringify([
+        {
+          text: { text: 'Tips received', type: 'mrkdwn' },
+          type: 'section',
+        },
+        {
+          rows: [
+            [slackTableCell('Rank'), slackTableCell('Account'), slackTableCell('Tips')],
+            ...received.map((row, index) => [
+              slackTableCell(String(index + 1)),
+              slackTableCell(`<@${row.providerUserId}>`),
+              slackTableCell(String(row.tipCount)),
+            ]),
+          ],
+          type: 'table',
+        },
+        {
+          text: { text: 'Tips sent', type: 'mrkdwn' },
+          type: 'section',
+        },
+        {
+          rows: [
+            [slackTableCell('Rank'), slackTableCell('Account'), slackTableCell('Tips')],
+            ...sent.map((row, index) => [
+              slackTableCell(String(index + 1)),
+              slackTableCell(`<@${row.providerUserId}>`),
+              slackTableCell(String(row.tipCount)),
+            ]),
           ],
           type: 'table',
         },
@@ -380,29 +496,7 @@ const handlers = {
     const parsed = Tip.parseTipText(ctx.text)
     if (!parsed) {
       if (ctx.provider.type !== 'slack') throw new Error('Provider not implemented yet.')
-
-      const installation = await getSlack().getInstallation(ctx.provider.id)
-      if (!installation) throw new Error('Tibot app not installed for this workspace.')
-
-      const body = new URLSearchParams()
-      body.set('channel', event.channel.id.replace(/^slack:/, ''))
-      body.set('text', 'Invalid `/tip` usage. Try `/tip @account` or `/tip help` for more info.')
-      body.set('user', event.user.userId)
-      const response = await getSlack().withBotToken(installation.botToken, () =>
-        fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
-          body,
-          headers: { authorization: `Bearer ${installation.botToken}` },
-          method: 'POST',
-        }),
-      )
-      const json = z.parse(
-        z.object({
-          error: z.string().optional(),
-          ok: z.boolean().optional(),
-        }),
-        await response.json(),
-      )
-      if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postEphemeral failed.')
+      await postInvalidUsage(event, ctx)
       return
     }
 
@@ -464,8 +558,47 @@ const handlers = {
         if (result.code === 'recipient_unconnected')
           return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
         if (result.code === 'pending') return 'Payment still sending.'
+        if (result.code === 'insufficient_funds')
+          return 'Payment not sent. Your wallet has insufficient funds. Add funds to your Tempo Wallet and try again.'
         return 'Payment failed.'
       })()
+      if (result.code === 'insufficient_funds') {
+        if (ctx.provider.type !== 'slack') throw new Error('Provider not implemented yet.')
+
+        const installation = await getSlack().getInstallation(ctx.provider.id)
+        if (!installation) throw new Error('Tibot app not installed for this workspace.')
+
+        const linkedText = message.replace('Add funds', '<https://wallet.tempo.xyz|Add funds>')
+        const body = new URLSearchParams()
+        body.set(
+          'blocks',
+          JSON.stringify([
+            {
+              text: { text: linkedText, type: 'mrkdwn' },
+              type: 'section',
+            },
+          ]),
+        )
+        body.set('channel', event.channel.id.replace(/^slack:/, ''))
+        body.set('text', message)
+        body.set('user', event.user.userId)
+        const response = await getSlack().withBotToken(installation.botToken, () =>
+          fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
+            body,
+            headers: { authorization: `Bearer ${installation.botToken}` },
+            method: 'POST',
+          }),
+        )
+        const json = z.parse(
+          z.object({
+            error: z.string().optional(),
+            ok: z.boolean().optional(),
+          }),
+          await response.json(),
+        )
+        if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postEphemeral failed.')
+        return
+      }
       if (
         'chainId' in result &&
         result.chainId &&
@@ -488,7 +621,7 @@ const handlers = {
   (event: chat.SlashCommandEvent, ctx: HandlerContext) => Promise<void>
 >
 
-const commandNames = ['config', 'connect', 'disconnect', 'help', 'status'] as const
+const commandNames = ['config', 'connect', 'disconnect', 'help', 'leaderboard', 'status'] as const
 const commandPattern = new RegExp(`^(${commandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
 const actionNames = ['config_edit', 'connect_cancel'] as const
 const modalSubmitNames = ['config_edit'] as const
@@ -497,6 +630,11 @@ type HandlerContext = {
   db: DB.Type
   provider: ReturnType<typeof getProvider>
   text: string
+}
+
+type LeaderboardRow = {
+  providerUserId: string
+  tipCount: number
 }
 
 function getProvider(event: chat.SlashCommandEvent): {
@@ -517,6 +655,59 @@ function getProvider(event: chat.SlashCommandEvent): {
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
+
+async function getLeaderboardRows(
+  ctx: HandlerContext,
+  options: {
+    memberIdColumn: 'tip.recipient_member_id' | 'tip.sender_member_id'
+    workspaceId: string
+  },
+) {
+  const rows = await ctx.db
+    .selectFrom('tip')
+    .innerJoin('member', 'member.id', options.memberIdColumn)
+    .select(['member.provider_user_id', sql<number>`count("tip"."id")`.as('tip_count')])
+    .where('tip.workspace_id', '=', options.workspaceId)
+    .where('tip.confirmed_at', 'is not', null)
+    .groupBy(['member.id', 'member.provider_user_id'])
+    .orderBy('tip_count', 'desc')
+    .orderBy('member.provider_user_id', 'asc')
+    .limit(10)
+    .execute()
+
+  return rows.map(
+    (row) =>
+      ({
+        providerUserId: row.provider_user_id,
+        tipCount: Number(row.tip_count),
+      }) satisfies LeaderboardRow,
+  )
+}
+
+async function postInvalidUsage(event: chat.SlashCommandEvent, ctx: HandlerContext) {
+  const installation = await getSlack().getInstallation(ctx.provider.id)
+  if (!installation) throw new Error('Tibot app not installed for this workspace.')
+
+  const body = new URLSearchParams()
+  body.set('channel', event.channel.id.replace(/^slack:/, ''))
+  body.set('text', 'Invalid `/tip` usage. Try `/tip @account` or `/tip help` for more info.')
+  body.set('user', event.user.userId)
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
+      body,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postEphemeral failed.')
+}
 
 async function postConnectLink(event: chat.SlashCommandEvent, ctx: HandlerContext) {
   const workspace = await ctx.db
@@ -677,13 +868,10 @@ function createReceiptBlocks(
 ) {
   return [
     {
-      accessory: {
-        action_id: `receipt_${transactionHash.slice(0, 64)}`,
-        text: { emoji: true, text: 'Receipt', type: 'plain_text' },
-        type: 'button',
-        url: Tempo.formatTxLink(chainId, transactionHash),
+      text: {
+        text: `${text} <${Tempo.formatTxLink(chainId, transactionHash)}|Receipt>`,
+        type: 'mrkdwn',
       },
-      text: { text, type: 'mrkdwn' },
       type: 'section',
     },
     ...(context

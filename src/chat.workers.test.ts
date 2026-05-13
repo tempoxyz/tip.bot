@@ -4,6 +4,7 @@ import * as AccountLink from '#/lib/accountLink.ts'
 import * as Chat from '#/chat.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Tempo from '#/lib/tempo.ts'
+import * as Tip from '#/lib/tip.ts'
 import { WebClient } from '@slack/web-api'
 import { env } from 'cloudflare:workers'
 import { testClient } from 'hono/testing'
@@ -161,6 +162,46 @@ describe('/tip @account', () => {
       `Payment not sent. <@${Constants.slack.memberUserId}> needs to connect Tipbot before receiving payments.`,
     )
     await expectSlackMessageNotContaining('tried to tip you')
+  })
+
+  test('handles insufficient funds', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const handleTipRequest = vi.spyOn(Tip, 'handleTipRequest').mockResolvedValue({
+      code: 'insufficient_funds',
+      ok: false,
+    })
+
+    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}>`)
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(
+      'Payment not sent. Your wallet has insufficient funds. Add funds to your Tempo Wallet and try again.',
+    )
+    const postEphemeralCall = fetchSpy.mock.calls.find((call) => {
+      const input = call[0]
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      return (
+        url.endsWith('/chat.postEphemeral') &&
+        call[1]?.body instanceof URLSearchParams &&
+        call[1].body.get('text')?.includes('Payment not sent. Your wallet has insufficient funds.')
+      )
+    })
+    const blocks = JSON.parse(
+      postEphemeralCall?.[1]?.body instanceof URLSearchParams
+        ? (postEphemeralCall[1].body.get('blocks') ?? '[]')
+        : '[]',
+    )
+    expect(blocks).toEqual([
+      {
+        text: {
+          text: 'Payment not sent. Your wallet has insufficient funds. <https://wallet.tempo.xyz|Add funds> to your Tempo Wallet and try again.',
+          type: 'mrkdwn',
+        },
+        type: 'section',
+      },
+    ])
+    handleTipRequest.mockRestore()
+    fetchSpy.mockRestore()
   })
 
   test('handles recorded tip without transaction', async () => {
@@ -593,7 +634,118 @@ describe('/tip help', () => {
     await expectSlackMessage('/tip connect')
     await expectSlackMessage('/tip disconnect')
     await expectSlackMessage('/tip help')
+    await expectSlackMessage('/tip leaderboard')
     await expectSlackMessage('/tip status')
+  })
+})
+
+describe('/tip leaderboard', () => {
+  test('shows received and sent counts', async () => {
+    const workspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', providerId)
+      .executeTakeFirstOrThrow()
+    const otherWorkspace = await factory.workspace.insert({ provider_id: `T${Nanoid.generate()}` })
+    const adminAccount = await factory.account.insert({})
+    const memberAccount = await factory.account.insert({})
+    const thirdAccount = await factory.account.insert({})
+    const adminMember = await factory.member.insert({
+      account_id: adminAccount.id,
+      provider_user_id: Constants.slack.adminUserId,
+      workspace_id: workspace.id,
+    })
+    const memberMember = await factory.member.insert({
+      account_id: memberAccount.id,
+      provider_user_id: Constants.slack.memberUserId,
+      workspace_id: workspace.id,
+    })
+    const thirdMember = await factory.member.insert({
+      account_id: thirdAccount.id,
+      provider_user_id: 'U000000003',
+      workspace_id: workspace.id,
+    })
+    const otherMember = await factory.member.insert({
+      account_id: thirdAccount.id,
+      provider_user_id: 'U000000004',
+      workspace_id: otherWorkspace.id,
+    })
+    const now = new Date().toISOString()
+    const tips = [
+      {
+        confirmed_at: now,
+        recipient_id: memberAccount.id,
+        recipient_member_id: memberMember.id,
+        sender_id: adminAccount.id,
+        sender_member_id: adminMember.id,
+        transaction_hash: '0x1',
+        workspace_id: workspace.id,
+      },
+      {
+        confirmed_at: now,
+        recipient_id: memberAccount.id,
+        recipient_member_id: memberMember.id,
+        sender_id: adminAccount.id,
+        sender_member_id: adminMember.id,
+        transaction_hash: '0x2',
+        workspace_id: workspace.id,
+      },
+      {
+        confirmed_at: now,
+        recipient_id: memberAccount.id,
+        recipient_member_id: memberMember.id,
+        sender_id: thirdAccount.id,
+        sender_member_id: thirdMember.id,
+        transaction_hash: '0x3',
+        workspace_id: workspace.id,
+      },
+      {
+        confirmed_at: now,
+        recipient_id: adminAccount.id,
+        recipient_member_id: adminMember.id,
+        sender_id: memberAccount.id,
+        sender_member_id: memberMember.id,
+        transaction_hash: '0x4',
+        workspace_id: workspace.id,
+      },
+      {
+        confirmed_at: null,
+        recipient_id: thirdAccount.id,
+        recipient_member_id: thirdMember.id,
+        sender_id: adminAccount.id,
+        sender_member_id: adminMember.id,
+        workspace_id: workspace.id,
+      },
+      {
+        confirmed_at: now,
+        recipient_id: thirdAccount.id,
+        recipient_member_id: otherMember.id,
+        sender_id: adminAccount.id,
+        sender_member_id: otherMember.id,
+        transaction_hash: '0x5',
+        workspace_id: otherWorkspace.id,
+      },
+    ]
+    for (const tip of tips) await factory.tip.insert(tip)
+
+    const response = await postSlashCommand('leaderboard')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('Tips received')
+    await expectSlackMessage(`1 <@${Constants.slack.memberUserId}> 3`)
+    await expectSlackMessage(`2 <@${Constants.slack.adminUserId}> 1`)
+    await expectSlackMessage('Tips sent')
+    await expectSlackMessage(`1 <@${Constants.slack.adminUserId}> 2`)
+    await expectSlackMessage(`2 <@${Constants.slack.memberUserId}> 1`)
+    await expectSlackMessage('3 <@U000000003> 1')
+    await expectSlackMessageNotContaining('U000000004')
+  })
+
+  test('handles no confirmed tips', async () => {
+    const response = await postSlashCommand('leaderboard')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('No confirmed tips yet.')
   })
 })
 
