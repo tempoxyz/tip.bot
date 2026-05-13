@@ -18,3 +18,27 @@ test('rejects invalid decimal amounts', () => {
   expect(Tip.parseAmount('abc')).toBe(null)
   expect(Tip.parseAmount('9007199255')).toBe(null)
 })
+
+test('parses tip mentions and memos', () => {
+  expect(Tip.parseTipText('<@UMEMBER>')).toEqual({
+    memo: null,
+    recipientProviderUserId: 'UMEMBER',
+  })
+  expect(Tip.parseTipText('<@UMEMBER> for great work')).toEqual({
+    memo: 'great work',
+    recipientProviderUserId: 'UMEMBER',
+  })
+  expect(Tip.parseTipText('<@UMEMBER|member> for great work')).toEqual({
+    memo: 'great work',
+    recipientProviderUserId: 'UMEMBER',
+  })
+  expect(Tip.parseTipText('<@UMEMBER> coffee')).toEqual({
+    memo: 'coffee',
+    recipientProviderUserId: 'UMEMBER',
+  })
+})
+
+test('rejects text without tip mentions', () => {
+  expect(Tip.parseTipText('')).toBe(null)
+  expect(Tip.parseTipText('hello')).toBe(null)
+})

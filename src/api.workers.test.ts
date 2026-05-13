@@ -34,7 +34,6 @@ beforeEach(async () => {
   executionCtx.passThroughOnException.mockClear()
   executionCtx.waitUntil.mockClear()
   vi.restoreAllMocks()
-  await db.deleteFrom('workspace').execute()
 })
 
 test('/api/health returns ok', async () => {
@@ -179,18 +178,20 @@ describe('/api/account/link/:token', () => {
   })
 
   test('notifies Slack member when wallet connection completes', async () => {
+    const providerId = `T${Nanoid.generate()}`
     await Chat.getChat().initialize()
-    await Chat.getSlack().setInstallation(Constants.slack.teamId, {
+    await Chat.getSlack().setInstallation(providerId, {
       botToken: Constants.slack.botToken,
       botUserId: Constants.slack.botUserId,
       teamName: Constants.slack.teamName,
     })
+    const initialize = vi.spyOn(Chat.getChat(), 'initialize')
     const channel = await slack.conversations.create({ name: `connect${Date.now()}` })
     const channelId = channel.channel?.id
     if (!channelId) throw new Error('Expected Slack test channel.')
     const pending = await createPendingAccountLink({
       providerChannelId: channelId,
-      providerId: Constants.slack.teamId,
+      providerId,
       providerUserId: Constants.slack.adminUserId,
     })
     const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
@@ -203,6 +204,7 @@ describe('/api/account/link/:token', () => {
     await Promise.all(waitUntil)
 
     expect(response.status).toBe(200)
+    expect(initialize).toHaveBeenCalled()
     await expectSlackMessage(channelId, 'Connected to Tipbot')
     await expectSlackMessage(channelId, 'Use `/tip disconnect` to disconnect.')
   })
@@ -345,6 +347,7 @@ describe('/api/chat/slack/oauth/callback', () => {
   })
 
   test('stores workspace and redirects', async () => {
+    await deleteSlackOauthWorkspace()
     const installResponse = await client.api.chat.slack.install.$get()
     const location = installResponse.headers.get('location')
     if (!location) throw new Error('Expected Slack install redirect location.')
@@ -387,6 +390,7 @@ describe('/api/chat/slack/oauth/callback', () => {
   })
 
   test('updates existing workspace and redirects', async () => {
+    await deleteSlackOauthWorkspace()
     await factory.workspace.insert({ name: 'Old Name', provider_id: Constants.slack.teamId })
     const installResponse = await client.api.chat.slack.install.$get()
     const location = installResponse.headers.get('location')
@@ -460,6 +464,10 @@ async function createPendingAccountLink(
     token_hash: await AccountLink.hashToken(env, token),
   })
   return { accessKey, link, member, token, workspace }
+}
+
+async function deleteSlackOauthWorkspace() {
+  await db.deleteFrom('workspace').where('provider_id', '=', Constants.slack.teamId).execute()
 }
 
 async function expectSlackMessage(channelId: string, text: string) {

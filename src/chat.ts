@@ -9,7 +9,7 @@ import * as Tip from '#/lib/tip.ts'
 import { createCloudflareState } from '#/vendor/chatStateCloudflareDO.ts'
 import { createSlackAdapter } from '@chat-adapter/slack'
 import { env } from 'cloudflare:workers'
-import { Chat, type SlashCommandEvent } from 'chat'
+import { Actions, Card, CardText, Chat, LinkButton, type SlashCommandEvent } from 'chat'
 import { z } from 'zod'
 
 let chat: Chat | null = null
@@ -240,17 +240,30 @@ const handlers = {
     }
 
     if (member.account_id) {
-      await event.channel.postEphemeral(
-        event.user,
-        'Connected to Tipbot\nUse `/tip disconnect` to disconnect.',
-        { fallbackToDM: false },
-      )
-      return
+      const accessKey = await ctx.db
+        .selectFrom('access_key')
+        .select(['id'])
+        .where('account_id', '=', member.account_id)
+        .where('chain_id', '=', workspace.chain_id)
+        .where('expires_at', '>', new Date().toISOString())
+        .where('revoked_at', 'is', null)
+        .executeTakeFirst()
+      if (accessKey) {
+        await event.channel.postEphemeral(
+          event.user,
+          'Connected to Tipbot\nUse `/tip disconnect` to disconnect.',
+          { fallbackToDM: false },
+        )
+        return
+      }
     }
 
     const now = new Date()
     const token = Nanoid.generate()
     const accessKey = AccessKey.generate()
+    const linkAction = member.account_id ? 'Reconnect' : 'Connect'
+    const linkUrl = `https://${env.HOST}/connect/${token}`
+    const linkText = `${linkAction} to Tipbot: ${linkUrl}\nThis link expires in 10 minutes.`
     const linkExpiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString() // 10 minutes
     const accessKeyExpiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
     await ctx.db
@@ -279,7 +292,15 @@ const handlers = {
 
     await event.channel.postEphemeral(
       event.user,
-      `Connect to Tipbot: https://${env.HOST}/connect/${token}\nThis link expires in 10 minutes.`,
+      {
+        card: Card({
+          children: [
+            CardText(linkText),
+            Actions([LinkButton({ label: linkAction, url: linkUrl })]),
+          ],
+        }),
+        fallbackText: linkText,
+      },
       { fallbackToDM: false },
     )
   },
@@ -370,16 +391,7 @@ const handlers = {
     )
   },
   async default(event, ctx) {
-    const parsed = (() => {
-      const text = ctx.text.trim()
-      const mention = text.match(/<@([A-Z0-9_]+)(?:\|[^>]+)?>/)
-      if (!mention) return null
-      const afterMention = text.slice((mention.index ?? 0) + mention[0].length).trim()
-      return {
-        memo: afterMention.replace(/^for\s+/i, '').trim() || null,
-        recipientProviderUserId: mention[1]!,
-      }
-    })()
+    const parsed = Tip.parseTipText(ctx.text)
     if (!parsed) {
       if (ctx.provider.type !== 'slack') throw new Error('Provider is not implemented yet.')
 
@@ -452,9 +464,7 @@ const handlers = {
       await event.channel.postEphemeral(
         event.user,
         `Tip complete. ${Tempo.formatTxLink(result.chainId, result.transactionHash)}`,
-        {
-          fallbackToDM: false,
-        },
+        { fallbackToDM: false },
       )
     else {
       if (result.code === 'recipient_unconnected') {

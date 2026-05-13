@@ -2,6 +2,7 @@ import * as DB from '#db/client.ts'
 import * as AccessKey from '#/lib/accessKey.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as Chat from '#/chat.ts'
+import * as Nanoid from '#/lib/nanoid.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import { WebClient } from '@slack/web-api'
 import { env } from 'cloudflare:workers'
@@ -15,6 +16,7 @@ import * as Factory from '#test/factory.ts'
 import { createSlackHeaders } from '#/lib/slack.ts'
 
 let waitUntil: Promise<unknown>[] = []
+let providerId = ''
 const db = DB.create(env.DB)
 const executionCtx = {
   passThroughOnException: vi.fn(),
@@ -29,6 +31,7 @@ const slack = new WebClient(Constants.slack.botToken, { slackApiUrl: env.SLACK_A
 
 beforeEach(async () => {
   waitUntil = []
+  providerId = `T${Nanoid.generate()}`
   executionCtx.passThroughOnException.mockClear()
   executionCtx.waitUntil.mockClear()
   const history = await slack.conversations.history({ channel: Constants.slack.channelId })
@@ -38,14 +41,14 @@ beforeEach(async () => {
       .map((message) => slack.chat.delete({ channel: Constants.slack.channelId, ts: message.ts })),
   )
   await Chat.getChat().initialize()
-  await Chat.getSlack().setInstallation(Constants.slack.teamId, {
+  await Chat.getSlack().setInstallation(providerId, {
     botToken: Constants.slack.botToken,
     botUserId: Constants.slack.botUserId,
     teamName: Constants.slack.teamName,
   })
   await factory.workspace.insert({
     chain_id: Tempo.localnetChainId,
-    provider_id: Constants.slack.teamId,
+    provider_id: providerId,
   })
 })
 
@@ -58,6 +61,7 @@ describe('/tip @account', () => {
       .selectFrom('tip')
       .innerJoin('member as sender', 'sender.id', 'tip.sender_member_id')
       .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
+      .innerJoin('workspace', 'workspace.id', 'tip.workspace_id')
       .select([
         'recipient.provider_user_id as recipient_provider_user_id',
         'sender.provider_user_id as sender_provider_user_id',
@@ -65,6 +69,7 @@ describe('/tip @account', () => {
         'tip.confirmed_at',
         'tip.transaction_hash',
       ])
+      .where('workspace.provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
@@ -90,56 +95,16 @@ describe('/tip @account', () => {
     const secondResponse = await postSlashCommand(`<@${Constants.slack.memberUserId}>`, {
       triggerId,
     })
-    const tips = await db.selectFrom('tip').selectAll().execute()
+    const tips = await db
+      .selectFrom('tip')
+      .selectAll()
+      .where('idempotency_key', '=', `command:${providerId}:${triggerId}`)
+      .execute()
 
     expect(firstResponse.status).toBe(200)
     expect(secondResponse.status).toBe(200)
     await expectSlackMessage('Tip complete.')
     expect(tips).toHaveLength(1)
-  }, 20_000) // 20 seconds
-
-  test('sends tip with memo', async () => {
-    await connectTipAccounts()
-
-    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}> for great work`)
-    const tip = await db.selectFrom('tip').select(['memo']).executeTakeFirstOrThrow()
-
-    expect(response.status).toBe(200)
-    await expectSlackMessage('for great work')
-    expect(tip.memo).toBe('great work')
-  }, 20_000) // 20 seconds
-
-  test('supports Slack mention label syntax', async () => {
-    await connectTipAccounts()
-
-    const response = await postSlashCommand(
-      `<@${Constants.slack.memberUserId}|member> for great work`,
-    )
-    const tip = await db
-      .selectFrom('tip')
-      .select(['memo', 'recipient_member_id'])
-      .executeTakeFirstOrThrow()
-    const recipient = await db
-      .selectFrom('member')
-      .selectAll()
-      .where('id', '=', tip.recipient_member_id)
-      .executeTakeFirstOrThrow()
-
-    expect(response.status).toBe(200)
-    await expectSlackMessage('for great work')
-    expect(recipient.provider_user_id).toBe(Constants.slack.memberUserId)
-    expect(tip.memo).toBe('great work')
-  }, 20_000) // 20 seconds
-
-  test('supports memo without for prefix', async () => {
-    await connectTipAccounts()
-
-    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}> coffee`)
-    const tip = await db.selectFrom('tip').select(['memo']).executeTakeFirstOrThrow()
-
-    expect(response.status).toBe(200)
-    await expectSlackMessage('for coffee')
-    expect(tip.memo).toBe('coffee')
   }, 20_000) // 20 seconds
 
   test('denies self-tip', async () => {
@@ -154,7 +119,7 @@ describe('/tip @account', () => {
     const workspace = await db
       .selectFrom('workspace')
       .selectAll()
-      .where('provider_id', '=', Constants.slack.teamId)
+      .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
     const senderAccount = await factory.account.insert({})
     const recipientAccount = await factory.account.insert({})
@@ -170,7 +135,7 @@ describe('/tip @account', () => {
     })
     await factory.tip.insert({
       chain_id: Tempo.localnetChainId,
-      idempotency_key: `command:${Constants.slack.teamId}:${triggerId}`,
+      idempotency_key: `command:${providerId}:${triggerId}`,
       recipient_id: recipientAccount.id,
       recipient_member_id: recipientMember.id,
       sender_id: senderAccount.id,
@@ -210,13 +175,13 @@ describe('/tip config', () => {
   })
 
   test('handles missing workspace', async () => {
-    await db.deleteFrom('workspace').where('provider_id', '=', Constants.slack.teamId).execute()
+    await db.deleteFrom('workspace').where('provider_id', '=', providerId).execute()
 
     const response = await postSlashCommand('config')
     const workspaces = await db
       .selectFrom('workspace')
       .selectAll()
-      .where('provider_id', '=', Constants.slack.teamId)
+      .where('provider_id', '=', providerId)
       .execute()
 
     expect(response.status).toBe(200)
@@ -227,13 +192,13 @@ describe('/tip config', () => {
   })
 
   test('handles missing Slack installation', async () => {
-    await Chat.getSlack().deleteInstallation(Constants.slack.teamId)
+    await Chat.getSlack().deleteInstallation(providerId)
 
     const response = await postSlashCommand('config amount 0.002')
     const workspace = await db
       .selectFrom('workspace')
       .selectAll()
-      .where('provider_id', '=', Constants.slack.teamId)
+      .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
@@ -248,7 +213,7 @@ describe('/tip config', () => {
     const workspace = await db
       .selectFrom('workspace')
       .selectAll()
-      .where('provider_id', '=', Constants.slack.teamId)
+      .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
@@ -261,7 +226,7 @@ describe('/tip config', () => {
     const workspace = await db
       .selectFrom('workspace')
       .selectAll()
-      .where('provider_id', '=', Constants.slack.teamId)
+      .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
@@ -274,7 +239,7 @@ describe('/tip config', () => {
     const workspace = await db
       .selectFrom('workspace')
       .selectAll()
-      .where('provider_id', '=', Constants.slack.teamId)
+      .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
@@ -321,7 +286,7 @@ describe('/tip config', () => {
     const workspace = await db
       .selectFrom('workspace')
       .selectAll()
-      .where('provider_id', '=', Constants.slack.teamId)
+      .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
@@ -337,7 +302,9 @@ describe('/tip connect', () => {
       .selectFrom('account_link_token')
       .selectAll('account_link_token')
       .innerJoin('member', 'member.id', 'account_link_token.member_id')
+      .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
       .where('member.provider_user_id', '=', Constants.slack.adminUserId)
+      .where('workspace.provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
     const member = await db
       .selectFrom('member')
@@ -364,23 +331,31 @@ describe('/tip connect', () => {
     const links = await db
       .selectFrom('account_link_token')
       .innerJoin('member', 'member.id', 'account_link_token.member_id')
+      .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
       .select(['account_link_token.id'])
       .where('member.provider_user_id', '=', Constants.slack.adminUserId)
+      .where('workspace.provider_id', '=', providerId)
       .execute()
 
     expect(links).toHaveLength(1)
   })
 
   test('handles missing workspace', async () => {
-    await db.deleteFrom('workspace').where('provider_id', '=', Constants.slack.teamId).execute()
+    await db.deleteFrom('workspace').where('provider_id', '=', providerId).execute()
 
     const response = await postSlashCommand('connect')
     const workspaces = await db
       .selectFrom('workspace')
       .selectAll()
-      .where('provider_id', '=', Constants.slack.teamId)
+      .where('provider_id', '=', providerId)
       .execute()
-    const links = await db.selectFrom('account_link_token').selectAll().execute()
+    const links = await db
+      .selectFrom('account_link_token')
+      .innerJoin('member', 'member.id', 'account_link_token.member_id')
+      .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+      .selectAll('account_link_token')
+      .where('workspace.provider_id', '=', providerId)
+      .execute()
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
@@ -394,7 +369,7 @@ describe('/tip connect', () => {
     const workspace = await db
       .selectFrom('workspace')
       .selectAll()
-      .where('provider_id', '=', Constants.slack.teamId)
+      .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
     const member = await factory.member.insert({
       provider_user_id: Constants.slack.adminUserId,
@@ -406,8 +381,13 @@ describe('/tip connect', () => {
       .selectFrom('member')
       .selectAll()
       .where('provider_user_id', '=', Constants.slack.adminUserId)
+      .where('workspace_id', '=', workspace.id)
       .execute()
-    const link = await db.selectFrom('account_link_token').selectAll().executeTakeFirstOrThrow()
+    const link = await db
+      .selectFrom('account_link_token')
+      .selectAll()
+      .where('member_id', '=', member.id)
+      .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
     await expectSlackMessage(`Connect to Tipbot: https://${env.HOST}/connect/`)
@@ -420,13 +400,14 @@ describe('/tip connect', () => {
     const workspace = await db
       .selectFrom('workspace')
       .selectAll()
-      .where('provider_id', '=', Constants.slack.teamId)
+      .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
     await factory.member.insert({
       account_id: account.id,
       provider_user_id: Constants.slack.adminUserId,
       workspace_id: workspace.id,
     })
+    await factory.access_key.insert({ account_id: account.id, chain_id: workspace.chain_id })
 
     const response = await postSlashCommand('connect')
 
@@ -434,6 +415,37 @@ describe('/tip connect', () => {
     await expectSlackMessage('Connected to Tipbot')
     await expectSlackMessage('Use `/tip disconnect` to disconnect.')
     await expectSlackMessageNotContaining(account.address)
+  })
+
+  test('creates account link when connected account is missing current network access key', async () => {
+    const account = await factory.account.insert({})
+    const workspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', providerId)
+      .executeTakeFirstOrThrow()
+    await factory.member.insert({
+      account_id: account.id,
+      provider_user_id: Constants.slack.adminUserId,
+      workspace_id: workspace.id,
+    })
+    await factory.access_key.insert({ account_id: account.id, chain_id: Tempo.mainnetChainId })
+
+    const response = await postSlashCommand('connect')
+    const link = await db
+      .selectFrom('account_link_token')
+      .selectAll('account_link_token')
+      .innerJoin('member', 'member.id', 'account_link_token.member_id')
+      .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+      .where('member.provider_user_id', '=', Constants.slack.adminUserId)
+      .where('workspace.provider_id', '=', providerId)
+      .executeTakeFirstOrThrow()
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(`Reconnect to Tipbot: https://${env.HOST}/connect/`)
+    await expectSlackMessage('This link expires in 10 minutes.')
+    await expectSlackMessageNotContaining('Use `/tip disconnect` to disconnect.')
+    expect(link.member_id).toEqual(expect.any(String))
   })
 })
 
@@ -443,7 +455,7 @@ describe('/tip disconnect', () => {
     const workspace = await db
       .selectFrom('workspace')
       .selectAll()
-      .where('provider_id', '=', Constants.slack.teamId)
+      .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
     const member = await factory.member.insert({
       account_id: account.id,
@@ -478,13 +490,13 @@ describe('/tip disconnect', () => {
   })
 
   test('handles missing workspace', async () => {
-    await db.deleteFrom('workspace').where('provider_id', '=', Constants.slack.teamId).execute()
+    await db.deleteFrom('workspace').where('provider_id', '=', providerId).execute()
 
     const response = await postSlashCommand('disconnect')
     const workspaces = await db
       .selectFrom('workspace')
       .selectAll()
-      .where('provider_id', '=', Constants.slack.teamId)
+      .where('provider_id', '=', providerId)
       .execute()
 
     expect(response.status).toBe(200)
@@ -514,7 +526,7 @@ describe('/tip whoami', () => {
     const workspace = await db
       .selectFrom('workspace')
       .selectAll()
-      .where('provider_id', '=', Constants.slack.teamId)
+      .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
     await factory.member.insert({
       account_id: account.id,
@@ -538,13 +550,13 @@ describe('/tip whoami', () => {
   })
 
   test('handles missing workspace', async () => {
-    await db.deleteFrom('workspace').where('provider_id', '=', Constants.slack.teamId).execute()
+    await db.deleteFrom('workspace').where('provider_id', '=', providerId).execute()
 
     const response = await postSlashCommand('whoami')
     const workspaces = await db
       .selectFrom('workspace')
       .selectAll()
-      .where('provider_id', '=', Constants.slack.teamId)
+      .where('provider_id', '=', providerId)
       .execute()
 
     expect(response.status).toBe(200)
@@ -571,7 +583,7 @@ describe('/tip usage', () => {
   })
 
   test('handles missing Slack installation', async () => {
-    await Chat.getSlack().deleteInstallation(Constants.slack.teamId)
+    await Chat.getSlack().deleteInstallation(providerId)
 
     const response = await postSlashCommand('hello')
 
@@ -593,14 +605,14 @@ async function connectTipAccounts() {
   const workspace = await db
     .selectFrom('workspace')
     .selectAll()
-    .where('provider_id', '=', Constants.slack.teamId)
+    .where('provider_id', '=', providerId)
     .executeTakeFirstOrThrow()
   const senderRoot = Account.fromSecp256k1(Constants.tip.senderRootPrivateKey)
   const recipientRoot = Account.fromSecp256k1(Constants.tip.recipientRootPrivateKey)
   const accessKey = AccessKey.generate()
   const accessKeyExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
-  const senderAccount = await factory.account.insert({ address: senderRoot.address })
-  const recipientAccount = await factory.account.insert({ address: recipientRoot.address })
+  const senderAccount = await findOrCreateAccount(senderRoot.address)
+  const recipientAccount = await findOrCreateAccount(recipientRoot.address)
 
   await factory.member.insert({
     account_id: senderAccount.id,
@@ -627,6 +639,16 @@ async function connectTipAccounts() {
     ciphertext: await AccessKey.encrypt(env, accessKey.privateKey),
     expires_at: accessKeyExpiresAt,
   })
+}
+
+async function findOrCreateAccount(address: string) {
+  const existing = await db
+    .selectFrom('account')
+    .selectAll()
+    .where('address', '=', address)
+    .executeTakeFirst()
+  if (existing) return existing
+  return await factory.account.insert({ address })
 }
 
 async function expectSlackMessage(text: string) {
@@ -681,7 +703,7 @@ async function createSlashCommandRequestInit(
     channel_id: options.channelId ?? Constants.slack.channelId,
     command: options.command ?? '/tip',
     ...(options.responseUrl ? { response_url: options.responseUrl } : {}),
-    team_id: Constants.slack.teamId,
+    team_id: providerId,
     text,
     trigger_id: options.triggerId ?? `trigger-${text.replaceAll(/\W+/g, '-')}`,
     user_id: options.userId ?? Constants.slack.adminUserId,

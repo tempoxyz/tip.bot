@@ -331,6 +331,7 @@ export const api = new Hono<{
         if (link.provider_channel_id)
           c.executionCtx.waitUntil(
             (async () => {
+              await Chat.getChat().initialize()
               const installation = await Chat.getSlack().getInstallation(link.provider_id)
               if (!installation) return
 
@@ -353,7 +354,9 @@ export const api = new Hono<{
                 await response.json(),
               )
               if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postEphemeral failed.')
-            })().catch(() => {}),
+            })().catch((error) => {
+              console.error('Failed to notify Slack member after wallet connection:', error)
+            }),
           )
 
         return c.json({ ok: true as const })

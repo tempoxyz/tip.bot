@@ -21,8 +21,12 @@ const migrations = Object.entries(
       .filter(Boolean),
   }))
 
-beforeAll(() => {
+beforeAll(async () => {
   server.listen({ onUnhandledRequest: 'bypass' })
+  await reset()
+  console.log('workers: running migrations')
+  await applyD1Migrations(env.DB, migrations)
+  console.log('workers: ran migrations')
   return () => {
     server.close()
   }
@@ -38,8 +42,6 @@ beforeEach(async () => {
       }),
     ),
   )
-  await reset()
-  await applyD1Migrations(env.DB, migrations)
 })
 
 afterEach(() => {

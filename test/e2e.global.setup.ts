@@ -16,16 +16,21 @@ export default async function globalSetup() {
 
   await fs.rm(statePath, { force: true, recursive: true })
 
+  console.log('e2e: starting slack emulator')
   const slack = await createEmulator({
     port: await getAvailablePort(),
     seed: Constants.seed,
     service: 'slack',
   })
+  console.log('e2e: started slack emulator')
+
   const env = Env.get({
     HOST: host,
     SLACK_APP_ID: 'A000000001',
     SLACK_API_URL: `${slack.url}/api`,
   })
+
+  console.log('e2e: starting dev server')
   const server = await startDevServer({
     CLOUDFLARE_PERSIST_STATE_PATH: statePath,
     PLAYWRIGHT_ACCOUNT_PRIVATE_KEY:
@@ -33,7 +38,11 @@ export default async function globalSetup() {
     ...env,
     PORT: String(port),
   })
+  console.log('e2e: started dev server')
+
+  console.log('e2e: running migrations')
   const dbPath = await applyD1Migrations({ baseUrl: server.baseUrl, statePath })
+  console.log('e2e: ran migrations')
 
   Object.assign(process.env, env)
   process.env.PLAYWRIGHT_DB_PATH = dbPath

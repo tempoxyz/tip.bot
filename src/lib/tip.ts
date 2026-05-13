@@ -317,6 +317,17 @@ export function parseAmount(value: string) {
   return amount
 }
 
+export function parseTipText(value: string) {
+  const text = value.trim()
+  const mention = text.match(/<@([A-Z0-9_]+)(?:\|[^>]+)?>/)
+  if (!mention) return null
+  const afterMention = text.slice((mention.index ?? 0) + mention[0].length).trim()
+  return {
+    memo: afterMention.replace(/^for\s+/i, '').trim() || null,
+    recipientProviderUserId: mention[1]!,
+  }
+}
+
 export async function verifySponsorshipMemo(
   env: Env,
   tip: Pick<
