@@ -76,7 +76,7 @@ export async function getTokenMetadata(
 
 export function getTokenMetadataFallback(tokenAddress: string) {
   if (Address.isEqual(Address.checksum(tokenAddress), pathUsdAddress))
-    return { currency: 'USD', symbol: 'pathUSD' }
+    return { currency: 'USD', symbol: 'PathUSD' }
   if (Address.isEqual(Address.checksum(tokenAddress), alphaUsdAddress))
     return { currency: 'USD', symbol: 'AlphaUSD' }
   if (Address.isEqual(Address.checksum(tokenAddress), betaUsdAddress))

@@ -74,7 +74,7 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 pathUSD.`,
+      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001.`,
     )
     await expectSlackMessage('Receipt')
     expect(tip).toMatchObject({
@@ -98,7 +98,7 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 pathUSD for coffee.`,
+      `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for coffee.`,
     )
     await expectSlackMessage('Receipt')
     expect(tip.confirmed_at).toEqual(expect.any(String))
@@ -210,7 +210,8 @@ describe('/tip config', () => {
     await expectSlackMessage('Network')
     await expectSlackMessage('Testnet')
     await expectSlackMessage('Default token')
-    await expectSlackMessage('pathUSD')
+    await expectSlackMessage('PathUSD')
+    await expectSlackMessage(Tempo.formatTokenLink(Tempo.localnetChainId, Tempo.pathUsdAddress))
     await expectSlackMessage('Default amount')
     await expectSlackMessage('0.001')
   })
@@ -613,13 +614,9 @@ describe('/tip status', () => {
     const response = await postSlashCommand('status')
 
     expect(response.status).toBe(200)
-    await expectSlackMessageNotContaining('Status')
-    await expectSlackMessage('Account ID')
-    await expectSlackMessage(account.id)
-    await expectSlackMessage('Address')
-    await expectSlackMessage(account.address)
-    await expectSlackMessage('Provider user ID')
-    await expectSlackMessage(Constants.slack.adminUserId)
+    await expectSlackMessage(`Connected as \`${account.address}\``)
+    await expectSlackMessageNotContaining('Account ID')
+    await expectSlackMessageNotContaining('Provider user ID')
   })
 
   test('handles no connected account', async () => {

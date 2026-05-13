@@ -36,7 +36,7 @@ test('checks allowed tokens by chain', () => {
 test('formats Tempo token symbols and transaction links', () => {
   expect(Tempo.getTokenMetadataFallback(Tempo.pathUsdAddress)).toEqual({
     currency: 'USD',
-    symbol: 'pathUSD',
+    symbol: 'PathUSD',
   })
   expect(Tempo.getTokenMetadataFallback(Tempo.alphaUsdAddress)).toEqual({
     currency: 'USD',

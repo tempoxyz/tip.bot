@@ -14,6 +14,8 @@ export type TipResult =
   | {
       amount: string
       chainId: number
+      feePayer: 'sender' | 'sponsor'
+      isDefaultToken: boolean
       memo: string | null
       ok: true
       recipientProviderUserId: string
@@ -104,6 +106,8 @@ export async function handleTipRequest(
     return {
       amount: formatAmount(existing.amount),
       chainId: existing.chain_id,
+      feePayer: 'sponsor',
+      isDefaultToken: Address.isEqual(Address.checksum(existing.token_address), tokenAddress),
       memo: existing.memo,
       ok: true,
       recipientProviderUserId: input.recipientProviderUserId,
@@ -194,8 +198,6 @@ export async function handleTipRequest(
 
   try {
     const feePayerPrivateKey = getFeePayerPrivateKey(env, workspace.chain_id)
-    if (!feePayerPrivateKey) throw new Error('Fee payer is not configured for this network.')
-
     const account = TempoAccount.fromSecp256k1(await AccessKey.decrypt(env, accessKey.ciphertext), {
       access: sender.account.address as `0x${string}`,
     })
@@ -203,15 +205,35 @@ export async function handleTipRequest(
       chain: Tempo.getChain(workspace.chain_id),
       transport: http(Tempo.getRpcUrl(env, workspace.chain_id)),
     })
-    const transfer = await Actions.token.transferSync(client, {
+    const parameters = {
       account,
       amount: BigInt(workspace.default_amount),
-      feePayer: privateKeyToAccount(feePayerPrivateKey),
       keyAuthorization: accessKey.authorization_used_at ? undefined : keyAuthorization,
       ...(input.memo ? { memo: encodeTransferMemo(input.memo) } : {}),
       to: recipient.account.address as never,
       token: tokenAddress,
-    })
+    }
+    const [transfer, feePayer] = await (async () => {
+      if (!feePayerPrivateKey)
+        return [
+          await Actions.token.transferSync(client, { ...parameters, feeToken: tokenAddress }),
+          'sender' as const,
+        ] as const
+
+      const feePayerAccount = privateKeyToAccount(feePayerPrivateKey)
+      try {
+        return [
+          await Actions.token.transferSync(client, { ...parameters, feePayer: feePayerAccount }),
+          'sponsor' as const,
+        ] as const
+      } catch (error) {
+        if (!isFeePayerFundingError(error, feePayerAccount.address)) throw error
+        return [
+          await Actions.token.transferSync(client, { ...parameters, feeToken: tokenAddress }),
+          'sender' as const,
+        ] as const
+      }
+    })()
     if (!transfer.receipt.transactionHash)
       throw new Error('Tempo transaction did not return a hash.')
     await db
@@ -236,6 +258,8 @@ export async function handleTipRequest(
     return {
       amount: formatAmount(workspace.default_amount),
       chainId: workspace.chain_id,
+      feePayer,
+      isDefaultToken: true,
       memo: input.memo,
       ok: true,
       recipientProviderUserId: input.recipientProviderUserId,
@@ -375,6 +399,16 @@ function getFeePayerPrivateKey(env: Env, chainId: number) {
   if (chainId === Tempo.moderatoChainId || chainId === Tempo.localnetChainId)
     return env.FEE_PAYER_PRIVATE_KEY_TESTNET
   return undefined
+}
+
+function isFeePayerFundingError(error: unknown, feePayerAddress: string) {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase()
+  return (
+    (message.includes('fee payer') ||
+      message.includes('feepayer') ||
+      message.includes(feePayerAddress.toLowerCase())) &&
+    (message.includes('balance') || message.includes('fund') || message.includes('insufficient'))
+  )
 }
 
 async function createSponsorshipMemo(

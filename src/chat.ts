@@ -2,7 +2,7 @@ import * as DB from '#db/client.ts'
 import type { DB as DB_gen } from '#db/types.gen.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as AccessKey from '#/lib/accessKey.ts'
-import { formatAmount, formatTipAmount } from '#/lib/format.ts'
+import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
@@ -145,7 +145,7 @@ const actions = {
             initialOption: tokenValue,
             label: 'Default token',
             options: [
-              chat.SelectOption({ label: 'pathUSD', value: 'pathUSD' }),
+              chat.SelectOption({ label: 'PathUSD', value: 'pathUSD' }),
               chat.SelectOption({ label: 'AlphaUSD', value: 'AlphaUSD' }),
               chat.SelectOption({ label: 'BetaUSD', value: 'BetaUSD' }),
               chat.SelectOption({ label: 'ThetaUSD', value: 'ThetaUSD' }),
@@ -361,11 +361,7 @@ const handlers = {
     const member = await ctx.db
       .selectFrom('member')
       .innerJoin('account', 'account.id', 'member.account_id')
-      .select([
-        'account.address as account_address',
-        'account.id as account_id',
-        'member.provider_user_id',
-      ])
+      .select('account.address as account_address')
       .where('member.workspace_id', '=', workspace.id)
       .where('member.provider_user_id', '=', event.user.userId)
       .executeTakeFirst()
@@ -376,25 +372,9 @@ const handlers = {
       return
     }
 
-    await event.channel.postEphemeral(
-      event.user,
-      {
-        card: chat.Card({
-          children: [
-            chat.Table({
-              headers: ['Field', 'Value'],
-              rows: [
-                ['Account ID', member.account_id],
-                ['Address', member.account_address],
-                ['Provider user ID', member.provider_user_id],
-              ],
-            }),
-          ],
-        }),
-        fallbackText: `Account ID ${member.account_id}\nAddress ${member.account_address}\nProvider user ID ${member.provider_user_id}`,
-      },
-      { fallbackToDM: false },
-    )
+    await event.channel.postEphemeral(event.user, `Connected as \`${member.account_address}\``, {
+      fallbackToDM: false,
+    })
   },
   async default(event, ctx) {
     const parsed = Tip.parseTipText(ctx.text)
@@ -450,39 +430,57 @@ const handlers = {
     )
 
     if (result.ok && result.status === 'sent')
-      await event.channel.post(
-        `${event.channel.mentionUser(result.senderProviderUserId)} sent ${event.channel.mentionUser(result.recipientProviderUserId)} ${formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)}${result.memo ? ` for ${result.memo}` : ''}. ${formatReceiptLink(result.chainId, result.transactionHash)}`,
+      await postSlackReceiptMessage(
+        event,
+        ctx,
+        `${event.channel.mentionUser(result.senderProviderUserId)} ${result.memo ? 'sent' : 'tipped'} ${event.channel.mentionUser(result.recipientProviderUserId)} ${result.isDefaultToken ? formatCurrencyAmount(result.amount, result.tokenCurrency) : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)}${result.memo ? ` for ${result.memo}` : ''}.`,
+        result.chainId,
+        result.transactionHash,
+        undefined,
+        result.feePayer === 'sender'
+          ? 'Fee sponsor unavailable; fee paid from your balance.'
+          : undefined,
       )
     else if (result.ok)
-      await event.channel.postEphemeral(
+      await postSlackReceiptMessage(
+        event,
+        ctx,
+        'Payment sent.',
+        result.chainId,
+        result.transactionHash,
         event.user,
-        `Payment sent. ${formatReceiptLink(result.chainId, result.transactionHash)}`,
-        { fallbackToDM: false },
+        result.feePayer === 'sender'
+          ? 'Fee sponsor unavailable; fee paid from your balance.'
+          : undefined,
       )
     else {
       if (result.code === 'sender_unconnected' || result.code === 'missing_sender_access_key') {
         await postConnectLink(event, ctx)
         return
       }
-      await event.channel.postEphemeral(
-        event.user,
-        (() => {
-          const receipt =
-            'chainId' in result &&
-            result.chainId &&
-            'transactionHash' in result &&
-            result.transactionHash
-              ? ` ${formatReceiptLink(result.chainId, result.transactionHash)}`
-              : ''
-          if (result.code === 'self_tip')
-            return 'Payment not sent. Cannot send a payment to yourself.'
-          if (result.code === 'recipient_unconnected')
-            return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
-          if (result.code === 'pending') return `Payment still sending.${receipt}`
-          return `Payment failed.${receipt}`
-        })(),
-        { fallbackToDM: false },
+      const message = (() => {
+        if (result.code === 'self_tip')
+          return 'Payment not sent. Cannot send a payment to yourself.'
+        if (result.code === 'recipient_unconnected')
+          return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
+        if (result.code === 'pending') return 'Payment still sending.'
+        return 'Payment failed.'
+      })()
+      if (
+        'chainId' in result &&
+        result.chainId &&
+        'transactionHash' in result &&
+        result.transactionHash
       )
+        await postSlackReceiptMessage(
+          event,
+          ctx,
+          message,
+          result.chainId,
+          result.transactionHash,
+          event.user,
+        )
+      else await event.channel.postEphemeral(event.user, message, { fallbackToDM: false })
     }
   },
 } as const satisfies Record<
@@ -622,8 +620,7 @@ async function postConnectLink(event: chat.SlashCommandEvent, ctx: HandlerContex
             chat.LinkButton({ label: linkButtonLabel, style: 'primary', url: linkUrl }),
             chat.Button({ id: 'connect_cancel', label: 'Cancel' }),
           ]),
-          chat.CardText(linkDescription, { style: 'muted' }),
-          chat.CardLink({ label: '\u200B', url: linkUrl }),
+          chat.CardText(`${linkDescription} ${linkUrl}`, { style: 'muted' }),
         ],
       }),
       fallbackText: linkText,
@@ -632,8 +629,72 @@ async function postConnectLink(event: chat.SlashCommandEvent, ctx: HandlerContex
   )
 }
 
-function formatReceiptLink(chainId: number, transactionHash: string) {
-  return `<${Tempo.formatTxLink(chainId, transactionHash)}|Receipt>`
+async function postSlackReceiptMessage(
+  event: chat.SlashCommandEvent,
+  ctx: HandlerContext,
+  text: string,
+  chainId: number,
+  transactionHash: string,
+  user?: chat.Author,
+  context?: string,
+) {
+  if (ctx.provider.type !== 'slack') throw new Error('Provider not implemented yet.')
+
+  const installation = await getSlack().getInstallation(ctx.provider.id)
+  if (!installation) throw new Error('Tibot app not installed for this workspace.')
+
+  const body = new URLSearchParams()
+  body.set('blocks', JSON.stringify(createReceiptBlocks(text, chainId, transactionHash, context)))
+  body.set('channel', event.channel.id.replace(/^slack:/, ''))
+  body.set('text', `${text}${context ? ` ${context}` : ''} Receipt`)
+  if (user) body.set('user', user.userId)
+  else {
+    body.set('unfurl_links', 'false')
+    body.set('unfurl_media', 'false')
+  }
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/${user ? 'chat.postEphemeral' : 'chat.postMessage'}`, {
+      body,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postMessage failed.')
+}
+
+function createReceiptBlocks(
+  text: string,
+  chainId: number,
+  transactionHash: string,
+  context?: string,
+) {
+  return [
+    {
+      accessory: {
+        action_id: `receipt_${transactionHash.slice(0, 64)}`,
+        text: { emoji: true, text: 'Receipt', type: 'plain_text' },
+        type: 'button',
+        url: Tempo.formatTxLink(chainId, transactionHash),
+      },
+      text: { text, type: 'mrkdwn' },
+      type: 'section',
+    },
+    ...(context
+      ? [
+          {
+            elements: [{ text: context, type: 'mrkdwn' }],
+            type: 'context',
+          },
+        ]
+      : []),
+  ]
 }
 
 async function isSlackAdmin(providerId: string, providerUserId: string) {
@@ -671,17 +732,15 @@ function configCard(
   const tokenAddress = workspace.default_token_address ?? Tempo.pathUsdAddress
   const token = Tempo.getTokenMetadataFallback(tokenAddress)
   const networkLabel = workspace.chain_id === Tempo.mainnetChainId ? 'Mainnet' : 'Testnet'
+  const tokenLink = `<${Tempo.formatTokenLink(workspace.chain_id, tokenAddress)}|${token.symbol}>`
   return {
     card: chat.Card({
       children: [
-        chat.Table({
-          headers: ['Setting', 'Value'],
-          rows: [
-            ['Network', networkLabel],
-            ['Default token', token.symbol],
-            ['Default amount', formatAmount(workspace.default_amount)],
-          ],
-        }),
+        chat.Fields([
+          chat.Field({ label: 'Network', value: networkLabel }),
+          chat.Field({ label: 'Default token', value: tokenLink }),
+          chat.Field({ label: 'Default amount', value: formatAmount(workspace.default_amount) }),
+        ]),
         ...(options?.canEdit
           ? [
               chat.Actions([
