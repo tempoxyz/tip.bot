@@ -23,7 +23,7 @@ export default async function (project: TestProject) {
   const tempo = Server.create({
     instance: TestContainers.Instance.tempo({
       blockTime: '2ms',
-      image: `ghcr.io/tempoxyz/tempo:${process.env.VITE_NODE_TAG || 'latest'}`,
+      image: getTempoImage(),
       port: rpcPort,
     } satisfies Pick<TestContainers.Instance.tempo.Parameters, 'blockTime' | 'image' | 'port'>),
     port: rpcPort,
@@ -61,4 +61,10 @@ export default async function (project: TestProject) {
     await tempo.stop()
     await slack.close()
   }
+}
+
+function getTempoImage() {
+  if (process.env.VITE_NODE_TAG?.startsWith('sha256:'))
+    return `ghcr.io/tempoxyz/tempo@${process.env.VITE_NODE_TAG}`
+  return `ghcr.io/tempoxyz/tempo:${process.env.VITE_NODE_TAG || 'latest'}`
 }

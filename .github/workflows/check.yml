@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 env:
-  VITE_NODE_TAG: sha-48f6d66
+  VITE_NODE_TAG: sha256:80769b5615556fcdb9f158de0c699523613fb3901c2df3e58bc770dab106ead1
   WRANGLER_SEND_METRICS: false
 
 jobs:
@@ -68,8 +68,8 @@ jobs:
       - name: Pull and cache Tempo image
         if: steps.docker-cache.outputs.cache-hit != 'true'
         run: |
-          docker pull ghcr.io/tempoxyz/tempo:${VITE_NODE_TAG}
-          docker save ghcr.io/tempoxyz/tempo:${VITE_NODE_TAG} -o /tmp/tempo-image.tar
+          docker pull ghcr.io/tempoxyz/tempo@${VITE_NODE_TAG}
+          docker save ghcr.io/tempoxyz/tempo@${VITE_NODE_TAG} -o /tmp/tempo-image.tar
 
       - name: Test
         run: pnpm test
