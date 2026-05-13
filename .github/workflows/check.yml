@@ -8,6 +8,7 @@ permissions:
   contents: read
 
 env:
+  VITE_NODE_TAG: sha-48f6d66
   WRANGLER_SEND_METRICS: false
 
 jobs:
@@ -49,6 +50,26 @@ jobs:
 
       - name: Check types
         run: pnpm check:types
+
+      - name: Setup Docker
+        uses: docker/setup-docker-action@b2189fbf2a6592b51fee7cdd93ee2bfaeba733db # v5.1.0
+
+      - name: Cache Tempo Docker image
+        id: docker-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: /tmp/tempo-image.tar
+          key: tempo-image-${{ env.VITE_NODE_TAG }}
+
+      - name: Load cached Tempo image
+        if: steps.docker-cache.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/tempo-image.tar
+
+      - name: Pull and cache Tempo image
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        run: |
+          docker pull ghcr.io/tempoxyz/tempo:${VITE_NODE_TAG}
+          docker save ghcr.io/tempoxyz/tempo:${VITE_NODE_TAG} -o /tmp/tempo-image.tar
 
       - name: Test
         run: pnpm test

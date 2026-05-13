@@ -200,7 +200,6 @@ export async function handleTipRequest(
       transport: withRelay(
         http(Tempo.getRpcUrl(env, workspace.chain_id)),
         http(`https://${env.HOST}/api/relay/${workspace.chain_id}`),
-        { policy: 'sign-and-broadcast' },
       ),
     })
     const transfer = await Actions.token.transferSync(client, {
