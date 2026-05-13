@@ -70,6 +70,18 @@ function getPortlessOrigin(hostname: string) {
   return url.toString().replace(/\/$/, '')
 }
 
+const slackScopes = [
+  'channels:history',
+  'channels:read',
+  'chat:write',
+  'groups:history',
+  'groups:read',
+  'im:write',
+  'reactions:read',
+  'reactions:write',
+  'users:read',
+]
+
 const emulatorConfig = {
   slack: {
     envName: 'SLACK_API_URL',
@@ -89,23 +101,23 @@ const emulatorConfig = {
       tokens: {
         admin: {
           login: 'U000000001',
-          scopes: ['chat:write', 'channels:read', 'users:read', 'reactions:write'],
+          scopes: slackScopes,
         },
         member: {
           login: 'member',
-          scopes: ['chat:write', 'channels:read', 'users:read', 'reactions:write'],
+          scopes: slackScopes,
         },
         U000000001: {
           login: 'U000000001',
-          scopes: ['chat:write', 'channels:read', 'users:read', 'reactions:write'],
+          scopes: slackScopes,
         },
         U000000002: {
           login: 'U000000002',
-          scopes: ['chat:write', 'channels:read', 'users:read', 'reactions:write'],
+          scopes: slackScopes,
         },
         'xoxb-test': {
           login: 'tipbot',
-          scopes: ['chat:write', 'channels:read', 'users:read', 'reactions:write'],
+          scopes: slackScopes,
         },
       },
     },

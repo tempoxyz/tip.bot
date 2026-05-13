@@ -13,6 +13,8 @@ pnpm test
 pnpm test:e2e
 ```
 
+If a test fails, run it in isolation and gradually expand out to more tests as you gain confidence.
+
 ## Database
 
 - Run `pnpm db:codegen` after changing migrations.

@@ -28,6 +28,8 @@ export function getChat() {
     userName: 'tipbot',
   })
   bot.onSlashCommand('/tip', async (event) => {
+    if (event.adapter !== getSlack()) throw new Error('Provider not implemented yet.')
+
     const context = {
       db: DB.create(env.DB),
       provider: getProvider(event),
@@ -42,12 +44,43 @@ export function getChat() {
     }
     await handlers.default(event, context)
   })
+  bot.onReaction(async (event) => {
+    if (event.adapter !== getSlack()) throw new Error('Provider not implemented yet.')
+
+    const reaction = z.parse(slackReactionEventSchema, event.raw)
+    if (reaction.type !== 'reaction_added') return
+    if (reaction.item.type !== 'message') return
+    if (reaction.item.channel.startsWith('D')) return
+
+    const context = await (async () => {
+      const db = DB.create(env.DB)
+      const workspace = await db
+        .selectFrom('workspace')
+        .selectAll()
+        .where('provider', '=', 'slack')
+        .where('provider_id', '=', reaction.team_id)
+        .executeTakeFirst()
+      if (!workspace) return
+      if (reaction.reaction !== workspace.reaction_tip_emoji) return
+      return {
+        db,
+        provider: { id: reaction.team_id, type: 'slack' },
+        workspace,
+      } satisfies ReactionHandlerContext
+    })()
+    if (!context) return
+    await handleSlackReactionTip(reaction, context)
+  })
   bot.onAction(async (event) => {
+    if (event.adapter !== getSlack()) throw new Error('Provider not implemented yet.')
+
     const action = z.safeParse(z.enum(actionNames), event.actionId)
     if (!action.success) return
     await actions[action.data](event)
   })
   bot.onModalSubmit(async (event) => {
+    if (event.adapter !== getSlack()) throw new Error('Provider not implemented yet.')
+
     const modalSubmit = z.enum(modalSubmitNames).safeParse(event.callbackId)
     if (!modalSubmit.success) return
 
@@ -71,7 +104,6 @@ export function getSlack() {
 
 const actions = {
   async config_edit(event) {
-    if (event.adapter !== getSlack()) throw new Error('Provider not implemented yet.')
     const raw = z.parse(
       z.object({
         channel: z.object({ id: z.string().min(1) }).optional(),
@@ -163,6 +195,11 @@ const actions = {
             initialValue: formatAmount(workspace.default_amount),
             label: 'Default amount',
           }),
+          chat.TextInput({
+            id: 'reaction_tip_emoji',
+            initialValue: workspace.reaction_tip_emoji,
+            label: 'Tip reaction emoji',
+          }),
         ],
         privateMetadata: JSON.stringify({ providerId: raw.team.id }),
         submitLabel: 'Save',
@@ -206,15 +243,26 @@ const modalSubmits = {
       return null
     })()
     const amount = Tip.parseAmount(event.values.default_amount ?? '')
+    const reactionTipEmoji = (() => {
+      // Store Slack emoji names without surrounding colons for reaction event matching.
+      const normalized = (event.values.reaction_tip_emoji ?? '')
+        .trim()
+        .replace(/^:+|:+$/g, '')
+        .toLowerCase()
+      if (!/^[a-z0-9_+-]+$/.test(normalized)) return null
+      return normalized
+    })()
     const errors: Record<string, string> = {}
     if (chainId === null) errors.network = 'Choose Mainnet or Testnet.'
     if (tokenAddress === null) errors.default_token = 'Choose a default token.'
     if (amount === null)
       errors.default_amount = 'Enter a positive amount with up to 6 decimal places. Example: 0.005'
+    if (!reactionTipEmoji)
+      errors.reaction_tip_emoji = 'Enter a Slack emoji name. Example: money_with_wings'
     if (chainId !== null && tokenAddress !== null && !Tempo.isAllowedToken(chainId, tokenAddress))
       errors.default_token = 'This token isn’t available on the selected network.'
     if (Object.keys(errors).length > 0) return { action: 'errors' as const, errors }
-    if (amount === null || chainId === null || tokenAddress === null) return
+    if (amount === null || chainId === null || tokenAddress === null || !reactionTipEmoji) return
 
     const now = new Date().toISOString()
     await DB.create(env.DB)
@@ -223,6 +271,7 @@ const modalSubmits = {
         chain_id: chainId,
         default_amount: amount,
         default_token_address: tokenAddress,
+        reaction_tip_emoji: reactionTipEmoji,
         updated_at: now,
       })
       .where('provider', '=', 'slack')
@@ -309,8 +358,6 @@ const handlers = {
     })
   },
   async help(event, ctx) {
-    if (ctx.provider.type !== 'slack') throw new Error('Provider not implemented yet.')
-
     const installation = await getSlack().getInstallation(ctx.provider.id)
     if (!installation) return
 
@@ -393,8 +440,6 @@ const handlers = {
       await postInvalidUsage(event, ctx)
       return
     }
-    if (ctx.provider.type !== 'slack') throw new Error('Provider not implemented yet.')
-
     const workspace = await ctx.db
       .selectFrom('workspace')
       .selectAll()
@@ -538,7 +583,6 @@ const handlers = {
   async default(event, ctx) {
     const parsed = Tip.parseTipText(ctx.text)
     if (!parsed) {
-      if (ctx.provider.type !== 'slack') throw new Error('Provider not implemented yet.')
       await postInvalidUsage(event, ctx)
       return
     }
@@ -614,7 +658,33 @@ const handlers = {
       )
     else {
       if (result.code === 'confirmation_required' && result.confirmUrl) {
-        await postConfirmationLink(event, result.confirmUrl)
+        const confirmUrlLabel = result.confirmUrl.replace(/(\/confirm\/.{8}).+$/, '$1...')
+        await event.channel.postEphemeral(
+          event.user,
+          {
+            card: chat.Card({
+              children: [
+                chat.CardText('Tipbot needs your approval to send this payment.'),
+                chat.Actions([
+                  chat.LinkButton({
+                    label: 'Confirm payment',
+                    style: 'primary',
+                    url: result.confirmUrl,
+                  }),
+                  chat.Button({ id: 'confirm_cancel', label: 'Cancel' }),
+                ]),
+                chat.CardText(
+                  `Link expires in 10 minutes. <${result.confirmUrl}|${confirmUrlLabel}>`,
+                  {
+                    style: 'muted',
+                  },
+                ),
+              ],
+            }),
+            fallbackText: `Tipbot needs your approval to send this payment.\nConfirm payment: ${result.confirmUrl}\nLink expires in 10 minutes.`,
+          },
+          { fallbackToDM: false },
+        )
         return
       }
       if (result.code === 'sender_unconnected' || result.code === 'missing_sender_access_key') {
@@ -632,8 +702,6 @@ const handlers = {
         return 'Payment failed.'
       })()
       if (result.code === 'insufficient_funds') {
-        if (ctx.provider.type !== 'slack') throw new Error('Provider not implemented yet.')
-
         const installation = await getSlack().getInstallation(ctx.provider.id)
         if (!installation) throw new Error('Tibot app not installed for this workspace.')
 
@@ -697,8 +765,16 @@ const modalSubmitNames = ['config_edit'] as const
 
 type HandlerContext = {
   db: DB.Type
-  provider: ReturnType<typeof getProvider>
+  provider: ProviderContext
   text: string
+}
+
+type ProviderContext = { id: string; type: 'slack' }
+
+type ReactionHandlerContext = {
+  db: DB.Type
+  provider: ProviderContext
+  workspace: DB_gen.Selectable.workspace
 }
 
 type LeaderboardRow = {
@@ -706,24 +782,408 @@ type LeaderboardRow = {
   tipCount: number
 }
 
-function getProvider(event: chat.SlashCommandEvent): {
-  id: string
-  type: DB_gen.Selectable.workspace['provider']
-} {
-  if (event.adapter === getSlack()) {
-    const slackSlashCommandRaw = z.object({
-      team_id: z.string().min(1),
-    })
-    const raw = z.parse(slackSlashCommandRaw, event.raw)
-    return {
-      id: raw.team_id,
-      type: 'slack',
+export const reactionTipIdempotencyPrefix = 'reaction:'
+
+export function isReactionTipIdempotencyKey(value: string) {
+  return value.startsWith(reactionTipIdempotencyPrefix)
+}
+
+const slackReactionEventSchema = z.object({
+  event_id: z.string().min(1).optional(),
+  event_ts: z.string().min(1),
+  item: z.object({
+    channel: z.string().min(1),
+    ts: z.string().min(1),
+    type: z.string().min(1),
+  }),
+  item_user: z.string().min(1).optional(),
+  reaction: z.string().min(1),
+  team_id: z.string().min(1),
+  type: z.enum(['reaction_added', 'reaction_removed']),
+  user: z.string().min(1),
+})
+
+type SlackReactionEvent = z.infer<typeof slackReactionEventSchema>
+
+async function handleSlackReactionTip(event: SlackReactionEvent, context: ReactionHandlerContext) {
+  const { db, provider, workspace } = context
+
+  const installation = await getSlack().getInstallation(provider.id)
+  if (!installation) return
+
+  const conversation = await (async () => {
+    const body = new URLSearchParams()
+    body.set('channel', event.item.channel)
+    const response = await getSlack().withBotToken(installation.botToken, () =>
+      fetch(`${env.SLACK_API_URL}/conversations.info`, {
+        body,
+        headers: { authorization: `Bearer ${installation.botToken}` },
+        method: 'POST',
+      }),
+    )
+    const json = z.parse(
+      z.object({
+        channel: z
+          .object({
+            is_im: z.boolean().optional(),
+            is_mpim: z.boolean().optional(),
+          })
+          .optional(),
+        ok: z.boolean().optional(),
+      }),
+      await response.json(),
+    )
+    if (!json.ok) return null
+    return json.channel ?? null
+  })()
+  if (conversation?.is_im || conversation?.is_mpim) return
+
+  const message = await (async () => {
+    const methods = ['conversations.replies', 'conversations.history'] as const
+    for (const method of methods) {
+      const body = new URLSearchParams()
+      body.set('channel', event.item.channel)
+      if (method === 'conversations.history') {
+        body.set('inclusive', 'true')
+        body.set('latest', event.item.ts)
+      }
+      body.set('limit', '1')
+      if (method === 'conversations.replies') body.set('ts', event.item.ts)
+      const response = await getSlack().withBotToken(installation.botToken, () =>
+        fetch(`${env.SLACK_API_URL}/${method}`, {
+          body,
+          headers: { authorization: `Bearer ${installation.botToken}` },
+          method: 'POST',
+        }),
+      )
+      const json = z.parse(
+        z.object({
+          messages: z
+            .array(
+              z.object({
+                bot_id: z.string().optional(),
+                subtype: z.string().optional(),
+                thread_ts: z.string().optional(),
+                ts: z.string().optional(),
+                user: z.string().optional(),
+              }),
+            )
+            .optional(),
+          ok: z.boolean().optional(),
+        }),
+        await response.json(),
+      )
+      if (json.ok) {
+        const message = json.messages?.find((message) => message.ts === event.item.ts)
+        if (message) return message
+      }
     }
+    return { thread_ts: event.item.ts, user: event.item_user }
+  })()
+  if (!message?.user) return
+  if (message.bot_id || message.subtype) return
+  const recipientProviderUserId = event.item_user ?? message.user
+  if (recipientProviderUserId === event.user) return
+
+  const sender = await getConnectedSlackMember(db, workspace.id, event.user)
+  if (!sender) return
+  const recipient = await getConnectedSlackMember(db, workspace.id, recipientProviderUserId)
+  if (!recipient) return
+
+  const existing = await db
+    .selectFrom('reaction_tip')
+    .select('id')
+    .where('workspace_id', '=', workspace.id)
+    .where('channel_id', '=', event.item.channel)
+    .where('message_ts', '=', event.item.ts)
+    .where('reaction', '=', event.reaction)
+    .where('sender_member_id', '=', sender.memberId)
+    .executeTakeFirst()
+  if (existing) return
+
+  const idempotencyKey = [
+    reactionTipIdempotencyPrefix,
+    workspace.id,
+    event.item.channel,
+    event.item.ts,
+    event.reaction,
+    sender.memberId,
+    event.event_ts,
+  ].join(':')
+  const inserted = await (async () => {
+    const now = new Date().toISOString()
+    try {
+      await db
+        .insertInto('reaction_tip')
+        .values({
+          channel_id: event.item.channel,
+          created_at: now,
+          id: Nanoid.generate(),
+          idempotency_key: idempotencyKey,
+          message_ts: event.item.ts,
+          reaction: event.reaction,
+          recipient_member_id: recipient.memberId,
+          sender_member_id: sender.memberId,
+          thread_ts: message.thread_ts ?? event.item.ts,
+          tip_id: null,
+          updated_at: now,
+          workspace_id: workspace.id,
+        })
+        .execute()
+      return true
+    } catch (error) {
+      if (isUniqueConstraintError(error)) return false
+      throw error
+    }
+  })()
+  if (!inserted) return
+
+  const result = await Tip.handleTipRequest(env, {
+    idempotencyKey,
+    memo: null,
+    provider: provider.type,
+    providerChannelId: event.item.channel,
+    providerId: provider.id,
+    recipientProviderUserId: recipient.providerUserId,
+    senderProviderUserId: sender.providerUserId,
+  }).catch(
+    (error) =>
+      ({
+        code: 'failed',
+        message: error instanceof Error ? error.message : 'Reaction tip failed.',
+        ok: false,
+      }) satisfies Tip.TipResult,
+  )
+
+  if (result.ok) {
+    const tip = await db
+      .selectFrom('tip')
+      .select('id')
+      .where('idempotency_key', '=', idempotencyKey)
+      .executeTakeFirst()
+    if (!tip) return
+
+    await db
+      .updateTable('reaction_tip')
+      .set({ tip_id: tip.id, updated_at: new Date().toISOString() })
+      .where('idempotency_key', '=', idempotencyKey)
+      .execute()
+    await updateReactionTipAggregate(provider.id, {
+      channelId: event.item.channel,
+      messageTs: event.item.ts,
+      reaction: event.reaction,
+      workspaceId: workspace.id,
+    }).catch((error) => {
+      console.error('Failed to update Slack reaction tip aggregate:', error)
+    })
+    return
   }
-  throw new Error('Provider not implemented yet.')
+
+  if (result.code === 'confirmation_required' && result.confirmUrl) {
+    await postSlackDm(
+      provider.id,
+      sender.providerUserId,
+      `Tipbot needs your approval to send this tip. Confirm payment: ${result.confirmUrl}`,
+    )
+    return
+  }
+
+  await db.deleteFrom('reaction_tip').where('idempotency_key', '=', idempotencyKey).execute()
+  await (async () => {
+    // Only connected senders get failure DMs for reaction tips.
+    if (result.ok) return
+    const message = (() => {
+      if (result.code === 'insufficient_funds')
+        return 'Reaction tip not sent. Your wallet has insufficient funds. Add funds: https://wallet.tempo.xyz'
+      if (result.code === 'pending') return 'Reaction tip is still sending.'
+      if (result.code === 'self_tip')
+        return 'Reaction tip not sent. Cannot send a payment to yourself.'
+      return 'Reaction tip failed.'
+    })()
+    await postSlackDm(provider.id, sender.providerUserId, message)
+  })()
+}
+
+function getProvider(event: chat.SlashCommandEvent): ProviderContext {
+  const slackSlashCommandRaw = z.object({
+    team_id: z.string().min(1),
+  })
+  const raw = z.parse(slackSlashCommandRaw, event.raw)
+  return {
+    id: raw.team_id,
+    type: 'slack',
+  }
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
+
+async function getConnectedSlackMember(db: DB.Type, workspaceId: string, providerUserId: string) {
+  const member = await db
+    .selectFrom('member')
+    .select(['id', 'provider_user_id'])
+    .where('workspace_id', '=', workspaceId)
+    .where('provider_user_id', '=', providerUserId)
+    .where('account_id', 'is not', null)
+    .executeTakeFirst()
+  if (!member) return null
+  return { memberId: member.id, providerUserId: member.provider_user_id }
+}
+
+async function postSlackDm(providerId: string, providerUserId: string, text: string) {
+  const installation = await getSlack().getInstallation(providerId)
+  if (!installation) return
+
+  const openBody = new URLSearchParams()
+  openBody.set('users', providerUserId)
+  const openResponse = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/conversations.open`, {
+      body: openBody,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const openJson = z.parse(
+    z.object({
+      channel: z.object({ id: z.string().min(1) }).optional(),
+      ok: z.boolean().optional(),
+    }),
+    await openResponse.json(),
+  )
+  if (!openJson.ok || !openJson.channel) return
+
+  const body = new URLSearchParams()
+  body.set('channel', openJson.channel.id)
+  body.set('text', text)
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
+      body,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok) console.error('Slack API chat.postMessage failed:', json.error)
+}
+
+export async function updateReactionTipAggregate(
+  providerId: string,
+  options: { channelId: string; messageTs: string; reaction: string; workspaceId: string },
+) {
+  const db = DB.create(env.DB)
+  const rows = await db
+    .selectFrom('reaction_tip')
+    .innerJoin('tip', 'tip.id', 'reaction_tip.tip_id')
+    .innerJoin('member as sender', 'sender.id', 'reaction_tip.sender_member_id')
+    .innerJoin('member as recipient', 'recipient.id', 'reaction_tip.recipient_member_id')
+    .select([
+      'reaction_tip.thread_ts',
+      'recipient.provider_user_id as recipient_provider_user_id',
+      'sender.provider_user_id as sender_provider_user_id',
+    ])
+    .where('reaction_tip.workspace_id', '=', options.workspaceId)
+    .where('reaction_tip.channel_id', '=', options.channelId)
+    .where('reaction_tip.message_ts', '=', options.messageTs)
+    .where('reaction_tip.reaction', '=', options.reaction)
+    .where('tip.confirmed_at', 'is not', null)
+    .orderBy('reaction_tip.created_at', 'asc')
+    .execute()
+  if (rows.length === 0) return
+
+  const installation = await getSlack().getInstallation(providerId)
+  if (!installation) return
+
+  const text = `${(() => {
+    // Keep aggregate replies short when many people tip the same message.
+    const mentions = rows.map((row) => `<@${row.sender_provider_user_id}>`)
+    if (mentions.length === 1) return mentions[0]
+    if (mentions.length === 2) return `${mentions[0]} and ${mentions[1]}`
+    if (mentions.length === 3) return `${mentions[0]}, ${mentions[1]}, and ${mentions[2]}`
+    return `${mentions[0]}, ${mentions[1]}, and ${mentions.length - 2} others`
+  })()} tipped <@${rows[0]!.recipient_provider_user_id}>`
+  const existing = await db
+    .selectFrom('reaction_tip_thread')
+    .selectAll()
+    .where('workspace_id', '=', options.workspaceId)
+    .where('channel_id', '=', options.channelId)
+    .where('message_ts', '=', options.messageTs)
+    .where('reaction', '=', options.reaction)
+    .executeTakeFirst()
+
+  if (existing) {
+    const body = new URLSearchParams()
+    body.set('channel', options.channelId)
+    body.set('text', text)
+    body.set('ts', existing.reply_ts)
+    const response = await getSlack().withBotToken(installation.botToken, () =>
+      fetch(`${env.SLACK_API_URL}/chat.update`, {
+        body,
+        headers: { authorization: `Bearer ${installation.botToken}` },
+        method: 'POST',
+      }),
+    )
+    const json = z.parse(
+      z.object({
+        error: z.string().optional(),
+        ok: z.boolean().optional(),
+      }),
+      await response.json(),
+    )
+    if (!json.ok) throw new Error(json.error ?? 'Slack API chat.update failed.')
+    return
+  }
+
+  const body = new URLSearchParams()
+  body.set('channel', options.channelId)
+  body.set('text', text)
+  body.set('thread_ts', rows[0]!.thread_ts)
+  body.set('unfurl_links', 'false')
+  body.set('unfurl_media', 'false')
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
+      body,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+      ts: z.string().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok || !json.ts) throw new Error(json.error ?? 'Slack API chat.postMessage failed.')
+
+  const now = new Date().toISOString()
+  try {
+    await db
+      .insertInto('reaction_tip_thread')
+      .values({
+        channel_id: options.channelId,
+        created_at: now,
+        id: Nanoid.generate(),
+        message_ts: options.messageTs,
+        reaction: options.reaction,
+        reply_ts: json.ts,
+        updated_at: now,
+        workspace_id: options.workspaceId,
+      })
+      .execute()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+  }
+}
+
+function isUniqueConstraintError(error: unknown) {
+  return error instanceof Error && /unique constraint|constraint failed/i.test(error.message)
+}
 
 async function getLeaderboardRows(
   ctx: HandlerContext,
@@ -895,29 +1355,6 @@ async function postConnectLink(event: chat.SlashCommandEvent, ctx: HandlerContex
   )
 }
 
-async function postConfirmationLink(event: chat.SlashCommandEvent, confirmUrl: string) {
-  const token = new URL(confirmUrl).pathname.split('/').at(-1) ?? confirmUrl
-  await event.channel.postEphemeral(
-    event.user,
-    {
-      card: chat.Card({
-        children: [
-          chat.CardText('Tipbot needs your approval to send this payment.'),
-          chat.Actions([
-            chat.LinkButton({ label: 'Confirm payment', style: 'primary', url: confirmUrl }),
-            chat.Button({ id: 'confirm_cancel', label: 'Cancel' }),
-          ]),
-          chat.CardText(`Link expires in 10 minutes. <${confirmUrl}|${token.slice(0, 8)}...>`, {
-            style: 'muted',
-          }),
-        ],
-      }),
-      fallbackText: `Tipbot needs your approval to send this payment.\nConfirm payment: ${confirmUrl}\nLink expires in 10 minutes.`,
-    },
-    { fallbackToDM: false },
-  )
-}
-
 async function postSlackReceiptMessage(
   event: chat.SlashCommandEvent,
   ctx: HandlerContext,
@@ -927,8 +1364,6 @@ async function postSlackReceiptMessage(
   user?: chat.Author,
   context?: string,
 ) {
-  if (ctx.provider.type !== 'slack') throw new Error('Provider not implemented yet.')
-
   const installation = await getSlack().getInstallation(ctx.provider.id)
   if (!installation) throw new Error('Tibot app not installed for this workspace.')
 
@@ -1031,6 +1466,7 @@ function configCard(
             ['Network', networkLabel],
             ['Default token', token.symbol],
             ['Default amount', formatAmount(workspace.default_amount)],
+            ['Tip reaction emoji', workspace.reaction_tip_emoji],
           ],
         }),
         ...(options?.canEdit
@@ -1048,7 +1484,7 @@ function configCard(
         ...(options?.updated ? [chat.CardText('Workspace settings updated')] : []),
       ],
     }),
-    fallbackText: `Network ${networkLabel}\nDefault token ${token.symbol} ${Tempo.formatTokenLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}${options?.updated ? '\nWorkspace settings updated' : ''}`,
+    fallbackText: `Network ${networkLabel}\nDefault token ${token.symbol} ${Tempo.formatTokenLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}\nTip reaction emoji ${workspace.reaction_tip_emoji}${options?.updated ? '\nWorkspace settings updated' : ''}`,
   }
 }
 

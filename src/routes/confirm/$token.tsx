@@ -131,46 +131,57 @@ function Component() {
                 </p>
               </div>
               <div className="rounded-2xl border border-gray5 bg-bg2 p-6 shadow-xl sm:p-8">
-                <div className="space-y-4 rounded-xl bg-bg1 p-5">
-                  <div className="flex items-center justify-between gap-6">
+                <div className="border-b border-gray5 pb-6">
+                  <h2 className="text-xl font-bold text-gray10 sm:text-2xl">
+                    Tipbot wants to send a payment
+                  </h2>
+                  <p className="mt-2 text-base text-gray9">
+                    Review the payment details below before continuing.
+                  </p>
+                </div>
+                <div className="space-y-5 border-b border-gray5 py-6">
+                  <h3 className="text-lg font-bold text-gray10">Payment details</h3>
+                  <div className="flex flex-col gap-2 rounded-xl border border-gray5 bg-bg1 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
                     <span className="text-sm font-medium text-gray8">Amount</span>
-                    <span className="text-lg font-bold text-gray10">
+                    <span className="text-xl font-bold text-gray10 sm:text-2xl">
                       {formatCurrencyAmount(data.amount, data.tokenCurrency)} {data.tokenSymbol}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between gap-6">
+                  <div className="flex flex-col gap-2 rounded-xl border border-gray5 bg-bg1 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
                     <span className="text-sm font-medium text-gray8">To</span>
-                    <span className="text-lg font-bold text-gray10">{recipient}</span>
+                    <span className="text-xl font-bold text-gray10 sm:text-2xl">{recipient}</span>
                   </div>
                   {data.memo ? (
-                    <div className="flex items-center justify-between gap-6">
+                    <div className="flex flex-col gap-2 rounded-xl border border-gray5 bg-bg1 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
                       <span className="text-sm font-medium text-gray8">For</span>
-                      <span className="text-lg font-bold text-gray10">{data.memo}</span>
+                      <span className="text-xl font-bold text-gray10 sm:text-2xl">{data.memo}</span>
                     </div>
                   ) : null}
                 </div>
-                <p className="mt-6 text-base text-gray9">
-                  {data.kind === 'reusable_access_key'
-                    ? `Tipbot can send future ${data.tokenSymbol} tips from Slack, up to ${formatCurrencyAmount(data.accessKeyLimit, data.tokenCurrency)} per day. You can disconnect anytime.`
-                    : 'Tipbot will use this approval once and won’t save a new access key.'}
-                </p>
-                <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
-                  <button
-                    className="inline-flex h-12 items-center justify-center rounded-lg bg-green8 px-6 text-lg font-bold text-white transition-colors outline-none hover:bg-green7 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
-                    disabled={status === 'confirming'}
-                    onClick={confirm}
-                    type="button"
-                  >
-                    {status === 'confirming' ? 'Confirming' : 'Confirm payment'}
-                  </button>
-                  <a
-                    className="inline-flex h-12 items-center justify-center rounded-lg px-6 text-lg font-bold text-blue9 no-underline transition-colors outline-none hover:bg-blue1 focus-visible:ring-2 focus-visible:ring-blue9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
-                    href="/"
-                  >
-                    Cancel
-                  </a>
+                <div className="space-y-4 pt-6">
+                  <p className="text-base text-gray9">
+                    {data.kind === 'reusable_access_key'
+                      ? `Tipbot can send future ${data.tokenSymbol} tips from Slack, up to ${formatCurrencyAmount(data.accessKeyLimit, data.tokenCurrency)} per day. You can disconnect anytime.`
+                      : 'Tipbot will use this approval once and won’t save a new access key.'}
+                  </p>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                    <button
+                      className="inline-flex h-12 items-center justify-center rounded-lg bg-green8 px-6 text-lg font-bold text-white transition-colors outline-none hover:bg-green7 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                      disabled={status === 'confirming'}
+                      onClick={confirm}
+                      type="button"
+                    >
+                      {status === 'confirming' ? 'Confirming' : 'Confirm payment'}
+                    </button>
+                    <a
+                      className="inline-flex h-12 items-center justify-center rounded-lg px-6 text-lg font-bold text-blue9 no-underline transition-colors outline-none hover:bg-blue1 focus-visible:ring-2 focus-visible:ring-blue9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                      href="/"
+                    >
+                      Cancel
+                    </a>
+                  </div>
+                  {error ? <p className="text-sm font-medium text-red9">{error}</p> : null}
                 </div>
-                {error ? <p className="mt-4 text-sm font-medium text-red9">{error}</p> : null}
               </div>
             </div>
           )

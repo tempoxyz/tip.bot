@@ -56,10 +56,24 @@ function createManifest() {
     oauth_config: {
       redirect_urls: [`${baseUrl}/api/chat/slack/oauth/callback`],
       scopes: {
-        bot: ['chat:write', 'commands', 'users:read'],
+        bot: [
+          'channels:history',
+          'channels:read',
+          'chat:write',
+          'commands',
+          'groups:history',
+          'groups:read',
+          'im:write',
+          'reactions:read',
+          'users:read',
+        ],
       },
     },
     settings: {
+      event_subscriptions: {
+        bot_events: ['reaction_added', 'reaction_removed'],
+        request_url: `${baseUrl}/api/chat/slack`,
+      },
       interactivity: {
         is_enabled: true,
         request_url: `${baseUrl}/api/chat/slack`,

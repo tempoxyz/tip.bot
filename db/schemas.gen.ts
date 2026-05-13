@@ -51,6 +51,32 @@ export const member = z.object({
   workspace_id: z.string(),
 })
 
+export const reaction_tip = z.object({
+  channel_id: z.string(),
+  created_at: z.string(),
+  id: z.string(),
+  idempotency_key: z.string(),
+  message_ts: z.string(),
+  reaction: z.string(),
+  recipient_member_id: z.string(),
+  sender_member_id: z.string(),
+  thread_ts: z.string(),
+  tip_id: z.string().nullable(),
+  updated_at: z.string(),
+  workspace_id: z.string(),
+})
+
+export const reaction_tip_thread = z.object({
+  channel_id: z.string(),
+  created_at: z.string(),
+  id: z.string(),
+  message_ts: z.string(),
+  reaction: z.string(),
+  reply_ts: z.string(),
+  updated_at: z.string(),
+  workspace_id: z.string(),
+})
+
 export const tip = z.object({
   amount: z.number(),
   chain_id: z.number(),
@@ -81,6 +107,7 @@ export const workspace = z.object({
   name: z.string().nullable(),
   provider: z.literal('slack'),
   provider_id: z.string(),
+  reaction_tip_emoji: z.string(),
   updated_at: z.string(),
 })
 
@@ -89,6 +116,8 @@ export const db = {
   account: account,
   account_link_token: account_link_token,
   member: member,
+  reaction_tip: reaction_tip,
+  reaction_tip_thread: reaction_tip_thread,
   tip: tip,
   workspace: workspace,
 }

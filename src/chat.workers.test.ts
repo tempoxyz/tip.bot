@@ -30,6 +30,7 @@ const executionCtx = {
 }
 const client = testClient(api, env, executionCtx)
 const factory = Factory.create(db)
+const memberSlack = new WebClient('member', { slackApiUrl: env.SLACK_API_URL })
 const slack = new WebClient(Constants.slack.botToken, { slackApiUrl: env.SLACK_API_URL })
 
 beforeEach(async () => {
@@ -141,6 +142,7 @@ describe('/tip @account', () => {
     expect(response.status).toBe(200)
     await expectSlackMessage('Tipbot needs your approval to send this payment.')
     await expectSlackMessage('/confirm/')
+    await expectSlackMessage('|https://tip.bot/confirm/0x')
     await expectSlackMessage('Link expires in 10 minutes.')
     await expectSlackMessageNotContaining('Receipt')
   })
@@ -343,6 +345,142 @@ describe('/tip @account', () => {
   })
 })
 
+test('reaction tipping sends default tip and updates aggregate thread reply', async () => {
+  await connectTipAccounts()
+  const message = await memberSlack.chat.postMessage({
+    channel: Constants.slack.channelId,
+    text: 'nice work',
+  })
+  if (!message.ts) throw new Error('Expected Slack message timestamp.')
+
+  const response = await postSlackReaction({
+    messageTs: message.ts,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.adminUserId,
+  })
+  const readdResponse = await postSlackReaction({
+    eventTs: `${message.ts}-readd`,
+    messageTs: message.ts,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.adminUserId,
+  })
+  const tips = await db
+    .selectFrom('tip')
+    .innerJoin('workspace', 'workspace.id', 'tip.workspace_id')
+    .selectAll('tip')
+    .where('workspace.provider_id', '=', providerId)
+    .where('tip.idempotency_key', 'like', `${Chat.reactionTipIdempotencyPrefix}%`)
+    .execute()
+
+  expect(response.status).toBe(200)
+  expect(readdResponse.status).toBe(200)
+  expect(tips).toHaveLength(1)
+  expect(tips[0]).toMatchObject({ amount: 1000, confirmed_at: expect.any(String) })
+  await expectSlackThreadMessage(
+    message.ts,
+    `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}>`,
+  )
+})
+
+test('reaction tipping silently ignores unknown sender', async () => {
+  await connectTipAccounts()
+  const message = await memberSlack.chat.postMessage({
+    channel: Constants.slack.channelId,
+    text: 'unknown sender should not tip',
+  })
+  if (!message.ts) throw new Error('Expected Slack message timestamp.')
+
+  const response = await postSlackReaction({
+    messageTs: message.ts,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.missingUserId,
+  })
+  const reactionTips = await db
+    .selectFrom('reaction_tip')
+    .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
+    .selectAll('reaction_tip')
+    .where('workspace.provider_id', '=', providerId)
+    .execute()
+
+  expect(response.status).toBe(200)
+  expect(reactionTips).toHaveLength(0)
+  await expectSlackThreadMessageNotContaining(message.ts, 'tipped')
+})
+
+test('reaction tipping silently ignores unconnected recipient', async () => {
+  await connectTipAccounts({ recipient: false })
+  const message = await memberSlack.chat.postMessage({
+    channel: Constants.slack.channelId,
+    text: 'unconnected recipient should not receive tip',
+  })
+  if (!message.ts) throw new Error('Expected Slack message timestamp.')
+
+  const response = await postSlackReaction({
+    messageTs: message.ts,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.adminUserId,
+  })
+  const reactionTips = await db
+    .selectFrom('reaction_tip')
+    .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
+    .selectAll('reaction_tip')
+    .where('workspace.provider_id', '=', providerId)
+    .execute()
+
+  expect(response.status).toBe(200)
+  expect(reactionTips).toHaveLength(0)
+  await expectSlackThreadMessageNotContaining(message.ts, 'tipped')
+})
+
+test('reaction tipping updates aggregate after approval', async () => {
+  await connectTipAccounts()
+  await db.deleteFrom('access_key').execute()
+  const message = await memberSlack.chat.postMessage({
+    channel: Constants.slack.channelId,
+    text: 'approval required reaction tip',
+  })
+  if (!message.ts) throw new Error('Expected Slack message timestamp.')
+
+  const response = await postSlackReaction({
+    messageTs: message.ts,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.adminUserId,
+  })
+  const pendingReactionTip = await waitForReactionTip()
+  const confirmUrl = await findSlackDmMessageUrl('/confirm/')
+  const token = new URL(confirmUrl).pathname.split('/').at(-1)
+  if (!token) throw new Error('Expected confirmation token.')
+  const data = await Tip.getConfirmationData(env, token)
+  const keyAuthorization = await AccountLink.signKeyAuthorization(
+    Account.fromSecp256k1(Constants.tip.senderRootPrivateKey),
+    {
+      accessKeyAddress: data.accessKey.address,
+      chainId: data.payload.chainId,
+      expiresAt: data.payload.accessKeyExpiresAt ?? data.payload.expiresAt,
+      tokenAddress: data.payload.tokenAddress,
+    },
+  )
+
+  const confirmResponse = await client.api.confirm[':token'].$post({
+    json: {
+      address: Account.fromSecp256k1(Constants.tip.senderRootPrivateKey).address,
+      keyAuthorization,
+    },
+    param: { token },
+  })
+  await Promise.all(waitUntil)
+  const confirmedReactionTip = await waitForReactionTip({ tipId: true })
+
+  expect(response.status).toBe(200)
+  expect(pendingReactionTip.tip_id).toBe(null)
+  expect(confirmResponse.status).toBe(200)
+  expect(confirmedReactionTip.tip_id).toEqual(expect.any(String))
+  await expectSlackThreadMessage(
+    message.ts,
+    `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}>`,
+  )
+}, 20_000) // 20 seconds
+
 describe('/tip config', () => {
   test('shows current config', async () => {
     const response = await postSlashCommand('config')
@@ -357,6 +495,8 @@ describe('/tip config', () => {
     await expectSlackMessage('PathUSD')
     await expectSlackMessage('Default amount')
     await expectSlackMessage('0.001')
+    await expectSlackMessage('Tip reaction emoji')
+    await expectSlackMessage('money_with_wings')
   })
 
   test('handles missing workspace', async () => {
@@ -438,6 +578,7 @@ describe('/tip config', () => {
     expect(workspace.chain_id).toBe(Tempo.chainLookup.testnet)
     expect(workspace.default_amount).toBe(2000)
     expect(workspace.default_token_address).toBe(Tempo.addressLookup.betaUsd)
+    expect(workspace.reaction_tip_emoji).toBe('tip')
   })
 
   test('rejects invalid edit modal amount', async () => {
@@ -1011,6 +1152,22 @@ async function connectTipAccounts(options: { memoScope?: boolean; recipient?: bo
   })
 }
 
+async function waitForReactionTip(options: { tipId?: boolean } = {}) {
+  const timeoutAt = Date.now() + 2_000 // 2 seconds
+  do {
+    const row = await db
+      .selectFrom('reaction_tip')
+      .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
+      .selectAll('reaction_tip')
+      .where('workspace.provider_id', '=', providerId)
+      .$if(Boolean(options.tipId), (query) => query.where('reaction_tip.tip_id', 'is not', null))
+      .executeTakeFirst()
+    if (row) return row
+    await new Promise((resolve) => setTimeout(resolve, 25)) // 25 milliseconds
+  } while (Date.now() < timeoutAt)
+  throw new Error('Expected reaction tip row.')
+}
+
 async function findOrCreateAccount(address: string) {
   const existing = await db
     .selectFrom('account')
@@ -1029,6 +1186,41 @@ async function expectSlackMessage(text: string) {
     history.messages?.some((message) => message.text?.includes(text)),
     JSON.stringify(history.messages),
   ).toBe(true)
+}
+
+async function expectSlackThreadMessage(messageTs: string, text: string) {
+  const history = await slack.conversations.replies({
+    channel: Constants.slack.channelId,
+    ts: messageTs,
+  })
+
+  expect(history.ok).toBe(true)
+  expect(
+    history.messages?.some((message) => message.text?.includes(text)),
+    JSON.stringify(history.messages),
+  ).toBe(true)
+}
+
+async function expectSlackThreadMessageNotContaining(messageTs: string, text: string) {
+  const history = await slack.conversations.replies({
+    channel: Constants.slack.channelId,
+    ts: messageTs,
+  })
+
+  expect(history.ok).toBe(true)
+  expect(history.messages?.some((message) => message.text?.includes(text))).toBe(false)
+}
+
+async function findSlackDmMessageUrl(text: string) {
+  const open = await slack.conversations.open({ users: Constants.slack.adminUserId })
+  if (!open.channel?.id) throw new Error('Expected Slack DM channel.')
+  const history = await slack.conversations.history({ channel: open.channel.id })
+  const message = history.messages?.find((message) => message.text?.includes(text))
+  const url = message?.text?.match(/https?:\/\/\S+/)?.[0]
+
+  expect(history.ok).toBe(true)
+  if (!url) throw new Error(`Expected Slack DM message containing ${text}.`)
+  return url
 }
 
 async function expectSlackPublicMessage(text: string) {
@@ -1099,7 +1291,49 @@ async function postSlackInteraction(payload: unknown) {
   return response
 }
 
-function createViewSubmissionPayload(input: { amount: string; network: string; token: string }) {
+async function postSlackReaction(options: {
+  eventTs?: string
+  messageTs: string
+  reaction: string
+  userId: string
+}) {
+  const body = JSON.stringify({
+    event: {
+      event_ts: options.eventTs ?? `${options.messageTs}-reaction`,
+      item: {
+        channel: Constants.slack.channelId,
+        ts: options.messageTs,
+        type: 'message',
+      },
+      item_user: Constants.slack.memberUserId,
+      reaction: options.reaction,
+      type: 'reaction_added',
+      user: options.userId,
+    },
+    event_id: `Ev${Nanoid.generate()}`,
+    team_id: providerId,
+    type: 'event_callback',
+  })
+  const response = await client.api.chat.slack.$post(
+    {},
+    {
+      headers: {
+        ...(await createSlackHeaders(body, env.SLACK_SIGNING_SECRET)),
+        'content-type': 'application/json',
+      },
+      init: { body },
+    },
+  )
+  await Promise.all(waitUntil)
+  return response
+}
+
+function createViewSubmissionPayload(input: {
+  amount: string
+  emoji?: string
+  network: string
+  token: string
+}) {
   return {
     team: { id: providerId },
     type: 'view_submission',
@@ -1129,6 +1363,12 @@ function createViewSubmissionPayload(input: { amount: string; network: string; t
                 value: input.network,
               },
               type: 'static_select',
+            },
+          },
+          reaction_tip_emoji: {
+            reaction_tip_emoji: {
+              type: 'plain_text_input',
+              value: input.emoji ?? ':tip:',
             },
           },
         },

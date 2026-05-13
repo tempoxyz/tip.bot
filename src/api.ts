@@ -337,7 +337,51 @@ export const api = new Hono<{
             400,
           )
 
-        if (result.status === 'sent')
+        if (
+          result.status === 'sent' &&
+          Chat.isReactionTipIdempotencyKey(data.payload.idempotencyKey)
+        )
+          c.executionCtx.waitUntil(
+            (async () => {
+              const db = DB.create(c.env.DB)
+              const reactionTip = await db
+                .selectFrom('reaction_tip')
+                .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
+                .innerJoin('tip', 'tip.idempotency_key', 'reaction_tip.idempotency_key')
+                .select([
+                  'reaction_tip.channel_id',
+                  'reaction_tip.id',
+                  'reaction_tip.message_ts',
+                  'reaction_tip.reaction',
+                  'reaction_tip.workspace_id',
+                  'tip.id as tip_id',
+                ])
+                .where('workspace.provider_id', '=', data.payload.providerId)
+                .where('reaction_tip.idempotency_key', '=', data.payload.idempotencyKey)
+                .where('tip.confirmed_at', 'is not', null)
+                .executeTakeFirst()
+              if (!reactionTip) return
+
+              await db
+                .updateTable('reaction_tip')
+                .set({ tip_id: reactionTip.tip_id, updated_at: new Date().toISOString() })
+                .where('id', '=', reactionTip.id)
+                .where('tip_id', 'is', null)
+                .execute()
+              await Chat.updateReactionTipAggregate(data.payload.providerId, {
+                channelId: reactionTip.channel_id,
+                messageTs: reactionTip.message_ts,
+                reaction: reactionTip.reaction,
+                workspaceId: reactionTip.workspace_id,
+              })
+            })().catch((error) => {
+              console.error(
+                'Failed to update Slack reaction tip aggregate after confirmation:',
+                error,
+              )
+            }),
+          )
+        else if (result.status === 'sent')
           c.executionCtx.waitUntil(
             (async () => {
               await Chat.getChat().initialize()
@@ -473,7 +517,20 @@ export const api = new Hono<{
     const url = new URL('/oauth/v2/authorize', c.env.SLACK_API_URL)
     url.searchParams.set('client_id', c.env.SLACK_CLIENT_ID)
     url.searchParams.set('redirect_uri', redirectUri)
-    url.searchParams.set('scope', ['chat:write', 'commands', 'users:read'].join(','))
+    url.searchParams.set(
+      'scope',
+      [
+        'channels:history',
+        'channels:read',
+        'chat:write',
+        'commands',
+        'groups:history',
+        'groups:read',
+        'im:write',
+        'reactions:read',
+        'users:read',
+      ].join(','),
+    )
     url.searchParams.set('state', `${payload}.${Hex.fromBytes(new Uint8Array(digest))}`)
     return Response.redirect(url.toString(), 302)
   })

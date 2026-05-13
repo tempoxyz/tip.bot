@@ -469,7 +469,7 @@ async function createConfirmationRequired(
     amount,
     chainId: workspace.chain_id,
     expiresAt,
-    idempotencyKey: `confirm:${nonce}`,
+    idempotencyKey: input.idempotencyKey,
     kind: isReusable ? 'reusable_access_key' : 'onetime_payment',
     memo: input.memo,
     nonce,
