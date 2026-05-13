@@ -70,7 +70,7 @@ export function getSlack() {
 
 const actions = {
   async config_edit(event) {
-    if (event.adapter !== getSlack()) throw new Error('Provider is not implemented yet.')
+    if (event.adapter !== getSlack()) throw new Error('Provider not implemented yet.')
     const raw = z.parse(
       z.object({
         channel: z.object({ id: z.string().min(1) }).optional(),
@@ -224,9 +224,7 @@ const modalSubmits = {
       .where('provider_id', '=', metadata.providerId)
       .executeTakeFirstOrThrow()
     if (event.relatedMessage)
-      await event.relatedMessage.edit(
-        configCard(workspace, { canEdit: true, title: 'Workspace settings updated' }),
-      )
+      await event.relatedMessage.edit(configCard(workspace, { canEdit: true, updated: true }))
   },
 } as const satisfies Record<
   (typeof modalSubmitNames)[number],
@@ -244,7 +242,7 @@ const handlers = {
     if (!workspace) {
       await event.channel.postEphemeral(
         event.user,
-        'Tipbot is not configured for this Slack workspace. Reinstall Tipbot and try again.',
+        'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
         { fallbackToDM: false },
       )
       return
@@ -257,116 +255,7 @@ const handlers = {
     )
   },
   async connect(event, ctx) {
-    const workspace = await ctx.db
-      .selectFrom('workspace')
-      .selectAll()
-      .where('provider', '=', ctx.provider.type)
-      .where('provider_id', '=', ctx.provider.id)
-      .executeTakeFirst()
-    if (!workspace) {
-      await event.channel.postEphemeral(
-        event.user,
-        'Tipbot is not configured for this Slack workspace. Reinstall Tipbot and try again.',
-        { fallbackToDM: false },
-      )
-      return
-    }
-
-    let member = await ctx.db
-      .selectFrom('member')
-      .selectAll()
-      .where('workspace_id', '=', workspace.id)
-      .where('provider_user_id', '=', event.user.userId)
-      .executeTakeFirst()
-    if (!member) {
-      const id = Nanoid.generate()
-      const now = new Date().toISOString()
-      await ctx.db
-        .insertInto('member')
-        .values({
-          account_id: null,
-          created_at: now,
-          id,
-          login: null,
-          name: null,
-          provider_user_id: event.user.userId,
-          updated_at: now,
-          workspace_id: workspace.id,
-        })
-        .execute()
-      member = await ctx.db
-        .selectFrom('member')
-        .selectAll()
-        .where('id', '=', id)
-        .executeTakeFirstOrThrow()
-    }
-
-    if (member.account_id) {
-      const accessKey = await ctx.db
-        .selectFrom('access_key')
-        .select(['id'])
-        .where('account_id', '=', member.account_id)
-        .where('chain_id', '=', workspace.chain_id)
-        .where('expires_at', '>', new Date().toISOString())
-        .where('revoked_at', 'is', null)
-        .executeTakeFirst()
-      if (accessKey) {
-        await event.channel.postEphemeral(event.user, 'Already connected', { fallbackToDM: false })
-        return
-      }
-    }
-
-    const now = new Date()
-    const token = Nanoid.generate()
-    const accessKey = AccessKey.generate()
-    const linkAction = member.account_id ? 'Reconnect' : 'Connect'
-    const linkButtonLabel = member.account_id ? 'Refresh connection' : 'Connect to Tipbot'
-    const linkDescription = 'Link expires in 10 minutes.'
-    const linkUrl = `https://${env.HOST}/connect/${token}`
-    const linkText = `${linkAction} to Tipbot: ${linkUrl}\n${linkDescription}`
-    const linkExpiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString() // 10 minutes
-    const accessKeyExpiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
-    await ctx.db
-      .deleteFrom('account_link_token')
-      .where('member_id', '=', member.id)
-      .where('used_at', 'is', null)
-      .execute()
-    await ctx.db
-      .insertInto('account_link_token')
-      .values({
-        access_key_address: accessKey.address,
-        access_key_authorization: null,
-        access_key_ciphertext: await AccessKey.encrypt(env, accessKey.privateKey),
-        access_key_expires_at: accessKeyExpiresAt,
-        access_key_public_key: accessKey.publicKey,
-        account_id: null,
-        created_at: now.toISOString(),
-        expires_at: linkExpiresAt,
-        id: Nanoid.generate(),
-        member_id: member.id,
-        provider_channel_id: event.channel.id,
-        token_hash: await AccountLink.hashToken(env, token),
-        used_at: null,
-      })
-      .execute()
-
-    await event.channel.postEphemeral(
-      event.user,
-      {
-        card: chat.Card({
-          children: [
-            chat.CardLink({ label: `${linkAction} to Tipbot`, url: linkUrl }),
-            chat.Actions([
-              chat.LinkButton({ label: linkButtonLabel, style: 'primary', url: linkUrl }),
-              chat.Button({ id: 'connect_cancel', label: 'Cancel' }),
-            ]),
-            chat.CardText(linkDescription, { style: 'muted' }),
-          ],
-        }),
-        fallbackText: linkText,
-      },
-      { fallbackToDM: false },
-    )
+    await postConnectLink(event, ctx)
   },
   async disconnect(event, ctx) {
     const workspace = await ctx.db
@@ -378,7 +267,7 @@ const handlers = {
     if (!workspace) {
       await event.channel.postEphemeral(
         event.user,
-        'Tipbot is not configured for this Slack workspace. Reinstall Tipbot and try again.',
+        'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
         { fallbackToDM: false },
       )
       return
@@ -391,7 +280,7 @@ const handlers = {
       .where('provider_user_id', '=', event.user.userId)
       .executeTakeFirst()
     if (!member?.account_id) {
-      await event.channel.postEphemeral(event.user, 'No account is connected.', {
+      await event.channel.postEphemeral(event.user, 'No account connected.', {
         fallbackToDM: false,
       })
       return
@@ -408,26 +297,25 @@ const handlers = {
     })
   },
   async help(event, ctx) {
-    if (ctx.provider.type !== 'slack') throw new Error('Provider is not implemented yet.')
+    if (ctx.provider.type !== 'slack') throw new Error('Provider not implemented yet.')
 
     const installation = await getSlack().getInstallation(ctx.provider.id)
     if (!installation) return
 
     const rows = [
-      ['/tip @account for coffee', 'Send a payment in chat'],
-      ['/tip config', 'View workspace settings'],
-      ['/tip connect', 'Connect Tipbot'],
-      ['/tip disconnect', 'Disconnect Tipbot'],
-      ['/tip help', 'Show commands'],
-      ['/tip status', 'Check Tipbot connection'],
+      ['/tip @account for coffee', 'Send payment in chat'],
+      ['/tip config', 'Manage workspace configuration'],
+      ['/tip connect', 'Connect to Tipbot'],
+      ['/tip disconnect', 'Disconnect from Tipbot'],
+      ['/tip help', 'Show help message'],
+      ['/tip status', 'Check connection status'],
     ]
     const body = new URLSearchParams()
     body.set('channel', event.channel.id.replace(/^slack:/, ''))
-    body.set('text', `Tipbot commands\n${rows.map((row) => `${row[0]} ${row[1]}`).join('\n')}`)
+    body.set('text', rows.map((row) => `${row[0]} ${row[1]}`).join('\n'))
     body.set(
       'blocks',
       JSON.stringify([
-        { text: { emoji: true, text: 'Tipbot commands', type: 'plain_text' }, type: 'header' },
         {
           rows: [
             [slackTableCell('Command'), slackTableCell('Description')],
@@ -464,7 +352,7 @@ const handlers = {
     if (!workspace) {
       await event.channel.postEphemeral(
         event.user,
-        'Tipbot is not configured for this Slack workspace. Reinstall Tipbot and try again.',
+        'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
         { fallbackToDM: false },
       )
       return
@@ -482,7 +370,7 @@ const handlers = {
       .where('member.provider_user_id', '=', event.user.userId)
       .executeTakeFirst()
     if (!member) {
-      await event.channel.postEphemeral(event.user, 'No account is connected.', {
+      await event.channel.postEphemeral(event.user, 'No account connected.', {
         fallbackToDM: false,
       })
       return
@@ -502,9 +390,8 @@ const handlers = {
               ],
             }),
           ],
-          title: 'Status',
         }),
-        fallbackText: `Status\nAccount ID ${member.account_id}\nAddress ${member.account_address}\nProvider user ID ${member.provider_user_id}`,
+        fallbackText: `Account ID ${member.account_id}\nAddress ${member.account_address}\nProvider user ID ${member.provider_user_id}`,
       },
       { fallbackToDM: false },
     )
@@ -512,14 +399,14 @@ const handlers = {
   async default(event, ctx) {
     const parsed = Tip.parseTipText(ctx.text)
     if (!parsed) {
-      if (ctx.provider.type !== 'slack') throw new Error('Provider is not implemented yet.')
+      if (ctx.provider.type !== 'slack') throw new Error('Provider not implemented yet.')
 
       const installation = await getSlack().getInstallation(ctx.provider.id)
-      if (!installation) throw new Error('Slack app is not installed for this workspace.')
+      if (!installation) throw new Error('Tibot app not installed for this workspace.')
 
       const body = new URLSearchParams()
       body.set('channel', event.channel.id.replace(/^slack:/, ''))
-      body.set('text', 'Usage: /tip @account')
+      body.set('text', 'Invalid `/tip` usage. Try `/tip @account` or `/tip help` for more info.')
       body.set('user', event.user.userId)
       const response = await getSlack().withBotToken(installation.botToken, () =>
         fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
@@ -540,11 +427,9 @@ const handlers = {
     }
 
     if (!event.triggerId) {
-      await event.channel.postEphemeral(
-        event.user,
-        'Could not send tip: missing Slack request ID.',
-        { fallbackToDM: false },
-      )
+      await event.channel.postEphemeral(event.user, 'Payment not sent. Try again.', {
+        fallbackToDM: false,
+      })
       return
     }
 
@@ -563,48 +448,41 @@ const handlers = {
           ok: false,
         }) satisfies Tip.TipResult,
     )
-    const textResult = (() => {
-      if (result.ok)
-        return `${event.channel.mentionUser(result.senderProviderUserId)} tipped ${event.channel.mentionUser(result.recipientProviderUserId)} ${formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)}${result.memo ? ` for ${result.memo}` : ''}. ${Tempo.formatTxLink(result.chainId, result.transactionHash)}`
 
-      if (result.code === 'self_tip') return 'You cannot tip yourself.'
-      if (result.code === 'sender_unconnected') return 'Connect your wallet first: `/tip connect`.'
-      if (result.code === 'missing_sender_access_key')
-        return `Reconnect for ${Tempo.getChainName(result.chainId ?? Tempo.mainnetChainId)}: \`/tip connect\`.`
-      if (result.code === 'recipient_unconnected')
-        return `${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipientProviderUserId)} hasn’t connected Tipbot yet.`
-      return `${result.message ?? 'Tip submission failed.'}${'transactionHash' in result && result.transactionHash && 'chainId' in result && result.chainId ? ` ${Tempo.formatTxLink(result.chainId, result.transactionHash)}` : ''}`
-    })()
-
-    if (result.ok && result.status === 'sent') await event.channel.post(textResult)
+    if (result.ok && result.status === 'sent')
+      await event.channel.post(
+        `${event.channel.mentionUser(result.senderProviderUserId)} sent ${event.channel.mentionUser(result.recipientProviderUserId)} ${formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)}${result.memo ? ` for ${result.memo}` : ''}. ${formatReceiptLink(result.chainId, result.transactionHash)}`,
+      )
     else if (result.ok)
       await event.channel.postEphemeral(
         event.user,
-        `Tip complete. ${Tempo.formatTxLink(result.chainId, result.transactionHash)}`,
+        `Payment sent. ${formatReceiptLink(result.chainId, result.transactionHash)}`,
         { fallbackToDM: false },
       )
     else {
-      if (result.code === 'recipient_unconnected') {
-        if (ctx.provider.type !== 'slack') throw new Error('Provider is not implemented yet.')
-        const installation = await getSlack().getInstallation(ctx.provider.id)
-        if (installation) {
-          const body = new URLSearchParams()
-          body.set('channel', event.channel.id.replace(/^slack:/, ''))
-          body.set(
-            'text',
-            `${event.channel.mentionUser(event.user.userId)} tried to tip you. Connect with \`/tip connect\` to receive tips.`,
-          )
-          body.set('user', parsed.recipientProviderUserId)
-          await getSlack().withBotToken(installation.botToken, () =>
-            fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
-              body,
-              headers: { authorization: `Bearer ${installation.botToken}` },
-              method: 'POST',
-            }),
-          )
-        }
+      if (result.code === 'sender_unconnected' || result.code === 'missing_sender_access_key') {
+        await postConnectLink(event, ctx)
+        return
       }
-      await event.channel.postEphemeral(event.user, textResult, { fallbackToDM: false })
+      await event.channel.postEphemeral(
+        event.user,
+        (() => {
+          const receipt =
+            'chainId' in result &&
+            result.chainId &&
+            'transactionHash' in result &&
+            result.transactionHash
+              ? ` ${formatReceiptLink(result.chainId, result.transactionHash)}`
+              : ''
+          if (result.code === 'self_tip')
+            return 'Payment not sent. Cannot send a payment to yourself.'
+          if (result.code === 'recipient_unconnected')
+            return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
+          if (result.code === 'pending') return `Payment still sending.${receipt}`
+          return `Payment failed.${receipt}`
+        })(),
+        { fallbackToDM: false },
+      )
     }
   },
 } as const satisfies Record<
@@ -637,10 +515,126 @@ function getProvider(event: chat.SlashCommandEvent): {
       type: 'slack',
     }
   }
-  throw new Error('Provider is not implemented yet.')
+  throw new Error('Provider not implemented yet.')
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
+
+async function postConnectLink(event: chat.SlashCommandEvent, ctx: HandlerContext) {
+  const workspace = await ctx.db
+    .selectFrom('workspace')
+    .selectAll()
+    .where('provider', '=', ctx.provider.type)
+    .where('provider_id', '=', ctx.provider.id)
+    .executeTakeFirst()
+  if (!workspace) {
+    await event.channel.postEphemeral(
+      event.user,
+      'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+      { fallbackToDM: false },
+    )
+    return
+  }
+
+  let member = await ctx.db
+    .selectFrom('member')
+    .selectAll()
+    .where('workspace_id', '=', workspace.id)
+    .where('provider_user_id', '=', event.user.userId)
+    .executeTakeFirst()
+  if (!member) {
+    const id = Nanoid.generate()
+    const createdAt = new Date().toISOString()
+    await ctx.db
+      .insertInto('member')
+      .values({
+        account_id: null,
+        created_at: createdAt,
+        id,
+        login: null,
+        name: null,
+        provider_user_id: event.user.userId,
+        updated_at: createdAt,
+        workspace_id: workspace.id,
+      })
+      .execute()
+    member = await ctx.db
+      .selectFrom('member')
+      .selectAll()
+      .where('id', '=', id)
+      .executeTakeFirstOrThrow()
+  }
+
+  if (member.account_id) {
+    const accessKey = await ctx.db
+      .selectFrom('access_key')
+      .select(['id'])
+      .where('account_id', '=', member.account_id)
+      .where('chain_id', '=', workspace.chain_id)
+      .where('expires_at', '>', new Date().toISOString())
+      .where('revoked_at', 'is', null)
+      .executeTakeFirst()
+    if (accessKey) {
+      await event.channel.postEphemeral(event.user, 'Already connected', { fallbackToDM: false })
+      return
+    }
+  }
+
+  const now = new Date()
+  const token = Nanoid.generate()
+  const accessKey = AccessKey.generate()
+  const linkButtonLabel = member.account_id ? 'Refresh connection' : 'Connect to Tipbot'
+  const linkDescription = 'Link expires in 10 minutes.'
+  const linkUrl = `https://${env.HOST}/connect/${token}`
+  const linkText = `${member.account_id ? 'Refresh Tipbot connection' : 'Connect to Tipbot'}: ${linkUrl}\n${linkDescription}`
+  const linkExpiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString() // 10 minutes
+  const accessKeyExpiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
+  await ctx.db
+    .deleteFrom('account_link_token')
+    .where('member_id', '=', member.id)
+    .where('used_at', 'is', null)
+    .execute()
+  await ctx.db
+    .insertInto('account_link_token')
+    .values({
+      access_key_address: accessKey.address,
+      access_key_authorization: null,
+      access_key_ciphertext: await AccessKey.encrypt(env, accessKey.privateKey),
+      access_key_expires_at: accessKeyExpiresAt,
+      access_key_public_key: accessKey.publicKey,
+      account_id: null,
+      created_at: now.toISOString(),
+      expires_at: linkExpiresAt,
+      id: Nanoid.generate(),
+      member_id: member.id,
+      provider_channel_id: event.channel.id,
+      token_hash: await AccountLink.hashToken(env, token),
+      used_at: null,
+    })
+    .execute()
+
+  await event.channel.postEphemeral(
+    event.user,
+    {
+      card: chat.Card({
+        children: [
+          chat.Actions([
+            chat.LinkButton({ label: linkButtonLabel, style: 'primary', url: linkUrl }),
+            chat.Button({ id: 'connect_cancel', label: 'Cancel' }),
+          ]),
+          chat.CardText(linkDescription, { style: 'muted' }),
+          chat.CardLink({ label: '\u200B', url: linkUrl }),
+        ],
+      }),
+      fallbackText: linkText,
+    },
+    { fallbackToDM: false },
+  )
+}
+
+function formatReceiptLink(chainId: number, transactionHash: string) {
+  return `<${Tempo.formatTxLink(chainId, transactionHash)}|Receipt>`
+}
 
 async function isSlackAdmin(providerId: string, providerUserId: string) {
   const installation = await getSlack().getInstallation(providerId)
@@ -672,7 +666,7 @@ async function isSlackAdmin(providerId: string, providerUserId: string) {
 
 function configCard(
   workspace: DB_gen.Selectable.workspace,
-  options?: { canEdit?: boolean; title?: string },
+  options?: { canEdit?: boolean; updated?: boolean },
 ) {
   const tokenAddress = workspace.default_token_address ?? Tempo.pathUsdAddress
   const token = Tempo.getTokenMetadataFallback(tokenAddress)
@@ -700,10 +694,10 @@ function configCard(
               ]),
             ]
           : []),
+        ...(options?.updated ? [chat.CardText('Workspace settings updated')] : []),
       ],
-      title: options?.title ?? 'Workspace settings',
     }),
-    fallbackText: `${options?.title ?? 'Workspace settings'}\nNetwork ${networkLabel}\nDefault token ${token.symbol} ${Tempo.formatTokenLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}`,
+    fallbackText: `Network ${networkLabel}\nDefault token ${token.symbol} ${Tempo.formatTokenLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}${options?.updated ? '\nWorkspace settings updated' : ''}`,
   }
 }
 

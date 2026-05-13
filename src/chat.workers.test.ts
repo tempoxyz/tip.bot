@@ -74,8 +74,9 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 pathUSD.`,
+      `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 pathUSD.`,
     )
+    await expectSlackMessage('Receipt')
     expect(tip).toMatchObject({
       amount: 1000,
       recipient_provider_user_id: Constants.slack.memberUserId,
@@ -97,8 +98,9 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 pathUSD for coffee.`,
+      `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 pathUSD for coffee.`,
     )
+    await expectSlackMessage('Receipt')
     expect(tip.confirmed_at).toEqual(expect.any(String))
     expect(tip.transaction_hash).toEqual(expect.any(String))
   }, 20_000) // 20 seconds
@@ -121,7 +123,8 @@ describe('/tip @account', () => {
 
     expect(firstResponse.status).toBe(200)
     expect(secondResponse.status).toBe(200)
-    await expectSlackMessage('Tip complete.')
+    await expectSlackMessage('Payment sent.')
+    await expectSlackMessage('Receipt')
     expect(tips).toHaveLength(1)
   }, 20_000) // 20 seconds
 
@@ -129,7 +132,35 @@ describe('/tip @account', () => {
     const response = await postSlashCommand(`<@${Constants.slack.adminUserId}>`)
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('You cannot tip yourself.')
+    await expectSlackMessage('Payment not sent. Cannot send a payment to yourself.')
+  })
+
+  test('shows connect action when sender is not connected', async () => {
+    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}>`)
+    const link = await db
+      .selectFrom('account_link_token')
+      .selectAll('account_link_token')
+      .innerJoin('member', 'member.id', 'account_link_token.member_id')
+      .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+      .where('member.provider_user_id', '=', Constants.slack.adminUserId)
+      .where('workspace.provider_id', '=', providerId)
+      .executeTakeFirstOrThrow()
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('Link expires in 10 minutes.')
+    expect(link).toEqual(expect.schemaMatching(Schema.account_link_token))
+  })
+
+  test('handles recipient not connected', async () => {
+    await connectTipAccounts({ recipient: false })
+
+    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}>`)
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(
+      `Payment not sent. <@${Constants.slack.memberUserId}> needs to connect Tipbot before receiving payments.`,
+    )
+    await expectSlackMessageNotContaining('tried to tip you')
   })
 
   test('handles recorded tip without transaction', async () => {
@@ -165,8 +196,8 @@ describe('/tip @account', () => {
     const response = await postSlashCommand(`<@${Constants.slack.memberUserId}>`, { triggerId })
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Tip is still sending.')
-    await expectSlackMessageNotContaining('Sending tip.')
+    await expectSlackMessage('Payment still sending.')
+    await expectSlackMessageNotContaining('Sending payment.')
   })
 })
 
@@ -175,7 +206,7 @@ describe('/tip config', () => {
     const response = await postSlashCommand('config')
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Workspace settings')
+    await expectSlackMessageNotContaining('Workspace settings')
     await expectSlackMessage('Network')
     await expectSlackMessage('Testnet')
     await expectSlackMessage('Default token')
@@ -196,7 +227,7 @@ describe('/tip config', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      'Tipbot is not configured for this Slack workspace. Reinstall Tipbot and try again.',
+      'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
     )
     expect(workspaces).toEqual([])
   })
@@ -240,7 +271,7 @@ describe('/tip config', () => {
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Workspace settings')
+    await expectSlackMessageNotContaining('Workspace settings')
     expect(workspace.default_amount).toBe(1000)
   })
 
@@ -313,7 +344,7 @@ describe('/tip config', () => {
 
   test('denies non-admin edit action', async () => {
     await postSlashCommand('config')
-    const messageTs = await findSlackMessageTs('Workspace settings')
+    const messageTs = await findSlackMessageTs('Network')
     const userList = await slack.users.list({})
     const member = userList.members?.find(
       (member) => member.id && !member.is_admin && !member.is_owner,
@@ -359,7 +390,6 @@ describe('/tip connect', () => {
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('/connect/')
     await expectSlackMessage('Link expires in 10 minutes.')
     expect(link).toEqual(expect.schemaMatching(Schema.account_link_token))
     expect(member).toEqual(expect.schemaMatching(Schema.member))
@@ -405,7 +435,7 @@ describe('/tip connect', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      'Tipbot is not configured for this Slack workspace. Reinstall Tipbot and try again.',
+      'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
     )
     expect(workspaces).toEqual([])
     expect(links).toEqual([])
@@ -530,7 +560,7 @@ describe('/tip disconnect', () => {
     const response = await postSlashCommand('disconnect')
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('No account is connected.')
+    await expectSlackMessage('No account connected.')
   })
 
   test('handles missing workspace', async () => {
@@ -545,7 +575,7 @@ describe('/tip disconnect', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      'Tipbot is not configured for this Slack workspace. Reinstall Tipbot and try again.',
+      'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
     )
     expect(workspaces).toEqual([])
   })
@@ -556,7 +586,7 @@ describe('/tip help', () => {
     const response = await postSlashCommand('help')
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Tipbot commands')
+    await expectSlackMessageNotContaining('Tipbot commands')
     await expectSlackMessage('/tip @account for coffee')
     await expectSlackMessage('/tip config')
     await expectSlackMessage('/tip connect')
@@ -583,6 +613,7 @@ describe('/tip status', () => {
     const response = await postSlashCommand('status')
 
     expect(response.status).toBe(200)
+    await expectSlackMessageNotContaining('Status')
     await expectSlackMessage('Account ID')
     await expectSlackMessage(account.id)
     await expectSlackMessage('Address')
@@ -595,7 +626,7 @@ describe('/tip status', () => {
     const response = await postSlashCommand('status')
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('No account is connected.')
+    await expectSlackMessage('No account connected.')
   })
 
   test('handles missing workspace', async () => {
@@ -610,7 +641,7 @@ describe('/tip status', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      'Tipbot is not configured for this Slack workspace. Reinstall Tipbot and try again.',
+      'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
     )
     expect(workspaces).toEqual([])
   })
@@ -621,14 +652,18 @@ describe('/tip usage', () => {
     const response = await postSlashCommand('')
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Usage: /tip @account')
+    await expectSlackMessage(
+      'Invalid `/tip` usage. Try `/tip @account` or `/tip help` for more info.',
+    )
   })
 
   test('shows usage for unknown text', async () => {
     const response = await postSlashCommand('hello')
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Usage: /tip @account')
+    await expectSlackMessage(
+      'Invalid `/tip` usage. Try `/tip @account` or `/tip help` for more info.',
+    )
   })
 
   test('handles missing Slack installation', async () => {
@@ -650,7 +685,7 @@ describe('/tip usage', () => {
 
 ////////////////////////////////////////////////////////////////////////////
 
-async function connectTipAccounts() {
+async function connectTipAccounts(options: { recipient?: boolean } = {}) {
   const workspace = await db
     .selectFrom('workspace')
     .selectAll()
@@ -668,11 +703,12 @@ async function connectTipAccounts() {
     provider_user_id: Constants.slack.adminUserId,
     workspace_id: workspace.id,
   })
-  await factory.member.insert({
-    account_id: recipientAccount.id,
-    provider_user_id: Constants.slack.memberUserId,
-    workspace_id: workspace.id,
-  })
+  if (options.recipient ?? true)
+    await factory.member.insert({
+      account_id: recipientAccount.id,
+      provider_user_id: Constants.slack.memberUserId,
+      workspace_id: workspace.id,
+    })
   await factory.access_key.insert({
     account_id: senderAccount.id,
     address: accessKey.address,
@@ -704,7 +740,10 @@ async function expectSlackMessage(text: string) {
   const history = await slack.conversations.history({ channel: Constants.slack.channelId })
 
   expect(history.ok).toBe(true)
-  expect(history.messages?.some((message) => message.text?.includes(text))).toBe(true)
+  expect(
+    history.messages?.some((message) => message.text?.includes(text)),
+    JSON.stringify(history.messages),
+  ).toBe(true)
 }
 
 async function findSlackMessageTs(text: string) {
