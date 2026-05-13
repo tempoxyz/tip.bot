@@ -22,9 +22,11 @@ const migrations = Object.entries(
   }))
 
 beforeAll(async () => {
-  server.listen({ onUnhandledRequest: 'bypass' })
-  await reset()
-  await applyD1Migrations(env.DB, migrations)
+  const startedAt = performance.now()
+  await measure('msw server startup', async () => server.listen({ onUnhandledRequest: 'bypass' }))
+  await measure('d1 reset', async () => reset())
+  await measure('d1 migrations', async () => applyD1Migrations(env.DB, migrations))
+  console.log(`workers: setup file beforeAll took ${formatDuration(performance.now() - startedAt)}`)
   return () => {
     server.close()
   }
@@ -45,3 +47,16 @@ beforeEach(async () => {
 afterEach(() => {
   server.resetHandlers()
 })
+
+async function measure<Value>(label: string, fn: () => Promise<Value> | Value) {
+  const startedAt = performance.now()
+  try {
+    return await fn()
+  } finally {
+    console.log(`workers: ${label} took ${formatDuration(performance.now() - startedAt)}`)
+  }
+}
+
+function formatDuration(milliseconds: number) {
+  return `${Math.round(milliseconds)}ms`
+}
