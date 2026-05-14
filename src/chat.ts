@@ -1288,7 +1288,11 @@ export async function updateReactionTipAggregate(
       return `• <@${row.sender_provider_user_id}> tipped ${displayAmount} · <${Tempo.formatTxLink(row.chain_id, row.transaction_hash!)}|Receipt>`
     }),
   )
-  const text = `<@${rows[0]!.recipient_provider_user_id}> received ${rows.length === 1 ? 'a tip' : 'tips'} on this message:\n\n${tipLines.join('\n')}`
+  const reactedMessageUrl = new URL('https://slack.com/app_redirect')
+  reactedMessageUrl.searchParams.set('channel', options.channelId)
+  reactedMessageUrl.searchParams.set('message_ts', options.messageTs)
+  reactedMessageUrl.searchParams.set('team', providerId)
+  const text = `<@${rows[0]!.recipient_provider_user_id}> received ${rows.length === 1 ? 'a tip' : 'tips'} on <${reactedMessageUrl}|this> message:\n\n${tipLines.join('\n')}`
   const existing = await db
     .selectFrom('reaction_tip_thread')
     .selectAll()
@@ -1502,17 +1506,17 @@ async function generateInvalidMentionReply(mentionText: string) {
   const creatureMatch = text.match(
     /\b(creature|creatures|dragon|dragons|elf|elves|fae|fairy|goblin|goblins|gnome|gnomes|gremlin|gremlins|kobold|kobolds|monster|monsters|orc|orcs|troll|trolls)\b/i,
   )
-  const isTipText = /<@[A-Z0-9_]+|\b(tip|send|pay|sent|paid|for)\b/i.test(text)
+  const isTipText = /<@[A-Z0-9_]+|\b(tip|send|pay|sent|paid)\b/i.test(text)
   const isSetupText = /\b(connect|configure|get started|install|link|mine|set ?up|start)\b/i.test(
     text,
   )
   const isThanksText = /^(thank you|thanks|ty|thx|thank u)\b/i.test(text)
   const fallback = (() => {
-    if (isThanksText) return 'Anytime.'
-    if (isSetupText) return 'Run `/tip connect`, then try `@Tipbot tip @account`.'
     if (creatureMatch && isTipText)
       return `${creatureMatch[0].toUpperCase()}? Excellent. For tips: \`@Tipbot tip @account [amount] [token] [for memo]\`.`
     if (creatureMatch) return `${creatureMatch[0].toUpperCase()}? Now we are talking.`
+    if (isThanksText) return 'Anytime.'
+    if (isSetupText) return 'Run `/tip connect`, then try `@Tipbot tip @account`.'
     if (isTipText) return 'Almost. Try `@Tipbot tip @account [amount] [token] [for memo]`.'
     return 'Anytime.'
   })()

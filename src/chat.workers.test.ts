@@ -605,6 +605,19 @@ test('@Tipbot mention gets excited about goblins', async () => {
   await expectSlackThreadMessage(messageTs, 'GOBLINS? Now we are talking.')
 })
 
+test('@Tipbot mention gets excited about goblins in thanks', async () => {
+  const messageTs = `1700000016.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> thanks for sending all the tips today. i heard you don't like goblins?`,
+  })
+
+  expect(response.status).toBe(200)
+  expect(aiRunMock).not.toHaveBeenCalled()
+  await expectSlackThreadMessage(messageTs, 'GOBLINS? Now we are talking.')
+})
+
 test('@Tipbot mention gets excited about other creatures', async () => {
   const messageTs = `1700000015.${Nanoid.generate().slice(0, 6)}`
 
@@ -908,7 +921,7 @@ test('reaction tipping sends default tip and updates aggregate thread reply', as
   expect(tips[0]).toMatchObject({ amount: 1000, confirmed_at: expect.any(String) })
   await expectSlackThreadMessage(
     message.ts,
-    `<@${Constants.slack.memberUserId}> received a tip on this message:\n\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
+    `<@${Constants.slack.memberUserId}> received a tip on <https://slack.com/app_redirect?channel=${channelId}&message_ts=${message.ts}&team=${providerId}|this> message:\n\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
     { channelId },
   )
 })
