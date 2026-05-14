@@ -1,8 +1,13 @@
-import emojis from 'emoji-name-map/lib/datasource.json' with { type: 'json' }
+import data from '@emoji-mart/data/sets/15/native.json' with { type: 'json' }
 
-const aliases: Record<string, string> = {
-  thumbsdown: '-1',
-  thumbsup: '+1',
+const emojis = data.emojis as Record<string, { skins: { native: string }[] }>
+const aliases = data.aliases as Record<string, string | undefined>
+const skinToneIndexes: Record<string, number> = {
+  'skin-tone-2': 1,
+  'skin-tone-3': 2,
+  'skin-tone-4': 3,
+  'skin-tone-5': 4,
+  'skin-tone-6': 5,
 }
 
 /**
@@ -14,25 +19,14 @@ export function replaceEmojiShortcodes(text: string): string {
     .replace(
       /:([a-z0-9_+-]+)::(skin-tone-[2-6]):/g,
       (match, name: string, skinToneName: string) => {
-        const emoji = getEmoji(name)
-        const skinTone = getEmoji(skinToneName)
-        if (!emoji || !skinTone) return match
-        return applySkinTone(emoji, skinTone)
+        return getEmoji(name, skinToneName) ?? match
       },
     )
     .replace(/:([a-z0-9_+-]+):/g, (match, name: string) => getEmoji(name) ?? match)
 }
 
-function applySkinTone(emoji: string, skinTone: string) {
-  const [base, ...rest] = Array.from(emoji)
-  if (!base) return emoji
-  if (rest[0] === '\uFE0F') rest.shift()
-  return `${base}${skinTone}${rest.join('')}`
-}
-
-function getEmoji(name: string) {
-  return (
-    (emojis as Record<string, string>)[name] ??
-    (emojis as Record<string, string>)[aliases[name] ?? '']
-  )
+function getEmoji(name: string, skinToneName?: string) {
+  const emoji = emojis[name] ?? emojis[aliases[name] ?? '']
+  if (!emoji) return undefined
+  return emoji.skins[skinToneName ? skinToneIndexes[skinToneName] : 0]?.native
 }
