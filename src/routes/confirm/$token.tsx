@@ -42,44 +42,72 @@ function Component() {
               adapter: dangerous_secp256k1({ privateKey: __PLAYWRIGHT_ACCOUNT_PRIVATE_KEY__ }),
             }
           : {}),
+        ...(data.kind === 'onetime_payment' ? { feePayer: data.relayUrl } : {}),
         testnet: data.chainId !== Tempo.chainLookup.mainnet,
       })
-      const result = await provider.request({
-        method: 'wallet_connect',
-        params: [
-          {
-            capabilities: {
-              authorizeAccessKey: {
-                chainId: toHex(data.chainId),
-                expiry: Math.floor(new Date(data.accessKeyExpiry).getTime() / 1000),
-                keyType: 'secp256k1',
-                limits: [
-                  {
-                    limit: toHex(parseUnits(data.accessKeyLimit, 6)),
-                    period: data.accessKeyLimitPeriodSeconds,
-                    token: data.tokenAddress,
+      const result = await provider.request(
+        data.kind === 'reusable_access_key'
+          ? {
+              method: 'wallet_connect',
+              params: [
+                {
+                  capabilities: {
+                    authorizeAccessKey: {
+                      chainId: toHex(data.chainId),
+                      expiry: Math.floor(new Date(data.accessKeyExpiry).getTime() / 1000),
+                      keyType: 'secp256k1',
+                      limits: [
+                        {
+                          limit: toHex(parseUnits(data.accessKeyLimit, 6)),
+                          period: data.accessKeyLimitPeriodSeconds,
+                          token: data.tokenAddress,
+                        },
+                      ],
+                      publicKey: data.accessKeyPublicKey,
+                      scopes: [
+                        { address: data.tokenAddress, selector: 'transfer(address,uint256)' },
+                        {
+                          address: data.tokenAddress,
+                          selector: 'transferWithMemo(address,uint256,bytes32)',
+                        },
+                      ],
+                    },
                   },
-                ],
-                publicKey: data.accessKeyPublicKey,
-                scopes: [
-                  { address: data.tokenAddress, selector: 'transfer(address,uint256)' },
-                  {
-                    address: data.tokenAddress,
-                    selector: 'transferWithMemo(address,uint256,bytes32)',
-                  },
-                ],
-              },
+                },
+              ],
+            }
+          : {
+              method: 'wallet_connect',
+              params: [{ capabilities: { method: 'register' } }],
             },
-          },
-        ],
-      })
+      )
       const account = result.accounts[0]
-      if (!account?.capabilities?.keyAuthorization)
+      if (!account) throw new Error('Tempo Wallet did not approve this payment.')
+      if (
+        data.kind === 'onetime_payment' &&
+        account.address.toLowerCase() !== data.transactionRequest?.from.toLowerCase()
+      )
+        throw new Error('Reconnect Tipbot and try again.')
+      const signedTransaction = await (async () => {
+        if (data.kind !== 'onetime_payment') return undefined
+        return await provider.request({
+          method: 'eth_signTransaction',
+          params: [
+            {
+              ...data.transactionRequest,
+              chainId: toHex(data.chainId),
+            } as never,
+          ],
+        })
+      })()
+      if (data.kind === 'reusable_access_key' && !account.capabilities?.keyAuthorization)
         throw new Error('Tempo Wallet did not approve this payment.')
       const response = await rpc.api.confirm[':token'].$post({
         json: {
           address: account.address,
-          keyAuthorization: account.capabilities.keyAuthorization,
+          ...(data.kind === 'reusable_access_key'
+            ? { keyAuthorization: account.capabilities?.keyAuthorization }
+            : { signedTransaction }),
         },
         param: { token: params.token },
       })

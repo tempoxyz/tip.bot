@@ -32,6 +32,16 @@ export function getRpcUrl(env: Pick<Env, 'RPC_URL_MAINNET' | 'RPC_URL_TESTNET'>,
   return undefined
 }
 
+export function getFeePayerPrivateKey(
+  env: Pick<Env, 'FEE_PAYER_PRIVATE_KEY_MAINNET' | 'FEE_PAYER_PRIVATE_KEY_TESTNET'>,
+  chainId: number,
+) {
+  if (chainId === chainLookup.mainnet) return env.FEE_PAYER_PRIVATE_KEY_MAINNET
+  if (chainId === chainLookup.testnet || chainId === chainLookup.localnet)
+    return env.FEE_PAYER_PRIVATE_KEY_TESTNET
+  return undefined
+}
+
 export function getChainName(chainId: number) {
   return getChain(chainId).name
 }

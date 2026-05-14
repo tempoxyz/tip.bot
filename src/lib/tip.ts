@@ -7,6 +7,7 @@ import * as Nanoid from '#/lib/nanoid.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import type { DB as Database } from '#db/types.gen.ts'
 import { AbiFunction, Address, Hex } from 'ox'
+import { TxEnvelopeTempo } from 'ox/tempo'
 import { KeyAuthorization } from 'ox/tempo'
 import { BaseError, InsufficientFundsError, createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
@@ -242,9 +243,30 @@ export async function getConfirmationData(env: Env, token: string) {
   return { accessKey, payload }
 }
 
+export async function getConfirmationTransactionRequest(env: Env, token: string) {
+  const db = DB.create(env.DB)
+  const { payload } = await getConfirmationData(env, token)
+  const workspace = await db
+    .selectFrom('workspace')
+    .selectAll()
+    .where('id', '=', payload.workspaceId)
+    .executeTakeFirstOrThrow()
+  const sender = await getConnectedMember(db, workspace.id, payload.senderProviderUserId)
+  if (!sender) throw new Error('Reconnect Tipbot and try again.')
+  const recipient = await getConnectedMember(db, workspace.id, payload.recipientProviderUserId)
+  if (!recipient) throw new Error('Recipient needs to connect Tipbot before receiving payments.')
+
+  return createSignedTransactionRequest(env, payload, sender, recipient)
+}
+
 export async function confirmTipRequest(
   env: Env,
-  input: { address: string; keyAuthorization: unknown; token: string },
+  input: {
+    address: string
+    keyAuthorization?: unknown
+    signedTransaction?: `0x${string}` | undefined
+    token: string
+  },
 ) {
   const db = DB.create(env.DB)
   const { accessKey, payload } = await getConfirmationData(env, input.token)
@@ -260,6 +282,21 @@ export async function confirmTipRequest(
   if (!sender) throw new Error('Reconnect Tipbot and try again.')
   const recipient = await getConnectedMember(db, workspace.id, payload.recipientProviderUserId)
   if (!recipient) throw new Error('Recipient needs to connect Tipbot before receiving payments.')
+  if (payload.kind === 'onetime_payment') {
+    if (!input.signedTransaction) throw new Error('Tempo Wallet did not approve this payment.')
+    return await submitSignedTip(env, db, {
+      address: input.address,
+      idempotencyKey: payload.idempotencyKey,
+      memo: payload.memo,
+      payload,
+      recipient,
+      sender,
+      signedTransaction: input.signedTransaction,
+      tokenAddress: Address.checksum(payload.tokenAddress),
+      workspace,
+    })
+  }
+  if (!input.keyAuthorization) throw new Error('Tempo Wallet did not approve this payment.')
   const accessKeyExpiresAt =
     payload.kind === 'reusable_access_key'
       ? (payload.accessKeyExpiresAt ?? payload.expiresAt)
@@ -548,7 +585,7 @@ async function submitTip(
     .execute()
 
   try {
-    const feePayerPrivateKey = getFeePayerPrivateKey(env, input.workspace.chain_id)
+    const feePayerPrivateKey = Tempo.getFeePayerPrivateKey(env, input.workspace.chain_id)
     const account = TempoAccount.fromSecp256k1(input.accessKeyPrivateKey, {
       access: input.sender.account.address as `0x${string}`,
     })
@@ -580,10 +617,12 @@ async function submitTip(
           'sender' as const,
         ] as const
 
-      const feePayerAccount = privateKeyToAccount(feePayerPrivateKey)
       try {
         return [
-          await Actions.token.transferSync(client, { ...parameters, feePayer: feePayerAccount }),
+          await Actions.token.transferSync(client, {
+            ...parameters,
+            feePayer: privateKeyToAccount(feePayerPrivateKey),
+          }),
           'sponsor' as const,
         ] as const
       } catch (error) {
@@ -655,6 +694,201 @@ async function submitTip(
   }
 }
 
+async function submitSignedTip(
+  env: Env,
+  db: DB.Type,
+  input: {
+    address: string
+    idempotencyKey: string
+    memo: string | null
+    payload: Confirmation.Payload
+    recipient: ConnectedMember
+    sender: ConnectedMember
+    signedTransaction: `0x${string}`
+    tokenAddress: string
+    workspace: Database.Selectable.workspace
+  },
+): Promise<TipResult> {
+  const existing = await getExistingTipResult(
+    env,
+    db,
+    {
+      idempotencyKey: input.idempotencyKey,
+      recipientProviderUserId: input.payload.recipientProviderUserId,
+      senderProviderUserId: input.payload.senderProviderUserId,
+    },
+    input.tokenAddress,
+  )
+  if (existing) return existing
+
+  validateSignedTransaction(env, input)
+  const id = Nanoid.generate()
+  const sponsorshipMemo = await createSponsorshipMemo(env, {
+    amount: input.payload.amount,
+    chainId: input.workspace.chain_id,
+    id,
+    idempotencyKey: input.idempotencyKey,
+    recipient: input.recipient.account.address,
+    sender: input.sender.account.address,
+    token: input.tokenAddress,
+  })
+  const now = new Date().toISOString()
+  await db
+    .insertInto('tip')
+    .values({
+      amount: input.payload.amount,
+      chain_id: input.workspace.chain_id,
+      confirmed_at: null,
+      created_at: now,
+      failed_at: null,
+      failure_reason: null,
+      id,
+      idempotency_key: input.idempotencyKey,
+      memo: input.memo,
+      recipient_id: input.recipient.account.id,
+      recipient_member_id: input.recipient.member.id,
+      sender_id: input.sender.account.id,
+      sender_member_id: input.sender.member.id,
+      sponsorship_memo: sponsorshipMemo,
+      token_address: input.tokenAddress,
+      transaction_hash: null,
+      updated_at: now,
+      workspace_id: input.workspace.id,
+    })
+    .execute()
+
+  try {
+    const client = createClient({
+      chain: Tempo.getChain(input.workspace.chain_id),
+      transport: http(`https://${env.HOST}/api/relay/${input.workspace.chain_id}`),
+    })
+    const balance = await Actions.token.getBalance(
+      createClient({
+        chain: Tempo.getChain(input.workspace.chain_id),
+        transport: http(Tempo.getRpcUrl(env, input.workspace.chain_id)),
+      }),
+      {
+        account: input.sender.account.address as Address.Address,
+        token: input.tokenAddress as Address.Address,
+      },
+    )
+    if (balance < BigInt(input.payload.amount)) throw new InsufficientFundsError()
+
+    const receipt = (await client.request({
+      method: 'eth_sendRawTransactionSync' as never,
+      params: [input.signedTransaction] as never,
+    })) as { status: `0x${string}`; transactionHash?: `0x${string}` }
+    if (receipt.status !== '0x1' || !receipt.transactionHash)
+      throw new Error('Tempo transaction failed.')
+    await db
+      .updateTable('tip')
+      .set({
+        confirmed_at: new Date().toISOString(),
+        transaction_hash: receipt.transactionHash,
+        updated_at: new Date().toISOString(),
+      })
+      .where('id', '=', id)
+      .execute()
+
+    const tokenMetadata = await Tempo.getTokenMetadata(
+      env,
+      input.workspace.chain_id,
+      input.tokenAddress,
+    )
+    return {
+      amount: formatAmount(input.payload.amount),
+      chainId: input.workspace.chain_id,
+      feePayer: Tempo.getFeePayerPrivateKey(env, input.workspace.chain_id) ? 'sponsor' : 'sender',
+      isDefaultToken: Address.isEqual(
+        Address.checksum(input.tokenAddress),
+        Address.checksum(input.workspace.default_token_address ?? Tempo.addressLookup.pathUsd),
+      ),
+      memo: input.memo,
+      ok: true,
+      recipientProviderUserId: input.payload.recipientProviderUserId,
+      senderProviderUserId: input.payload.senderProviderUserId,
+      status: 'sent',
+      tokenCurrency: tokenMetadata.currency,
+      tokenSymbol: tokenMetadata.symbol,
+      transactionHash: receipt.transactionHash,
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Tip submission failed.'
+    const code = isInsufficientFundsError(error) ? 'insufficient_funds' : 'failed'
+    await db
+      .updateTable('tip')
+      .set({
+        failed_at: new Date().toISOString(),
+        failure_reason: message,
+        updated_at: new Date().toISOString(),
+      })
+      .where('id', '=', id)
+      .execute()
+    return { chainId: input.workspace.chain_id, code, message, ok: false }
+  }
+}
+
+function createSignedTransactionRequest(
+  env: Env,
+  payload: Confirmation.Payload,
+  sender: ConnectedMember,
+  recipient: ConnectedMember,
+) {
+  const call = Actions.token.transfer.call({
+    amount: BigInt(payload.amount),
+    ...(payload.memo ? { memo: encodeTransferMemo(payload.memo) } : {}),
+    to: recipient.account.address as Address.Address,
+    token: Address.checksum(payload.tokenAddress),
+  })
+  return {
+    calls: [{ data: call.data, to: call.to }],
+    chainId: payload.chainId,
+    ...(Tempo.getFeePayerPrivateKey(env, payload.chainId)
+      ? { feePayer: true }
+      : { feeToken: Address.checksum(payload.tokenAddress) }),
+    from: sender.account.address,
+  }
+}
+
+function validateSignedTransaction(
+  env: Env,
+  input: {
+    address: string
+    payload: Confirmation.Payload
+    recipient: ConnectedMember
+    sender: ConnectedMember
+    signedTransaction: `0x${string}`
+    tokenAddress: string
+  },
+) {
+  const transaction = TxEnvelopeTempo.deserialize(input.signedTransaction as `0x76${string}`)
+  const expected = createSignedTransactionRequest(env, input.payload, input.sender, input.recipient)
+  const call = transaction.calls[0]
+  const expectedCall = expected.calls[0]
+  if (
+    !Address.isEqual(
+      input.address as Address.Address,
+      input.sender.account.address as Address.Address,
+    )
+  )
+    throw new Error('Reconnect Tipbot and try again.')
+  if (!transaction.from) throw new Error('Payment approval is invalid.')
+  if (!Address.isEqual(transaction.from, input.sender.account.address as Address.Address))
+    throw new Error('Reconnect Tipbot and try again.')
+  if (transaction.chainId !== input.payload.chainId) throw new Error('Payment approval is invalid.')
+  if (transaction.calls.length !== 1 || !call || !expectedCall)
+    throw new Error('Payment approval is invalid.')
+  if (!call.to || !Address.isEqual(call.to, expectedCall.to as Address.Address))
+    throw new Error('Payment approval is invalid.')
+  if ((call.data ?? '0x').toLowerCase() !== expectedCall.data.toLowerCase())
+    throw new Error('Payment approval is invalid.')
+  if (call.value && call.value !== 0n) throw new Error('Payment approval is invalid.')
+  if (transaction.keyAuthorization) throw new Error('Payment approval is invalid.')
+  if (Tempo.getFeePayerPrivateKey(env, input.payload.chainId)) {
+    if (transaction.feePayerSignature !== null) throw new Error('Payment approval is invalid.')
+  } else if (transaction.feePayerSignature) throw new Error('Payment approval is invalid.')
+}
+
 function supportsTransferMemo(
   authorization: KeyAuthorization.KeyAuthorization,
   tokenAddress: string,
@@ -690,13 +924,6 @@ function supportsTip(
       Address.isEqual(limit.token as Address.Address, input.tokenAddress as Address.Address) &&
       limit.limit >= BigInt(input.amount),
   )
-}
-
-function getFeePayerPrivateKey(env: Env, chainId: number) {
-  if (chainId === Tempo.chainLookup.mainnet) return env.FEE_PAYER_PRIVATE_KEY_MAINNET
-  if (chainId === Tempo.chainLookup.testnet || chainId === Tempo.chainLookup.localnet)
-    return env.FEE_PAYER_PRIVATE_KEY_TESTNET
-  return undefined
 }
 
 function isInsufficientFundsError(error: unknown) {

@@ -1,7 +1,9 @@
+import { Provider, dangerous_secp256k1 } from 'accounts'
 import { WebClient } from '@slack/web-api'
 import { env } from 'cloudflare:workers'
 import { testClient } from 'hono/testing'
 import { Address, Secp256k1 } from 'ox'
+import { http, toHex } from 'viem'
 import { Account } from 'viem/tempo'
 import { beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api } from '#/api.ts'
@@ -351,17 +353,10 @@ describe('/api/confirm/:token', () => {
       botUserId: Constants.slack.botUserId,
       teamName: Constants.slack.teamName,
     })
-    const keyAuthorization = await AccountLink.signKeyAuthorization(confirmation.senderRoot, {
-      accessKeyAddress: confirmation.accessKey.address,
-      chainId: confirmation.payload.chainId,
-      expiresAt: confirmation.payload.expiresAt,
-      limit: BigInt(confirmation.payload.amount),
-      periodSeconds: AccountLink.confirmationLinkTtlMs / 1000,
-      tokenAddress: confirmation.payload.tokenAddress,
-    })
+    const signedTransaction = await signConfirmationTransaction(confirmation)
 
     const response = await client.api.confirm[':token'].$post({
-      json: { address: confirmation.senderRoot.address, keyAuthorization },
+      json: { address: confirmation.senderRoot.address, signedTransaction },
       param: { token: confirmation.token },
     })
     await Promise.all(waitUntil)
@@ -452,15 +447,8 @@ describe('/api/confirm/:token', () => {
       transaction_hash: `0x${'1'.repeat(64)}`,
       workspace_id: confirmation.workspace.id,
     })
-    const keyAuthorization = await AccountLink.signKeyAuthorization(confirmation.senderRoot, {
-      accessKeyAddress: confirmation.accessKey.address,
-      chainId: confirmation.payload.chainId,
-      expiresAt: confirmation.payload.expiresAt,
-      limit: BigInt(confirmation.payload.amount),
-      periodSeconds: AccountLink.confirmationLinkTtlMs / 1000,
-      tokenAddress: confirmation.payload.tokenAddress,
-    })
-    const json = { address: confirmation.senderRoot.address, keyAuthorization }
+    const signedTransaction = await signConfirmationTransaction(confirmation)
+    const json = { address: confirmation.senderRoot.address, signedTransaction }
 
     const first = await client.api.confirm[':token'].$post({
       json,
@@ -718,6 +706,35 @@ async function findOrCreateAccount(address: string) {
     .executeTakeFirst()
   if (existing) return existing
   return await factory.account.insert({ address })
+}
+
+async function signConfirmationTransaction(
+  confirmation: Awaited<ReturnType<typeof createConfirmationToken>>,
+) {
+  const response = await client.api.confirm[':token'].$get({
+    param: { token: confirmation.token },
+  })
+  const json = await response.json()
+  if (!json.ok || !json.transactionRequest) throw new Error('Expected transaction request.')
+  const provider = Provider.create({
+    adapter: dangerous_secp256k1({ privateKey: Constants.tip.senderRootPrivateKey }),
+    chains: [
+      {
+        ...Tempo.getChain(confirmation.payload.chainId),
+        rpcUrls: { default: { http: [env.RPC_URL_TESTNET!] } },
+      },
+    ],
+    feePayer: json.relayUrl,
+    transports: { [confirmation.payload.chainId]: http(env.RPC_URL_TESTNET) },
+  })
+  await provider.request({
+    method: 'wallet_connect',
+    params: [{ capabilities: { method: 'register' } }],
+  })
+  return await provider.request({
+    method: 'eth_signTransaction',
+    params: [{ ...json.transactionRequest, chainId: toHex(confirmation.payload.chainId) } as never],
+  })
 }
 
 async function deleteSlackOauthWorkspace() {

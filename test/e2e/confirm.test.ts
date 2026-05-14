@@ -91,3 +91,77 @@ test('slack member confirms payment with wallet approval', async ({ app, page })
   )
   await expect(page.getByText('You can close this tab and return to Slack.')).toBeVisible()
 })
+
+test('slack member confirms one-time payment with wallet signature', async ({
+  app,
+  factory,
+  page,
+}) => {
+  const senderRoot = Account.fromSecp256k1(
+    '0x0000000000000000000000000000000000000000000000000000000000000001',
+  )
+  const recipientRoot = Account.fromSecp256k1(
+    '0x0000000000000000000000000000000000000000000000000000000000000002',
+  )
+  const workspace = await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.testnet,
+    provider_id: 'T000000001',
+  })
+  const senderAccount = await factory.account.insert({ address: senderRoot.address })
+  const recipientAccount = await factory.account.insert({ address: recipientRoot.address })
+  await factory.member.insert({
+    account_id: senderAccount.id,
+    provider_user_id: 'U000000001',
+    workspace_id: workspace.id,
+  })
+  await factory.member.insert({
+    account_id: recipientAccount.id,
+    provider_user_id: 'U000000002',
+    workspace_id: workspace.id,
+  })
+  const token = await Confirmation.encrypt(app.env, {
+    amount: 11_000_000,
+    chainId: Tempo.chainLookup.testnet,
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes
+    idempotencyKey: `confirm:${crypto.randomUUID()}`,
+    kind: 'onetime_payment',
+    memo: 'lunch',
+    nonce: crypto.randomUUID(),
+    provider: 'slack',
+    providerChannelId: 'C000000001',
+    providerId: workspace.provider_id,
+    recipientProviderLabel: 'member',
+    recipientProviderUserId: 'U000000002',
+    senderProviderUserId: 'U000000001',
+    tokenAddress: Tempo.addressLookup.pathUsd,
+    workspaceId: workspace.id,
+  })
+  await page.route('**/api/confirm/*', async (route) => {
+    if (route.request().method() !== 'POST') return await route.continue()
+
+    const json = route.request().postDataJSON() as {
+      address?: string
+      keyAuthorization?: unknown
+      signedTransaction?: string
+    }
+    expect(json.address).toBe(senderRoot.address)
+    expect(json.keyAuthorization).toBeUndefined()
+    expect(json.signedTransaction).toMatch(/^0x[0-9a-f]+$/)
+    await route.fulfill({
+      body: JSON.stringify({ ok: true, transactionHash: `0x${'2'.repeat(64)}` }),
+      contentType: 'application/json',
+      status: 200,
+    })
+  })
+
+  await page.goto(app.url({ params: { token }, to: '/confirm/$token' }))
+  await page.waitForLoadState('networkidle')
+  await expect(page.getByText('Tipbot will use this approval once')).toBeVisible()
+  await page.getByRole('button', { name: 'Confirm payment' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Payment sent' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'View receipt' })).toHaveAttribute(
+    'href',
+    Tempo.formatTxLink(Tempo.chainLookup.testnet, `0x${'2'.repeat(64)}`),
+  )
+})
