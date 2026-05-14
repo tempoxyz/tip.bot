@@ -538,7 +538,7 @@ test('@Tipbot mention answers thanks without AI', async () => {
 
   const response = await postSlackAppMention({
     messageTs,
-    text: `<@${Constants.slack.botUserId}> thanks`,
+    text: `<@${Constants.slack.botUserId}> thank you king`,
   })
   const tips = await db
     .selectFrom('tip')
@@ -551,6 +551,19 @@ test('@Tipbot mention answers thanks without AI', async () => {
   expect(aiRunMock).not.toHaveBeenCalled()
   await expectSlackThreadMessage(messageTs, 'Anytime.')
   expect(tips).toHaveLength(0)
+})
+
+test('@Tipbot mention answers setup questions without AI', async () => {
+  const messageTs = `1700000014.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> How do I set mine up`,
+  })
+
+  expect(response.status).toBe(200)
+  expect(aiRunMock).not.toHaveBeenCalled()
+  await expectSlackThreadMessage(messageTs, 'Run `/tip connect`, then try `@Tipbot tip @account`.')
 })
 
 test('@Tipbot mention falls back when AI returns bare Tipbot mention', async () => {
@@ -567,24 +580,29 @@ test('@Tipbot mention falls back when AI returns bare Tipbot mention', async () 
 })
 
 test('@Tipbot mention gets excited about goblins', async () => {
-  aiRunMock.mockResolvedValueOnce({ response: 'GOBLINS? NOW WE RIDE.' } as never)
   const messageTs = `1700000012.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
     messageTs,
-    text: `<@${Constants.slack.botUserId}> goblins`,
+    text: `<@${Constants.slack.botUserId}> goblins are amazing`,
   })
 
   expect(response.status).toBe(200)
-  expect(aiRunMock).toHaveBeenCalledWith(
-    '@cf/meta/llama-3.2-1b-instruct',
-    expect.objectContaining({
-      messages: expect.arrayContaining([
-        expect.objectContaining({ content: expect.stringContaining('REALLY EXCITED') }),
-      ]),
-    }),
-  )
-  await expectSlackThreadMessage(messageTs, 'GOBLINS? NOW WE RIDE.')
+  expect(aiRunMock).not.toHaveBeenCalled()
+  await expectSlackThreadMessage(messageTs, 'GOBLINS? Now we are talking.')
+})
+
+test('@Tipbot mention gets excited about other creatures', async () => {
+  const messageTs = `1700000015.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> dragons are amazing`,
+  })
+
+  expect(response.status).toBe(200)
+  expect(aiRunMock).not.toHaveBeenCalled()
+  await expectSlackThreadMessage(messageTs, 'DRAGONS? Now we are talking.')
 })
 
 test('@Tipbot mention accepts bot mention after recipient', async () => {

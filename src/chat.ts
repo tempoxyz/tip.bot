@@ -1485,21 +1485,24 @@ async function postInvalidMentionReply(
 
 async function generateInvalidMentionReply(mentionText: string) {
   const text = mentionText.trim()
-  const isCreatureText =
-    /\b(creature|creatures|dragon|dragons|elf|elves|fae|fairy|goblin|goblins|gnome|gnomes|gremlin|gremlins|kobold|kobolds|monster|monsters|orc|orcs|troll|trolls)\b/i.test(
-      text,
-    )
+  const creatureMatch = text.match(
+    /\b(creature|creatures|dragon|dragons|elf|elves|fae|fairy|goblin|goblins|gnome|gnomes|gremlin|gremlins|kobold|kobolds|monster|monsters|orc|orcs|troll|trolls)\b/i,
+  )
   const isTipText = /<@[A-Z0-9_]+|\b(tip|send|pay|sent|paid|for)\b/i.test(text)
-  const isThanksText = /^(thank you|thanks|ty|thx|thank u)$/i.test(text)
+  const isSetupText = /\b(connect|configure|get started|install|link|mine|set ?up|start)\b/i.test(
+    text,
+  )
+  const isThanksText = /^(thank you|thanks|ty|thx|thank u)\b/i.test(text)
   const fallback = (() => {
     if (isThanksText) return 'Anytime.'
-    if (isCreatureText && isTipText)
-      return 'GOBLINS? Excellent. For tips: `@Tipbot tip @account [amount] [token] [for memo]`.'
-    if (isCreatureText) return 'GOBLINS? Now we are talking.'
+    if (isSetupText) return 'Run `/tip connect`, then try `@Tipbot tip @account`.'
+    if (creatureMatch && isTipText)
+      return `${creatureMatch[0].toUpperCase()}? Excellent. For tips: \`@Tipbot tip @account [amount] [token] [for memo]\`.`
+    if (creatureMatch) return `${creatureMatch[0].toUpperCase()}? Now we are talking.`
     if (isTipText) return 'Almost. Try `@Tipbot tip @account [amount] [token] [for memo]`.'
     return 'Anytime.'
   })()
-  if (isThanksText) return fallback
+  if (isThanksText || isSetupText || creatureMatch) return fallback
 
   try {
     const result = z
