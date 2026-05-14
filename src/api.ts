@@ -487,8 +487,8 @@ export const api = new Hono<{
                 .select([
                   'reaction_tip.channel_id',
                   'reaction_tip.id',
-                  'reaction_tip.message_ts',
                   'reaction_tip.reaction',
+                  'reaction_tip.thread_ts',
                   'reaction_tip.workspace_id',
                   'tip.id as tip_id',
                 ])
@@ -506,8 +506,8 @@ export const api = new Hono<{
                 .execute()
               await Chat.updateReactionTipAggregate(data.payload.providerId, {
                 channelId: reactionTip.channel_id,
-                messageTs: reactionTip.message_ts,
                 reaction: reactionTip.reaction,
+                threadTs: reactionTip.thread_ts,
                 workspaceId: reactionTip.workspace_id,
               })
             })().catch((error) => {

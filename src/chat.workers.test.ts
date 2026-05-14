@@ -533,12 +533,25 @@ test('@Tipbot mention introduces itself', async () => {
   expect(tips).toHaveLength(0)
 })
 
-test('@Tipbot mention answers thanks without AI', async () => {
+test('@Tipbot mention ignores repeated self mention chatter', async () => {
+  const messageTs = `1700000016.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `There’s 2 <@${Constants.slack.botUserId}> and <@${Constants.slack.botUserId}>`,
+  })
+
+  expect(response.status).toBe(200)
+  expect(aiRunMock).not.toHaveBeenCalled()
+  await expectNoSlackMessages()
+})
+
+test('@Tipbot mention answers thanks with AI reply', async () => {
   const messageTs = `1700000011.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
     messageTs,
-    text: `<@${Constants.slack.botUserId}> thanks`,
+    text: `<@${Constants.slack.botUserId}> thank you king`,
   })
   const tips = await db
     .selectFrom('tip')
@@ -548,9 +561,22 @@ test('@Tipbot mention answers thanks without AI', async () => {
     .execute()
 
   expect(response.status).toBe(200)
-  expect(aiRunMock).not.toHaveBeenCalled()
-  await expectSlackThreadMessage(messageTs, 'Anytime.')
+  expect(aiRunMock).toHaveBeenCalledOnce()
+  await expectSlackThreadMessage(messageTs, 'Ack.')
   expect(tips).toHaveLength(0)
+})
+
+test('@Tipbot mention answers setup questions with AI reply', async () => {
+  const messageTs = `1700000014.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> How do I set mine up`,
+  })
+
+  expect(response.status).toBe(200)
+  expect(aiRunMock).toHaveBeenCalledOnce()
+  await expectSlackThreadMessage(messageTs, 'Ack.')
 })
 
 test('@Tipbot mention falls back when AI returns bare Tipbot mention', async () => {
@@ -566,25 +592,46 @@ test('@Tipbot mention falls back when AI returns bare Tipbot mention', async () 
   await expectSlackThreadMessage(messageTs, 'Anytime.')
 })
 
-test('@Tipbot mention gets excited about goblins', async () => {
-  aiRunMock.mockResolvedValueOnce({ response: 'GOBLINS? NOW WE RIDE.' } as never)
+test('@Tipbot mention sends goblins through AI reply', async () => {
+  aiRunMock.mockResolvedValueOnce({ response: 'GOBLINS? AI goblin mode engaged.' } as never)
   const messageTs = `1700000012.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
     messageTs,
-    text: `<@${Constants.slack.botUserId}> goblins`,
+    text: `<@${Constants.slack.botUserId}> goblins are amazing`,
   })
 
   expect(response.status).toBe(200)
-  expect(aiRunMock).toHaveBeenCalledWith(
-    '@cf/meta/llama-3.2-1b-instruct',
-    expect.objectContaining({
-      messages: expect.arrayContaining([
-        expect.objectContaining({ content: expect.stringContaining('REALLY EXCITED') }),
-      ]),
-    }),
-  )
-  await expectSlackThreadMessage(messageTs, 'GOBLINS? NOW WE RIDE.')
+  expect(aiRunMock).toHaveBeenCalledOnce()
+  await expectSlackThreadMessage(messageTs, 'GOBLINS? AI goblin mode engaged.')
+})
+
+test('@Tipbot mention sends goblins in thanks through AI reply', async () => {
+  aiRunMock.mockResolvedValueOnce({ response: 'GOBLINS? Gratitude accepted.' } as never)
+  const messageTs = `1700000016.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> thanks for sending all the tips today. i heard you don't like goblins?`,
+  })
+
+  expect(response.status).toBe(200)
+  expect(aiRunMock).toHaveBeenCalledOnce()
+  await expectSlackThreadMessage(messageTs, 'GOBLINS? Gratitude accepted.')
+})
+
+test('@Tipbot mention falls back for creatures when AI reply is invalid', async () => {
+  aiRunMock.mockResolvedValueOnce({ response: '@Tipbot' } as never)
+  const messageTs = `1700000015.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> dragons are amazing`,
+  })
+
+  expect(response.status).toBe(200)
+  expect(aiRunMock).toHaveBeenCalledOnce()
+  await expectSlackThreadMessage(messageTs, 'DRAGONS? Now we are talking.')
 })
 
 test('@Tipbot mention accepts bot mention after recipient', async () => {
@@ -602,12 +649,58 @@ test('@Tipbot mention accepts bot mention after recipient', async () => {
     .executeTakeFirstOrThrow()
 
   expect(response.status).toBe(200)
+  expect(aiRunMock).not.toHaveBeenCalled()
   await expectSlackThreadMessage(
     messageTs,
     `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for coffee · Receipt`,
   )
   expect(tip.confirmed_at).toEqual(expect.any(String))
   expect(tip.transaction_hash).toEqual(expect.any(String))
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention replies to creature memo with AI', async () => {
+  await connectTipAccounts()
+  aiRunMock.mockResolvedValueOnce({ response: 'GOBLINS? Tip lore unlocked.' } as never)
+  const messageTs = `1700000007.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.memberUserId}> <@${Constants.slack.botUserId}> for goblin snacks`,
+  })
+  const tip = await db
+    .selectFrom('tip')
+    .select(['confirmed_at', 'memo', 'transaction_hash'])
+    .where('memo', '=', 'goblin snacks')
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(aiRunMock).toHaveBeenCalledOnce()
+  await expectSlackThreadMessage(
+    messageTs,
+    `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for goblin snacks · Receipt`,
+  )
+  await expectSlackThreadMessage(messageTs, 'GOBLINS? Tip lore unlocked.')
+  expect(tip.confirmed_at).toEqual(expect.any(String))
+  expect(tip.transaction_hash).toEqual(expect.any(String))
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention falls back for creature memo when AI reply is invalid', async () => {
+  await connectTipAccounts()
+  aiRunMock.mockResolvedValueOnce({ response: '@Tipbot' } as never)
+  const messageTs = `1700000008.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.memberUserId}> <@${Constants.slack.botUserId}> for dragon chow`,
+  })
+
+  expect(response.status).toBe(200)
+  expect(aiRunMock).toHaveBeenCalledOnce()
+  await expectSlackThreadMessage(
+    messageTs,
+    `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for dragon chow · Receipt`,
+  )
+  await expectSlackThreadMessage(messageTs, 'DRAGON? Now we are talking.')
 }, 20_000) // 20 seconds
 
 test('@Tipbot mention accepts repeated bot mentions', async () => {
@@ -877,8 +970,99 @@ test('reaction tipping sends default tip and updates aggregate thread reply', as
   expect(tips[0]).toMatchObject({ amount: 1000, confirmed_at: expect.any(String) })
   await expectSlackThreadMessage(
     message.ts,
-    `<@${Constants.slack.memberUserId}> received a tip on this message:\n\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
+    `<@${Constants.slack.memberUserId}> received a tip on <https://slack.com/app_redirect?channel=${channelId}&message_ts=${message.ts}&team=${providerId}|this> message:\n\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
     { channelId },
+  )
+})
+
+test('reaction tipping updates one aggregate reply for multiple tipped messages in a thread', async () => {
+  const connected = await connectTipAccounts()
+  if (!connected.recipientMember) throw new Error('Expected connected recipient.')
+  const channelId = await createSlackTestChannel('rt')
+  const parent = await memberSlack.chat.postMessage({
+    channel: channelId,
+    text: 'first nice work',
+  })
+  if (!parent.ts) throw new Error('Expected Slack parent message timestamp.')
+  const reply = await memberSlack.chat.postMessage({
+    channel: channelId,
+    text: 'second nice work',
+    thread_ts: parent.ts,
+  })
+  if (!reply.ts) throw new Error('Expected Slack reply message timestamp.')
+
+  const firstTip = await factory.tip.insert({
+    access_key_id: connected.accessKey.id,
+    chain_id: connected.workspace.chain_id,
+    confirmed_at: new Date().toISOString(),
+    idempotency_key: `${Chat.reactionTipIdempotencyPrefix}${Nanoid.generate()}`,
+    recipient_id: connected.recipientAccount.id,
+    recipient_member_id: connected.recipientMember.id,
+    sender_id: connected.senderAccount.id,
+    sender_member_id: connected.senderMember.id,
+    token_address: Tempo.addressLookup.pathUsd,
+    transaction_hash: `0x${Nanoid.generate().padEnd(64, '1').slice(0, 64)}`,
+    workspace_id: connected.workspace.id,
+  })
+  await factory.reaction_tip.insert({
+    channel_id: channelId,
+    idempotency_key: firstTip.idempotency_key,
+    message_ts: parent.ts,
+    reaction: 'money_with_wings',
+    recipient_member_id: connected.recipientMember.id,
+    sender_member_id: connected.senderMember.id,
+    thread_ts: parent.ts,
+    tip_id: firstTip.id,
+    workspace_id: connected.workspace.id,
+  })
+  await Chat.updateReactionTipAggregate(providerId, {
+    channelId,
+    reaction: 'money_with_wings',
+    threadTs: parent.ts,
+    workspaceId: connected.workspace.id,
+  })
+
+  const secondTip = await factory.tip.insert({
+    access_key_id: connected.accessKey.id,
+    chain_id: connected.workspace.chain_id,
+    confirmed_at: new Date().toISOString(),
+    idempotency_key: `${Chat.reactionTipIdempotencyPrefix}${Nanoid.generate()}`,
+    recipient_id: connected.recipientAccount.id,
+    recipient_member_id: connected.recipientMember.id,
+    sender_id: connected.senderAccount.id,
+    sender_member_id: connected.senderMember.id,
+    token_address: Tempo.addressLookup.pathUsd,
+    transaction_hash: `0x${Nanoid.generate().padEnd(64, '2').slice(0, 64)}`,
+    workspace_id: connected.workspace.id,
+  })
+  await factory.reaction_tip.insert({
+    channel_id: channelId,
+    idempotency_key: secondTip.idempotency_key,
+    message_ts: reply.ts,
+    reaction: 'money_with_wings',
+    recipient_member_id: connected.recipientMember.id,
+    sender_member_id: connected.senderMember.id,
+    thread_ts: parent.ts,
+    tip_id: secondTip.id,
+    workspace_id: connected.workspace.id,
+  })
+  await Chat.updateReactionTipAggregate(providerId, {
+    channelId,
+    reaction: 'money_with_wings',
+    threadTs: parent.ts,
+    workspaceId: connected.workspace.id,
+  })
+  const thread = await slack.conversations.replies({ channel: channelId, ts: parent.ts })
+  const aggregates = thread.messages?.filter((message) =>
+    message.text?.includes('Tips received in this thread:'),
+  )
+
+  expect(aggregates, JSON.stringify(thread.messages)).toHaveLength(1)
+  expect(aggregates?.[0]?.text).toContain(
+    `<@${Constants.slack.memberUserId}> received a tip on <https://slack.com/app_redirect?channel=${channelId}&message_ts=${parent.ts}&team=${providerId}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
+  )
+  expect(aggregates?.[0]?.text).toContain(
+    `<@${Constants.slack.memberUserId}> received a tip on <https://slack.com/app_redirect?channel=${channelId}&message_ts=${reply.ts}&team=${providerId}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
   )
 })
 
