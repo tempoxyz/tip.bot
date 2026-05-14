@@ -546,7 +546,7 @@ test('@Tipbot mention ignores repeated self mention chatter', async () => {
   await expectNoSlackMessages()
 })
 
-test('@Tipbot mention answers thanks without AI', async () => {
+test('@Tipbot mention answers thanks with AI reply', async () => {
   const messageTs = `1700000011.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
@@ -561,12 +561,12 @@ test('@Tipbot mention answers thanks without AI', async () => {
     .execute()
 
   expect(response.status).toBe(200)
-  expect(aiRunMock).not.toHaveBeenCalled()
-  await expectSlackThreadMessage(messageTs, 'Anytime.')
+  expect(aiRunMock).toHaveBeenCalledOnce()
+  await expectSlackThreadMessage(messageTs, 'Ack.')
   expect(tips).toHaveLength(0)
 })
 
-test('@Tipbot mention answers setup questions without AI', async () => {
+test('@Tipbot mention answers setup questions with AI reply', async () => {
   const messageTs = `1700000014.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
@@ -575,8 +575,8 @@ test('@Tipbot mention answers setup questions without AI', async () => {
   })
 
   expect(response.status).toBe(200)
-  expect(aiRunMock).not.toHaveBeenCalled()
-  await expectSlackThreadMessage(messageTs, 'Run `/tip connect`, then try `@Tipbot tip @account`.')
+  expect(aiRunMock).toHaveBeenCalledOnce()
+  await expectSlackThreadMessage(messageTs, 'Ack.')
 })
 
 test('@Tipbot mention falls back when AI returns bare Tipbot mention', async () => {
@@ -592,7 +592,8 @@ test('@Tipbot mention falls back when AI returns bare Tipbot mention', async () 
   await expectSlackThreadMessage(messageTs, 'Anytime.')
 })
 
-test('@Tipbot mention gets excited about goblins', async () => {
+test('@Tipbot mention sends goblins through AI reply', async () => {
+  aiRunMock.mockResolvedValueOnce({ response: 'GOBLINS? AI goblin mode engaged.' } as never)
   const messageTs = `1700000012.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
@@ -601,11 +602,12 @@ test('@Tipbot mention gets excited about goblins', async () => {
   })
 
   expect(response.status).toBe(200)
-  expect(aiRunMock).not.toHaveBeenCalled()
-  await expectSlackThreadMessage(messageTs, 'GOBLINS? Now we are talking.')
+  expect(aiRunMock).toHaveBeenCalledOnce()
+  await expectSlackThreadMessage(messageTs, 'GOBLINS? AI goblin mode engaged.')
 })
 
-test('@Tipbot mention gets excited about goblins in thanks', async () => {
+test('@Tipbot mention sends goblins in thanks through AI reply', async () => {
+  aiRunMock.mockResolvedValueOnce({ response: 'GOBLINS? Gratitude accepted.' } as never)
   const messageTs = `1700000016.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
@@ -614,11 +616,12 @@ test('@Tipbot mention gets excited about goblins in thanks', async () => {
   })
 
   expect(response.status).toBe(200)
-  expect(aiRunMock).not.toHaveBeenCalled()
-  await expectSlackThreadMessage(messageTs, 'GOBLINS? Now we are talking.')
+  expect(aiRunMock).toHaveBeenCalledOnce()
+  await expectSlackThreadMessage(messageTs, 'GOBLINS? Gratitude accepted.')
 })
 
-test('@Tipbot mention gets excited about other creatures', async () => {
+test('@Tipbot mention falls back for creatures when AI reply is invalid', async () => {
+  aiRunMock.mockResolvedValueOnce({ response: '@Tipbot' } as never)
   const messageTs = `1700000015.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
@@ -627,7 +630,7 @@ test('@Tipbot mention gets excited about other creatures', async () => {
   })
 
   expect(response.status).toBe(200)
-  expect(aiRunMock).not.toHaveBeenCalled()
+  expect(aiRunMock).toHaveBeenCalledOnce()
   await expectSlackThreadMessage(messageTs, 'DRAGONS? Now we are talking.')
 })
 

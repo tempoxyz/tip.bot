@@ -1623,8 +1623,6 @@ async function generateInvalidMentionReply(mentionText: string) {
     if (isTipText) return 'Almost. Try `@Tipbot tip @account [amount] [token] [for memo]`.'
     return 'Anytime.'
   })()
-  if (isThanksText || isSetupText || creatureMatch) return fallback
-
   try {
     const result = z
       .parse(
