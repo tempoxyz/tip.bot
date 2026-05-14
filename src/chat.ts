@@ -81,6 +81,7 @@ export function getChat() {
     }
 
     if (!context.text) {
+      if (isSlackSelfMentionChatter(raw.text, installation.botUserId, mentionText)) return
       await postInvalidMentionReply(event, context, mentionText, threadTs)
       return
     }
@@ -1382,6 +1383,19 @@ function parseSlackMentionTipText(text: string) {
 
 function isSlackIntroduceYourselfText(text: string) {
   return text.toLowerCase() === 'introduce yourself'
+}
+
+function isSlackSelfMentionChatter(rawText: string, botUserId: string, mentionText: string) {
+  const mentions = [...rawText.matchAll(/<@([A-Z0-9_]+)(?:\|[^>]+)?>/g)].map((match) => match[1])
+  if (mentions.filter((mention) => mention === botUserId).length < 2) return false
+  if (mentions.some((mention) => mention !== botUserId)) return false
+  return !hasInvalidMentionIntent(mentionText)
+}
+
+function hasInvalidMentionIntent(text: string) {
+  return /\b(connect|configure|get started|install|link|mine|set ?up|start|tip|send|pay|sent|paid|for|thank you|thanks|ty|thx|thank u|creature|creatures|dragon|dragons|elf|elves|fae|fairy|goblin|goblins|gnome|gnomes|gremlin|gremlins|kobold|kobolds|monster|monsters|orc|orcs|troll|trolls)\b/i.test(
+    text,
+  )
 }
 
 function escapeRegex(value: string) {

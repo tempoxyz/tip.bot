@@ -533,6 +533,19 @@ test('@Tipbot mention introduces itself', async () => {
   expect(tips).toHaveLength(0)
 })
 
+test('@Tipbot mention ignores repeated self mention chatter', async () => {
+  const messageTs = `1700000016.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `There’s 2 <@${Constants.slack.botUserId}> and <@${Constants.slack.botUserId}>`,
+  })
+
+  expect(response.status).toBe(200)
+  expect(aiRunMock).not.toHaveBeenCalled()
+  await expectNoSlackMessages()
+})
+
 test('@Tipbot mention answers thanks without AI', async () => {
   const messageTs = `1700000011.${Nanoid.generate().slice(0, 6)}`
 
