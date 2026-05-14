@@ -2,7 +2,7 @@ diff --git a/dist/dist-CE6BUCWQ.js b/dist/dist-CE6BUCWQ.js
 index 6876d0e09488b5533c787b541f674e755004e739..f0939a456c8b21cf9f0df2d19f5cfcceb8d5cd08 100644
 --- a/dist/dist-CE6BUCWQ.js
 +++ b/dist/dist-CE6BUCWQ.js
-@@ -76,6 +76,64 @@ function authRoutes(ctx) {
+@@ -76,6 +76,38 @@ function authRoutes(ctx) {
  function chatRoutes(ctx) {
    const { app, store, webhooks } = ctx;
    const ss = () => getSlackStore(store);
@@ -37,32 +37,6 @@ index 6876d0e09488b5533c787b541f674e755004e739..f0939a456c8b21cf9f0df2d19f5cfcce
 +      channel: ch.channel_id,
 +      message_ts: ts
 +    });
-+  });
-+  app.post("/api/conversations.open", async (c) => {
-+    const authUser = c.get("authUser");
-+    if (!authUser) return slackError(c, "not_authed");
-+    const body = await parseSlackBody(c);
-+    const users = typeof body.users === "string" ? body.users.split(",").filter(Boolean) : [];
-+    if (users.length === 0) return slackError(c, "users_not_found");
-+    for (const user of users) if (!ss().users.findOneBy("user_id", user)) return slackError(c, "user_not_found");
-+    const members = [authUser.login, ...users].sort();
-+    const existing = ss().channels.all().find((ch) => ch.is_im && members.every((member) => ch.members.includes(member)) && ch.members.length === members.length);
-+    if (existing) return slackOk(c, { channel: formatChannel(existing) });
-+    const channel = ss().channels.insert({
-+      channel_id: generateSlackId("D"),
-+      team_id: ss().teams.all()[0]?.team_id ?? "T000000001",
-+      name: members.join("-"),
-+      is_channel: false,
-+      is_private: true,
-+      is_im: true,
-+      is_archived: false,
-+      topic: { value: "", creator: authUser.login, last_set: 0 },
-+      purpose: { value: "", creator: authUser.login, last_set: 0 },
-+      members,
-+      creator: authUser.login,
-+      num_members: members.length
-+    });
-+    return slackOk(c, { channel: formatChannel(channel) });
 +  });
    app.post("/api/chat.postMessage", async (c) => {
      const authUser = c.get("authUser");

@@ -35,7 +35,7 @@ If a test fails, run it in isolation and gradually expand out to more tests as y
 ## Code Style
 
 - Component/page component should be the first thing in the file (after imports)
-- Use IIFE when appropriate
+- Use IIFE when appropriate. Better to iife with comments than create low/single-use functions/consts.
 - No braces for single-branch statements (`if (true) return ...`)
 - No ellipsis in button text (e.g. "Deleting" not "Deleting...")
 - No emoji

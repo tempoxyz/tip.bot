@@ -4,6 +4,7 @@ import * as AccountLink from '#/lib/accountLink.ts'
 import * as AccessKey from '#/lib/accessKey.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
+import * as Slack from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
 import { createCloudflareState } from '#/vendor/chatStateCloudflareDO.ts'
@@ -433,7 +434,7 @@ const handlers = {
       }),
       await response.json(),
     )
-    if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postEphemeral failed.')
+    if (!json.ok) throw Slack.slackApiError('chat.postEphemeral', json.error)
   },
   async leaderboard(event, ctx) {
     if (ctx.text) {
@@ -544,7 +545,7 @@ const handlers = {
       }),
       await response.json(),
     )
-    if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postMessage failed.')
+    if (!json.ok) throw Slack.slackApiError('chat.postMessage', json.error)
   },
   async status(event, ctx) {
     const workspace = await ctx.db
@@ -733,7 +734,7 @@ const handlers = {
           }),
           await response.json(),
         )
-        if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postEphemeral failed.')
+        if (!json.ok) throw Slack.slackApiError('chat.postEphemeral', json.error)
         return
       }
       if (
@@ -980,28 +981,11 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
   }
 
   if (result.code === 'confirmation_required' && result.confirmUrl) {
-    await postSlackDm(
-      provider.id,
-      sender.providerUserId,
-      `Tipbot needs your approval to send this tip. Confirm payment: ${result.confirmUrl}`,
-    )
+    await db.deleteFrom('reaction_tip').where('idempotency_key', '=', idempotencyKey).execute()
     return
   }
 
   await db.deleteFrom('reaction_tip').where('idempotency_key', '=', idempotencyKey).execute()
-  await (async () => {
-    // Only connected senders get failure DMs for reaction tips.
-    if (result.ok) return
-    const message = (() => {
-      if (result.code === 'insufficient_funds')
-        return 'Reaction tip not sent. Your wallet has insufficient funds. Add funds: https://wallet.tempo.xyz'
-      if (result.code === 'pending') return 'Reaction tip is still sending.'
-      if (result.code === 'self_tip')
-        return 'Reaction tip not sent. Cannot send a payment to yourself.'
-      return 'Reaction tip failed.'
-    })()
-    await postSlackDm(provider.id, sender.providerUserId, message)
-  })()
 }
 
 function getProvider(event: chat.SlashCommandEvent): ProviderContext {
@@ -1027,48 +1011,6 @@ async function getConnectedSlackMember(db: DB.Type, workspaceId: string, provide
     .executeTakeFirst()
   if (!member) return null
   return { memberId: member.id, providerUserId: member.provider_user_id }
-}
-
-async function postSlackDm(providerId: string, providerUserId: string, text: string) {
-  const installation = await getSlack().getInstallation(providerId)
-  if (!installation) return
-
-  const openBody = new URLSearchParams()
-  openBody.set('users', providerUserId)
-  const openResponse = await getSlack().withBotToken(installation.botToken, () =>
-    fetch(`${env.SLACK_API_URL}/conversations.open`, {
-      body: openBody,
-      headers: { authorization: `Bearer ${installation.botToken}` },
-      method: 'POST',
-    }),
-  )
-  const openJson = z.parse(
-    z.object({
-      channel: z.object({ id: z.string().min(1) }).optional(),
-      ok: z.boolean().optional(),
-    }),
-    await openResponse.json(),
-  )
-  if (!openJson.ok || !openJson.channel) return
-
-  const body = new URLSearchParams()
-  body.set('channel', openJson.channel.id)
-  body.set('text', text)
-  const response = await getSlack().withBotToken(installation.botToken, () =>
-    fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
-      body,
-      headers: { authorization: `Bearer ${installation.botToken}` },
-      method: 'POST',
-    }),
-  )
-  const json = z.parse(
-    z.object({
-      error: z.string().optional(),
-      ok: z.boolean().optional(),
-    }),
-    await response.json(),
-  )
-  if (!json.ok) console.error('Slack API chat.postMessage failed:', json.error)
 }
 
 export async function updateReactionTipAggregate(
@@ -1134,7 +1076,7 @@ export async function updateReactionTipAggregate(
       }),
       await response.json(),
     )
-    if (!json.ok) throw new Error(json.error ?? 'Slack API chat.update failed.')
+    if (!json.ok) throw Slack.slackApiError('chat.update', json.error)
     return
   }
 
@@ -1159,7 +1101,7 @@ export async function updateReactionTipAggregate(
     }),
     await response.json(),
   )
-  if (!json.ok || !json.ts) throw new Error(json.error ?? 'Slack API chat.postMessage failed.')
+  if (!json.ok || !json.ts) throw Slack.slackApiError('chat.postMessage', json.error)
 
   const now = new Date().toISOString()
   try {
@@ -1235,7 +1177,7 @@ async function postInvalidUsage(event: chat.SlashCommandEvent, ctx: HandlerConte
     }),
     await response.json(),
   )
-  if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postEphemeral failed.')
+  if (!json.ok) throw Slack.slackApiError('chat.postEphemeral', json.error)
 }
 
 async function postConnectLink(event: chat.SlashCommandEvent, ctx: HandlerContext) {
@@ -1394,7 +1336,7 @@ async function postSlackReceiptMessage(
     }),
     await response.json(),
   )
-  if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postMessage failed.')
+  if (!json.ok) throw Slack.slackApiError('chat.postMessage', json.error)
 }
 
 function createReceiptBlocks(

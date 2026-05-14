@@ -63,7 +63,6 @@ function createManifest() {
           'commands',
           'groups:history',
           'groups:read',
-          'im:write',
           'reactions:read',
           'users:read',
         ],

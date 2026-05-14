@@ -445,22 +445,108 @@ export const api = new Hono<{
   .post('/api/chat/slack', async (c) => {
     const request = c.req.raw
     const body = await request.text()
+    if (
+      !(await Slack.verifySlackSignature({
+        body,
+        signature: request.headers.get('x-slack-signature'),
+        signingSecret: c.env.SLACK_SIGNING_SECRET,
+        timestamp: request.headers.get('x-slack-request-timestamp'),
+      }))
+    )
+      return new Response('Invalid signature', { status: 401 })
+
     const params = request.headers
       .get('content-type')
       ?.includes('application/x-www-form-urlencoded')
       ? new URLSearchParams(body)
       : null
-    if (params?.has('command') && !params.has('payload')) {
-      if (
-        !(await Slack.verifySlackSignature({
-          body,
-          signature: request.headers.get('x-slack-signature'),
-          signingSecret: c.env.SLACK_SIGNING_SECRET,
-          timestamp: request.headers.get('x-slack-request-timestamp'),
-        }))
-      )
-        return new Response('Invalid signature', { status: 401 })
+    const duplicateKey = (() => {
+      // Dedupe Slack block action retries before they can repeat side effects like
+      // opening modals, deleting messages, or posting admin-denied notices.
+      const interaction = (() => {
+        const raw = params?.get('payload')
+        if (!raw) return null
+        let payload: unknown
+        try {
+          payload = JSON.parse(raw)
+        } catch {
+          return null
+        }
+        const parsed = z
+          .object({
+            actions: z
+              .array(
+                z.object({
+                  action_id: z.string().min(1).optional(),
+                  value: z.string().optional(),
+                }),
+              )
+              .optional(),
+            container: z
+              .object({
+                message_ts: z.string().optional(),
+                view_id: z.string().optional(),
+              })
+              .passthrough()
+              .optional(),
+            team: z.object({ id: z.string().min(1) }).optional(),
+            trigger_id: z.string().min(1).optional(),
+            type: z.string().min(1),
+            user: z.object({ id: z.string().min(1) }).optional(),
+          })
+          .passthrough()
+          .safeParse(payload)
+        if (!parsed.success) return null
+        if (parsed.data.type !== 'block_actions') return null
+        const actions = parsed.data.actions
+          ?.map((action) => `${action.action_id ?? ''}:${action.value ?? ''}`)
+          .join(',')
+        return [
+          'slack:interaction',
+          parsed.data.team?.id ?? '',
+          parsed.data.user?.id ?? '',
+          parsed.data.trigger_id ?? '',
+          parsed.data.container?.message_ts ?? parsed.data.container?.view_id ?? '',
+          actions ?? '',
+        ].join(':')
+      })()
+      if (interaction) return interaction
+      if (params) return null
 
+      // Dedupe reaction Events API retries by Slack event_id. Chat SDK already
+      // dedupes message events, so keep this scoped to reactions only.
+      let payload: unknown
+      try {
+        payload = JSON.parse(body)
+      } catch {
+        return null
+      }
+      const parsed = z
+        .object({
+          event: z
+            .object({ type: z.string().min(1) })
+            .passthrough()
+            .optional(),
+          event_id: z.string().min(1).optional(),
+          type: z.string().min(1).optional(),
+        })
+        .safeParse(payload)
+      if (!parsed.success) return null
+      if (parsed.data.type !== 'event_callback') return null
+      if (!parsed.data.event_id) return null
+      if (!['reaction_added', 'reaction_removed'].includes(parsed.data.event?.type ?? ''))
+        return null
+      return `slack:webhook:${parsed.data.event_id}`
+    })()
+    if (duplicateKey) {
+      await Chat.getChat().initialize()
+      const inserted = await Chat.getChat()
+        .getState()
+        .setIfNotExists(duplicateKey, true, 65 * 60 * 1000) // 65 minutes
+      if (!inserted) return params ? new Response('', { status: 200 }) : c.json({ ok: true })
+    }
+
+    if (params?.has('command') && !params.has('payload')) {
       const tasks: Promise<unknown>[] = []
       const task = (async () => {
         await Chat.getChat().webhooks.slack(
@@ -526,7 +612,6 @@ export const api = new Hono<{
         'commands',
         'groups:history',
         'groups:read',
-        'im:write',
         'reactions:read',
         'users:read',
       ].join(','),

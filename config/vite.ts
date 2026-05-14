@@ -76,7 +76,6 @@ const slackScopes = [
   'chat:write',
   'groups:history',
   'groups:read',
-  'im:write',
   'reactions:read',
   'reactions:write',
   'users:read',

@@ -382,6 +382,42 @@ test('reaction tipping sends default tip and updates aggregate thread reply', as
   )
 })
 
+test('reaction tipping ignores duplicate signed Slack event deliveries', async () => {
+  await connectTipAccounts()
+  const message = await memberSlack.chat.postMessage({
+    channel: Constants.slack.channelId,
+    text: 'duplicate reaction delivery',
+  })
+  if (!message.ts) throw new Error('Expected Slack message timestamp.')
+
+  const eventId = `Ev${Nanoid.generate()}`
+  const firstResponse = await postSlackReaction({
+    eventId,
+    eventTs: `${message.ts}-reaction`,
+    messageTs: message.ts,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.adminUserId,
+  })
+  const secondResponse = await postSlackReaction({
+    eventId,
+    eventTs: `${message.ts}-reaction`,
+    messageTs: message.ts,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.adminUserId,
+  })
+  const tips = await db
+    .selectFrom('tip')
+    .innerJoin('workspace', 'workspace.id', 'tip.workspace_id')
+    .selectAll('tip')
+    .where('workspace.provider_id', '=', providerId)
+    .where('tip.idempotency_key', 'like', `${Chat.reactionTipIdempotencyPrefix}%`)
+    .execute()
+
+  expect(firstResponse.status).toBe(200)
+  expect(secondResponse.status).toBe(200)
+  expect(tips).toHaveLength(1)
+})
+
 test('reaction tipping silently ignores unknown sender', async () => {
   await connectTipAccounts()
   const message = await memberSlack.chat.postMessage({
@@ -432,7 +468,7 @@ test('reaction tipping silently ignores unconnected recipient', async () => {
   await expectSlackThreadMessageNotContaining(message.ts, 'tipped')
 })
 
-test('reaction tipping updates aggregate after approval', async () => {
+test('reaction tipping silently ignores approval required', async () => {
   await connectTipAccounts()
   await db.deleteFrom('access_key').execute()
   const message = await memberSlack.chat.postMessage({
@@ -446,39 +482,23 @@ test('reaction tipping updates aggregate after approval', async () => {
     reaction: 'money_with_wings',
     userId: Constants.slack.adminUserId,
   })
-  const pendingReactionTip = await waitForReactionTip()
-  const confirmUrl = await findSlackDmMessageUrl('/confirm/')
-  const token = new URL(confirmUrl).pathname.split('/').at(-1)
-  if (!token) throw new Error('Expected confirmation token.')
-  const data = await Tip.getConfirmationData(env, token)
-  const keyAuthorization = await AccountLink.signKeyAuthorization(
-    Account.fromSecp256k1(Constants.tip.senderRootPrivateKey),
-    {
-      accessKeyAddress: data.accessKey.address,
-      chainId: data.payload.chainId,
-      expiresAt: data.payload.accessKeyExpiresAt ?? data.payload.expiresAt,
-      tokenAddress: data.payload.tokenAddress,
-    },
-  )
-
-  const confirmResponse = await client.api.confirm[':token'].$post({
-    json: {
-      address: Account.fromSecp256k1(Constants.tip.senderRootPrivateKey).address,
-      keyAuthorization,
-    },
-    param: { token },
-  })
-  await Promise.all(waitUntil)
-  const confirmedReactionTip = await waitForReactionTip({ tipId: true })
+  const reactionTips = await db
+    .selectFrom('reaction_tip')
+    .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
+    .selectAll('reaction_tip')
+    .where('workspace.provider_id', '=', providerId)
+    .execute()
+  const tips = await db
+    .selectFrom('tip')
+    .innerJoin('workspace', 'workspace.id', 'tip.workspace_id')
+    .selectAll('tip')
+    .where('workspace.provider_id', '=', providerId)
+    .execute()
 
   expect(response.status).toBe(200)
-  expect(pendingReactionTip.tip_id).toBe(null)
-  expect(confirmResponse.status).toBe(200)
-  expect(confirmedReactionTip.tip_id).toEqual(expect.any(String))
-  await expectSlackThreadMessage(
-    message.ts,
-    `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}>`,
-  )
+  expect(reactionTips).toHaveLength(0)
+  expect(tips).toHaveLength(0)
+  await expectSlackThreadMessageNotContaining(message.ts, 'tipped')
 }, 20_000) // 20 seconds
 
 describe('/tip config', () => {
@@ -654,6 +674,42 @@ describe('/tip config', () => {
     expect(response.status).toBe(200)
     await expectSlackMessage('Admin permission required')
     await expectSlackMessage('Only Slack admins can change Tipbot settings.')
+  })
+
+  test('ignores duplicate signed Slack action deliveries', async () => {
+    await postSlashCommand('config')
+    const messageTs = await findSlackMessageTs('Network')
+    const userList = await slack.users.list({})
+    const member = userList.members?.find(
+      (member) => member.id && !member.is_admin && !member.is_owner,
+    )
+    if (!member?.id) throw new Error('Expected Slack emulator to seed a non-admin member.')
+
+    const payload = {
+      actions: [{ action_id: 'config_edit', type: 'button' }],
+      channel: { id: Constants.slack.channelId },
+      container: {
+        channel_id: Constants.slack.channelId,
+        message_ts: messageTs,
+        type: 'message',
+      },
+      message: { ts: messageTs },
+      team: { id: providerId },
+      trigger_id: 'config-edit-duplicate-trigger',
+      type: 'block_actions',
+      user: { id: member.id, name: member.name },
+    }
+
+    const firstResponse = await postSlackInteraction(payload)
+    const secondResponse = await postSlackInteraction(payload)
+    const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+    const duplicateMessages =
+      history.messages?.filter((message) => message.text?.includes('Admin permission required')) ??
+      []
+
+    expect(firstResponse.status).toBe(200)
+    expect(secondResponse.status).toBe(200)
+    expect(duplicateMessages).toHaveLength(1)
   })
 })
 
@@ -1152,22 +1208,6 @@ async function connectTipAccounts(options: { memoScope?: boolean; recipient?: bo
   })
 }
 
-async function waitForReactionTip(options: { tipId?: boolean } = {}) {
-  const timeoutAt = Date.now() + 2_000 // 2 seconds
-  do {
-    const row = await db
-      .selectFrom('reaction_tip')
-      .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
-      .selectAll('reaction_tip')
-      .where('workspace.provider_id', '=', providerId)
-      .$if(Boolean(options.tipId), (query) => query.where('reaction_tip.tip_id', 'is not', null))
-      .executeTakeFirst()
-    if (row) return row
-    await new Promise((resolve) => setTimeout(resolve, 25)) // 25 milliseconds
-  } while (Date.now() < timeoutAt)
-  throw new Error('Expected reaction tip row.')
-}
-
 async function findOrCreateAccount(address: string) {
   const existing = await db
     .selectFrom('account')
@@ -1209,18 +1249,6 @@ async function expectSlackThreadMessageNotContaining(messageTs: string, text: st
 
   expect(history.ok).toBe(true)
   expect(history.messages?.some((message) => message.text?.includes(text))).toBe(false)
-}
-
-async function findSlackDmMessageUrl(text: string) {
-  const open = await slack.conversations.open({ users: Constants.slack.adminUserId })
-  if (!open.channel?.id) throw new Error('Expected Slack DM channel.')
-  const history = await slack.conversations.history({ channel: open.channel.id })
-  const message = history.messages?.find((message) => message.text?.includes(text))
-  const url = message?.text?.match(/https?:\/\/\S+/)?.[0]
-
-  expect(history.ok).toBe(true)
-  if (!url) throw new Error(`Expected Slack DM message containing ${text}.`)
-  return url
 }
 
 async function expectSlackPublicMessage(text: string) {
@@ -1292,6 +1320,7 @@ async function postSlackInteraction(payload: unknown) {
 }
 
 async function postSlackReaction(options: {
+  eventId?: string
   eventTs?: string
   messageTs: string
   reaction: string
@@ -1310,7 +1339,7 @@ async function postSlackReaction(options: {
       type: 'reaction_added',
       user: options.userId,
     },
-    event_id: `Ev${Nanoid.generate()}`,
+    event_id: options.eventId ?? `Ev${Nanoid.generate()}`,
     team_id: providerId,
     type: 'event_callback',
   })
