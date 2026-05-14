@@ -4,7 +4,7 @@ import { env } from 'cloudflare:workers'
 import type { InferResponseType } from 'hono/client'
 import * as React from 'react'
 import { parseUnits, toHex } from 'viem'
-import { useConnect, useConnectors } from 'wagmi'
+import { useConnect, useConnection, useConnectors } from 'wagmi'
 import * as z from 'zod/mini'
 import { api } from '#/api.ts'
 import { WalletProviders } from '#/components/WalletProviders.tsx'
@@ -55,6 +55,7 @@ function ConfirmPanel(props: {
   token: string
 }) {
   const connect = useConnect()
+  const connection = useConnection()
   const connectors = useConnectors()
   const data = props.data
   const [error, setError] = React.useState<string | null>(null)
@@ -69,44 +70,39 @@ function ConfirmPanel(props: {
     setTransactionHash(null)
     setStatus('confirming')
     try {
-      const connector = connectors[0]
+      const connector = connection.connector ?? connectors[0]
       if (!connector) throw new Error('Tempo Wallet is unavailable.')
-      const result = (await connect.connectAsync({
-        capabilities:
-          data.kind === 'reusable_access_key'
-            ? {
-                authorizeAccessKey: {
-                  chainId: BigInt(data.chainId),
-                  expiry: Math.floor(new Date(data.accessKeyExpiry).getTime() / 1000),
-                  keyType: 'secp256k1',
-                  limits: [
-                    {
-                      limit: parseUnits(data.accessKeyLimit, 6),
-                      period: data.accessKeyLimitPeriodSeconds,
-                      token: data.tokenAddress,
-                    },
-                  ],
-                  publicKey: data.accessKeyPublicKey,
-                  scopes: [
-                    { address: data.tokenAddress, selector: 'transfer(address,uint256)' },
-                    {
-                      address: data.tokenAddress,
-                      selector: 'transferWithMemo(address,uint256,bytes32)',
-                    },
-                  ],
-                },
-              }
-            : { method: 'register' },
-        chainId: data.chainId,
-        connector,
-        withCapabilities: true,
-      } as never)) as unknown as {
-        accounts: readonly [
-          { address: string; capabilities: Record<string, unknown> },
-          ...{ address: string; capabilities: Record<string, unknown> }[],
-        ]
-      }
-      const account = result.accounts[0]
+      const account = await (async () => {
+        if (data.kind === 'reusable_access_key' && connection.status === 'connected') {
+          const result = await authorizeAccessKey(connector, data)
+          return {
+            address: result.rootAddress,
+            capabilities: { keyAuthorization: result.keyAuthorization },
+          }
+        }
+        if (
+          data.kind === 'onetime_payment' &&
+          connection.status === 'connected' &&
+          connection.address
+        )
+          return { address: connection.address, capabilities: {} }
+
+        const result = (await connect.connectAsync({
+          capabilities:
+            data.kind === 'reusable_access_key'
+              ? { authorizeAccessKey: getAuthorizeAccessKey(data) }
+              : { method: 'register' },
+          chainId: data.chainId,
+          connector,
+          withCapabilities: true,
+        } as never)) as unknown as {
+          accounts: readonly [
+            { address: string; capabilities: Record<string, unknown> },
+            ...{ address: string; capabilities: Record<string, unknown> }[],
+          ]
+        }
+        return result.accounts[0]
+      })()
       if (
         data.kind === 'onetime_payment' &&
         account.address.toLowerCase() !== data.transactionRequest?.from.toLowerCase()
@@ -262,3 +258,38 @@ const getConfirmData = createServerFn({ method: 'GET' })
 
     return (await response.json()) as InferResponseType<typeof endpoint.$get, 200>
   })
+
+async function authorizeAccessKey(
+  connector: ReturnType<typeof useConnectors>[number],
+  data: Extract<ReturnType<typeof Route.useLoaderData>, { ok: true }>,
+) {
+  const provider = (await connector.getProvider()) as {
+    request: (parameters: { method: string; params: unknown[] }) => Promise<unknown>
+  }
+  return (await provider.request({
+    method: 'wallet_authorizeAccessKey',
+    params: [getAuthorizeAccessKey(data)],
+  })) as { keyAuthorization: unknown; rootAddress: string }
+}
+
+function getAuthorizeAccessKey(
+  data: Extract<ReturnType<typeof Route.useLoaderData>, { ok: true }>,
+) {
+  return {
+    chainId: BigInt(data.chainId),
+    expiry: Math.floor(new Date(data.accessKeyExpiry).getTime() / 1000),
+    keyType: 'secp256k1' as const,
+    limits: [
+      {
+        limit: parseUnits(data.accessKeyLimit, 6),
+        period: data.accessKeyLimitPeriodSeconds,
+        token: data.tokenAddress,
+      },
+    ],
+    publicKey: data.accessKeyPublicKey,
+    scopes: [
+      { address: data.tokenAddress, selector: 'transfer(address,uint256)' },
+      { address: data.tokenAddress, selector: 'transferWithMemo(address,uint256,bytes32)' },
+    ],
+  }
+}

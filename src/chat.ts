@@ -396,7 +396,7 @@ const handlers = {
       .set({ account_id: null, updated_at: new Date().toISOString() })
       .where('id', '=', member.id)
       .execute()
-    await event.channel.postEphemeral(event.user, 'Disconnected from Tipbot', {
+    await event.channel.postEphemeral(event.user, 'Disconnect', {
       fallbackToDM: false,
     })
   },

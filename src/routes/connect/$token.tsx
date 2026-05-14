@@ -5,7 +5,7 @@ import type { InferResponseType } from 'hono/client'
 import * as React from 'react'
 import { createClient, http, parseUnits } from 'viem'
 import { Actions } from 'viem/tempo'
-import { useConnect, useConnectors } from 'wagmi'
+import { useConnect, useConnection, useConnectors } from 'wagmi'
 import * as z from 'zod/mini'
 import { api } from '#/api.ts'
 import { WalletProviders } from '#/components/WalletProviders.tsx'
@@ -56,6 +56,7 @@ function ConnectPanel(props: {
   token: string
 }) {
   const connect = useConnect()
+  const connection = useConnection()
   const connectors = useConnectors()
   const data = props.data
   const [error, setError] = React.useState<string | null>(null)
@@ -72,31 +73,20 @@ function ConnectPanel(props: {
     setPendingConnection(null)
     setStatus('connecting')
     try {
-      const connector = connectors[0]
+      const connector = connection.connector ?? connectors[0]
       if (!connector) throw new Error('Tempo Wallet is unavailable.')
+      if (connection.status === 'connected' && connection.address) {
+        const result = await authorizeAccessKey(connector, data)
+        await linkAccount({
+          address: result.rootAddress,
+          keyAuthorization: result.keyAuthorization,
+        })
+        setStatus('connected')
+        return
+      }
+
       const result = (await connect.connectAsync({
-        capabilities: {
-          authorizeAccessKey: {
-            chainId: BigInt(data.chainId),
-            expiry: Math.floor(new Date(data.accessKeyExpiry).getTime() / 1000),
-            keyType: 'secp256k1',
-            limits: [
-              {
-                limit: parseUnits(data.accessKeyLimit, 6),
-                period: data.accessKeyLimitPeriodSeconds,
-                token: data.tokenAddress,
-              },
-            ],
-            publicKey: data.accessKeyPublicKey,
-            scopes: [
-              { address: data.tokenAddress, selector: 'transfer(address,uint256)' },
-              {
-                address: data.tokenAddress,
-                selector: 'transferWithMemo(address,uint256,bytes32)',
-              },
-            ],
-          },
-        },
+        capabilities: { authorizeAccessKey: getAuthorizeAccessKey(data) },
         chainId: data.chainId,
         connector,
         withCapabilities: true,
@@ -315,3 +305,38 @@ const getConnectData = createServerFn({ method: 'GET' })
       }
     }
   })
+
+async function authorizeAccessKey(
+  connector: ReturnType<typeof useConnectors>[number],
+  data: Extract<ReturnType<typeof Route.useLoaderData>, { ok: true }>,
+) {
+  const provider = (await connector.getProvider()) as {
+    request: (parameters: { method: string; params: unknown[] }) => Promise<unknown>
+  }
+  return (await provider.request({
+    method: 'wallet_authorizeAccessKey',
+    params: [getAuthorizeAccessKey(data)],
+  })) as { keyAuthorization: unknown; rootAddress: string }
+}
+
+function getAuthorizeAccessKey(
+  data: Extract<ReturnType<typeof Route.useLoaderData>, { ok: true }>,
+) {
+  return {
+    chainId: BigInt(data.chainId),
+    expiry: Math.floor(new Date(data.accessKeyExpiry).getTime() / 1000),
+    keyType: 'secp256k1' as const,
+    limits: [
+      {
+        limit: parseUnits(data.accessKeyLimit, 6),
+        period: data.accessKeyLimitPeriodSeconds,
+        token: data.tokenAddress,
+      },
+    ],
+    publicKey: data.accessKeyPublicKey,
+    scopes: [
+      { address: data.tokenAddress, selector: 'transfer(address,uint256)' },
+      { address: data.tokenAddress, selector: 'transferWithMemo(address,uint256,bytes32)' },
+    ],
+  }
+}

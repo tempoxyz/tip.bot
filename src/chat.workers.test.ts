@@ -1179,7 +1179,7 @@ describe('/tip disconnect', () => {
       .execute()
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Disconnected from Tipbot')
+    await expectSlackMessage('Disconnect')
     expect(updatedMember.account_id).toBe(null)
     expect(accessKeys).toEqual([])
   })
