@@ -112,6 +112,15 @@ export const workspace = z.object({
   updated_at: z.string(),
 })
 
+export const workspace_reaction_emoji = z.object({
+  amount: z.number(),
+  created_at: z.string(),
+  emoji: z.string(),
+  id: z.string(),
+  updated_at: z.string(),
+  workspace_id: z.string(),
+})
+
 export const db = {
   access_key: access_key,
   account: account,
@@ -121,4 +130,5 @@ export const db = {
   reaction_tip_thread: reaction_tip_thread,
   tip: tip,
   workspace: workspace,
+  workspace_reaction_emoji: workspace_reaction_emoji,
 }

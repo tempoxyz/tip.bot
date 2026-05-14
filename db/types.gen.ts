@@ -11,6 +11,7 @@ export interface DB {
   reaction_tip_thread: reaction_tip_thread
   tip: tip
   workspace: workspace
+  workspace_reaction_emoji: workspace_reaction_emoji
 }
 
 type access_key = {
@@ -123,6 +124,15 @@ type workspace = {
   updated_at: k.Generated<string>
 }
 
+type workspace_reaction_emoji = {
+  amount: number
+  created_at: k.Generated<string>
+  emoji: string
+  id: string
+  updated_at: k.Generated<string>
+  workspace_id: string
+}
+
 export declare namespace DB {
   type access_key = k.Selectable<DB['access_key']>
   type account = k.Selectable<DB['account']>
@@ -132,6 +142,7 @@ export declare namespace DB {
   type reaction_tip_thread = k.Selectable<DB['reaction_tip_thread']>
   type tip = k.Selectable<DB['tip']>
   type workspace = k.Selectable<DB['workspace']>
+  type workspace_reaction_emoji = k.Selectable<DB['workspace_reaction_emoji']>
 
   export namespace Insertable {
     type access_key = k.Insertable<DB['access_key']>
@@ -142,6 +153,7 @@ export declare namespace DB {
     type reaction_tip_thread = k.Insertable<DB['reaction_tip_thread']>
     type tip = k.Insertable<DB['tip']>
     type workspace = k.Insertable<DB['workspace']>
+    type workspace_reaction_emoji = k.Insertable<DB['workspace_reaction_emoji']>
   }
 
   export namespace Selectable {
@@ -153,6 +165,7 @@ export declare namespace DB {
     type reaction_tip_thread = k.Selectable<DB['reaction_tip_thread']>
     type tip = k.Selectable<DB['tip']>
     type workspace = k.Selectable<DB['workspace']>
+    type workspace_reaction_emoji = k.Selectable<DB['workspace_reaction_emoji']>
   }
 
   export namespace Updateable {
@@ -164,5 +177,6 @@ export declare namespace DB {
     type reaction_tip_thread = k.Updateable<DB['reaction_tip_thread']>
     type tip = k.Updateable<DB['tip']>
     type workspace = k.Updateable<DB['workspace']>
+    type workspace_reaction_emoji = k.Updateable<DB['workspace_reaction_emoji']>
   }
 }

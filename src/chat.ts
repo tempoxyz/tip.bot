@@ -110,8 +110,20 @@ export function getChat() {
         .where('provider_id', '=', reaction.team_id)
         .executeTakeFirst()
       if (!workspace) return
-      if (reaction.reaction !== workspace.reaction_tip_emoji) return
+
+      // Check workspace_reaction_emoji table for per-emoji amount overrides
+      const emojiRow = await db
+        .selectFrom('workspace_reaction_emoji')
+        .selectAll()
+        .where('workspace_id', '=', workspace.id)
+        .where('emoji', '=', reaction.reaction)
+        .executeTakeFirst()
+
+      // Fall back to legacy single-emoji column
+      if (!emojiRow && reaction.reaction !== workspace.reaction_tip_emoji) return
+
       return {
+        amountOverride: emojiRow?.amount,
         db,
         provider: { id: reaction.team_id, type: 'slack' },
         workspace,
@@ -411,6 +423,7 @@ const handlers = {
       ['/tip disconnect', 'Disconnect from Tipbot'],
       ['/tip help', 'Show help message'],
       ['/tip leaderboard', 'Show top tippers and recipients'],
+      ['/tip reactions', 'Manage reaction emoji tips'],
       ['/tip status', 'Check connection status'],
     ]
     const paymentExampleRows = [
@@ -606,6 +619,115 @@ const handlers = {
     )
     if (!json.ok) throw Slack.slackApiError('chat.postMessage', json.error)
   },
+  async reactions(event, ctx) {
+    const workspace = await ctx.db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', ctx.provider.type)
+      .where('provider_id', '=', ctx.provider.id)
+      .executeTakeFirst()
+    if (!workspace) {
+      await event.channel.postEphemeral(
+        event.user,
+        'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+        { fallbackToDM: false },
+      )
+      return
+    }
+
+    const isAdmin = await canManageSlackWorkspaceSettings(ctx.provider.id, event.user.userId)
+
+    // Parse subcommands: "add :emoji: $amount", "remove :emoji:", or no args to list
+    const addMatch = ctx.text.match(/^add\s+:?([a-z0-9_+-]+):?\s+(.+)$/i)
+    const removeMatch = ctx.text.match(/^remove\s+:?([a-z0-9_+-]+):?$/i)
+
+    if (addMatch) {
+      if (!isAdmin) {
+        await event.channel.postEphemeral(
+          event.user,
+          'Only Slack admins can manage reaction emojis.',
+          { fallbackToDM: false },
+        )
+        return
+      }
+      const emoji = addMatch[1]!.toLowerCase()
+      const amount = Tip.parseAmount(addMatch[2]!.trim())
+      if (amount === null) {
+        await event.channel.postEphemeral(
+          event.user,
+          'Invalid amount. Example: `/tip reactions add :money_mouth_face: $1`',
+          { fallbackToDM: false },
+        )
+        return
+      }
+      const now = new Date().toISOString()
+      await ctx.db
+        .insertInto('workspace_reaction_emoji')
+        .values({
+          amount,
+          created_at: now,
+          emoji,
+          id: Nanoid.generate(),
+          updated_at: now,
+          workspace_id: workspace.id,
+        })
+        .onConflict((oc) =>
+          oc.columns(['workspace_id', 'emoji']).doUpdateSet({ amount, updated_at: now }),
+        )
+        .execute()
+      await event.channel.postEphemeral(
+        event.user,
+        `Reaction tip added: :${emoji}: sends ${formatAmount(amount)}`,
+        { fallbackToDM: false },
+      )
+      return
+    }
+
+    if (removeMatch) {
+      if (!isAdmin) {
+        await event.channel.postEphemeral(
+          event.user,
+          'Only Slack admins can manage reaction emojis.',
+          { fallbackToDM: false },
+        )
+        return
+      }
+      const emoji = removeMatch[1]!.toLowerCase()
+      const deleted = await ctx.db
+        .deleteFrom('workspace_reaction_emoji')
+        .where('workspace_id', '=', workspace.id)
+        .where('emoji', '=', emoji)
+        .execute()
+      if (deleted[0] && Number(deleted[0].numDeletedRows) > 0)
+        await event.channel.postEphemeral(event.user, `Reaction tip removed: :${emoji}:`, {
+          fallbackToDM: false,
+        })
+      else
+        await event.channel.postEphemeral(event.user, `No reaction tip found for :${emoji}:`, {
+          fallbackToDM: false,
+        })
+      return
+    }
+
+    // List all reaction emojis
+    const emojis = await ctx.db
+      .selectFrom('workspace_reaction_emoji')
+      .selectAll()
+      .where('workspace_id', '=', workspace.id)
+      .orderBy('created_at', 'asc')
+      .execute()
+
+    const lines = [
+      `Default: :${workspace.reaction_tip_emoji}: sends ${formatAmount(workspace.default_amount)}`,
+      ...emojis.map((row) => `:${row.emoji}: sends ${formatAmount(row.amount)}`),
+    ]
+    if (isAdmin)
+      lines.push(
+        '',
+        'Manage: `/tip reactions add :emoji: $amount` or `/tip reactions remove :emoji:`',
+      )
+    await event.channel.postEphemeral(event.user, lines.join('\n'), { fallbackToDM: false })
+  },
   async status(event, ctx) {
     const workspace = await ctx.db
       .selectFrom('workspace')
@@ -658,7 +780,15 @@ const handlers = {
   (event: chat.SlashCommandEvent, ctx: HandlerContext) => Promise<void>
 >
 
-const commandNames = ['config', 'connect', 'disconnect', 'help', 'leaderboard', 'status'] as const
+const commandNames = [
+  'config',
+  'connect',
+  'disconnect',
+  'help',
+  'leaderboard',
+  'reactions',
+  'status',
+] as const
 const commandPattern = new RegExp(`^(${commandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
 const actionNames = ['config_edit', 'connect_cancel', 'confirm_cancel'] as const
 const modalSubmitNames = ['config_edit'] as const
@@ -689,6 +819,7 @@ type TipEvent = {
 }
 
 type ReactionHandlerContext = {
+  amountOverride?: number
   db: DB.Type
   provider: ProviderContext
   workspace: DB_gen.Selectable.workspace
@@ -1152,6 +1283,7 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
   if (!inserted) return
 
   const result = await Tip.handleTipRequest(env, {
+    ...(context.amountOverride ? { amount: context.amountOverride } : {}),
     idempotencyKey,
     memo: null,
     provider: provider.type,
