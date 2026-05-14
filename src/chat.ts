@@ -1141,6 +1141,66 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
         if (message) return message
       }
     }
+    const historyBody = new URLSearchParams()
+    historyBody.set('channel', event.item.channel)
+    historyBody.set('limit', '20')
+    const historyResponse = await getSlack().withBotToken(installation.botToken, () =>
+      fetch(`${env.SLACK_API_URL}/conversations.history`, {
+        body: historyBody,
+        headers: { authorization: `Bearer ${installation.botToken}` },
+        method: 'POST',
+      }),
+    )
+    const historyJson = z.parse(
+      z.object({
+        messages: z
+          .array(
+            z.object({
+              reply_count: z.number().optional(),
+              ts: z.string().optional(),
+            }),
+          )
+          .optional(),
+        ok: z.boolean().optional(),
+      }),
+      await historyResponse.json(),
+    )
+    if (historyJson.ok) {
+      for (const parentMessage of historyJson.messages ?? []) {
+        if (!parentMessage.ts || !parentMessage.reply_count) continue
+        const repliesBody = new URLSearchParams()
+        repliesBody.set('channel', event.item.channel)
+        repliesBody.set('limit', '100')
+        repliesBody.set('ts', parentMessage.ts)
+        const repliesResponse = await getSlack().withBotToken(installation.botToken, () =>
+          fetch(`${env.SLACK_API_URL}/conversations.replies`, {
+            body: repliesBody,
+            headers: { authorization: `Bearer ${installation.botToken}` },
+            method: 'POST',
+          }),
+        )
+        const repliesJson = z.parse(
+          z.object({
+            messages: z
+              .array(
+                z.object({
+                  bot_id: z.string().optional(),
+                  subtype: z.string().optional(),
+                  thread_ts: z.string().optional(),
+                  ts: z.string().optional(),
+                  user: z.string().optional(),
+                }),
+              )
+              .optional(),
+            ok: z.boolean().optional(),
+          }),
+          await repliesResponse.json(),
+        )
+        if (!repliesJson.ok) continue
+        const message = repliesJson.messages?.find((message) => message.ts === event.item.ts)
+        if (message) return message
+      }
+    }
     return { thread_ts: event.item.ts, user: event.item_user }
   })()
   if (!message?.user) {
@@ -1273,8 +1333,8 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
       .execute()
     await updateReactionTipAggregate(provider.id, {
       channelId: event.item.channel,
-      messageTs: event.item.ts,
       reaction: event.reaction,
+      threadTs: message.thread_ts ?? event.item.ts,
       workspaceId: workspace.id,
     }).catch((error) => {
       console.error('Failed to update Slack reaction tip aggregate:', error)
@@ -1393,7 +1453,12 @@ async function getConnectedSlackMember(db: DB.Type, workspaceId: string, provide
 
 export async function updateReactionTipAggregate(
   providerId: string,
-  options: { channelId: string; messageTs: string; reaction: string; workspaceId: string },
+  options: {
+    channelId: string
+    reaction: string
+    threadTs: string
+    workspaceId: string
+  },
 ) {
   const db = DB.create(env.DB)
   const rows = await db
@@ -1403,7 +1468,7 @@ export async function updateReactionTipAggregate(
     .innerJoin('member as recipient', 'recipient.id', 'reaction_tip.recipient_member_id')
     .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
     .select([
-      'reaction_tip.thread_ts',
+      'reaction_tip.message_ts',
       'recipient.provider_user_id as recipient_provider_user_id',
       'sender.provider_user_id as sender_provider_user_id',
       'tip.amount',
@@ -1414,7 +1479,7 @@ export async function updateReactionTipAggregate(
     ])
     .where('reaction_tip.workspace_id', '=', options.workspaceId)
     .where('reaction_tip.channel_id', '=', options.channelId)
-    .where('reaction_tip.message_ts', '=', options.messageTs)
+    .where('reaction_tip.thread_ts', '=', options.threadTs)
     .where('reaction_tip.reaction', '=', options.reaction)
     .where('tip.confirmed_at', 'is not', null)
     .where('tip.transaction_hash', 'is not', null)
@@ -1425,7 +1490,7 @@ export async function updateReactionTipAggregate(
   const installation = await getSlack().getInstallation(providerId)
   if (!installation) return
 
-  const tipLines = await Promise.all(
+  const rowTexts = await Promise.all(
     rows.map(async (row) => {
       const token = await Tempo.getTokenMetadata(env, row.chain_id, row.token_address)
       const amount = formatAmount(row.amount)
@@ -1435,20 +1500,53 @@ export async function updateReactionTipAggregate(
       )
         ? formatCurrencyAmount(amount, token.currency)
         : formatTipAmount(amount, token.currency, token.symbol)
-      return `• <@${row.sender_provider_user_id}> tipped ${displayAmount} · <${Tempo.formatTxLink(row.chain_id, row.transaction_hash!)}|Receipt>`
+      return {
+        messageTs: row.message_ts,
+        recipientProviderUserId: row.recipient_provider_user_id,
+        text: `• <@${row.sender_provider_user_id}> tipped ${displayAmount} · <${Tempo.formatTxLink(row.chain_id, row.transaction_hash!)}|Receipt>`,
+      }
     }),
   )
-  const reactedMessageUrl = new URL('https://slack.com/app_redirect')
-  reactedMessageUrl.searchParams.set('channel', options.channelId)
-  reactedMessageUrl.searchParams.set('message_ts', options.messageTs)
-  reactedMessageUrl.searchParams.set('team', providerId)
-  const text = `<@${rows[0]!.recipient_provider_user_id}> received ${rows.length === 1 ? 'a tip' : 'tips'} on <${reactedMessageUrl}|this> message:\n\n${tipLines.join('\n')}`
+  const messageGroups = rowTexts.reduce(
+    (groups, row) => {
+      const group = groups.find((group) => group.messageTs === row.messageTs)
+      if (group) {
+        group.lines.push(row.text)
+        return groups
+      }
+      groups.push({
+        lines: [row.text],
+        messageTs: row.messageTs,
+        recipientProviderUserId: row.recipientProviderUserId,
+      })
+      return groups
+    },
+    [] as Array<{ lines: string[]; messageTs: string; recipientProviderUserId: string }>,
+  )
+  const text = (() => {
+    if (messageGroups.length === 1) {
+      const reactedMessageUrl = new URL('https://slack.com/app_redirect')
+      reactedMessageUrl.searchParams.set('channel', options.channelId)
+      reactedMessageUrl.searchParams.set('message_ts', messageGroups[0]!.messageTs)
+      reactedMessageUrl.searchParams.set('team', providerId)
+      return `<@${messageGroups[0]!.recipientProviderUserId}> received ${rowTexts.length === 1 ? 'a tip' : 'tips'} on <${reactedMessageUrl}|this> message:\n\n${messageGroups[0]!.lines.join('\n')}`
+    }
+    return `Tips received in this thread:\n\n${messageGroups
+      .map((group) => {
+        const reactedMessageUrl = new URL('https://slack.com/app_redirect')
+        reactedMessageUrl.searchParams.set('channel', options.channelId)
+        reactedMessageUrl.searchParams.set('message_ts', group.messageTs)
+        reactedMessageUrl.searchParams.set('team', providerId)
+        return `<@${group.recipientProviderUserId}> received ${group.lines.length === 1 ? 'a tip' : 'tips'} on <${reactedMessageUrl}|this> message:\n${group.lines.join('\n')}`
+      })
+      .join('\n\n')}`
+  })()
   const existing = await db
     .selectFrom('reaction_tip_thread')
     .selectAll()
     .where('workspace_id', '=', options.workspaceId)
     .where('channel_id', '=', options.channelId)
-    .where('message_ts', '=', options.messageTs)
+    .where('message_ts', '=', options.threadTs)
     .where('reaction', '=', options.reaction)
     .executeTakeFirst()
 
@@ -1472,13 +1570,18 @@ export async function updateReactionTipAggregate(
       await response.json(),
     )
     if (!json.ok) throw Slack.slackApiError('chat.update', json.error)
+    await db
+      .updateTable('reaction_tip_thread')
+      .set({ updated_at: new Date().toISOString() })
+      .where('id', '=', existing.id)
+      .execute()
     return
   }
 
   const body = new URLSearchParams()
   body.set('channel', options.channelId)
   body.set('text', text)
-  body.set('thread_ts', rows[0]!.thread_ts)
+  body.set('thread_ts', options.threadTs)
   body.set('unfurl_links', 'false')
   body.set('unfurl_media', 'false')
   const response = await getSlack().withBotToken(installation.botToken, () =>
@@ -1506,7 +1609,7 @@ export async function updateReactionTipAggregate(
         channel_id: options.channelId,
         created_at: now,
         id: Nanoid.generate(),
-        message_ts: options.messageTs,
+        message_ts: options.threadTs,
         reaction: options.reaction,
         reply_ts: json.ts,
         updated_at: now,
