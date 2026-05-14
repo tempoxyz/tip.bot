@@ -15,6 +15,9 @@ import { sql } from 'kysely'
 import { Address } from 'ox'
 import { z } from 'zod'
 
+const creaturePattern =
+  /\b(creature|creatures|dragon|dragons|elf|elves|fae|fairy|goblin|goblins|gnome|gnomes|gremlin|gremlins|kobold|kobolds|monster|monsters|orc|orcs|troll|trolls)\b/i
+
 let bot: chat.Chat | null = null
 export function getChat() {
   if (bot) return bot
@@ -788,7 +791,7 @@ async function handleTipText(
         }) satisfies Tip.TipResult,
     )
 
-    if (result.ok && result.status === 'sent')
+    if (result.ok && result.status === 'sent') {
       await postSlackReceiptMessage(
         event,
         ctx,
@@ -801,7 +804,9 @@ async function handleTipText(
           : undefined,
         options.threadTs,
       )
-    else if (result.ok)
+      if (result.memo && options.threadTs)
+        await postSlackMemoReply(event, ctx, result.memo, options.threadTs)
+    } else if (result.ok)
       await postSlackReceiptMessage(
         event,
         ctx,
@@ -1606,9 +1611,7 @@ async function postInvalidMentionReply(
 
 async function generateInvalidMentionReply(mentionText: string) {
   const text = mentionText.trim()
-  const creatureMatch = text.match(
-    /\b(creature|creatures|dragon|dragons|elf|elves|fae|fairy|goblin|goblins|gnome|gnomes|gremlin|gremlins|kobold|kobolds|monster|monsters|orc|orcs|troll|trolls)\b/i,
-  )
+  const creatureMatch = text.match(creaturePattern)
   const isTipText = /<@[A-Z0-9_]+|\b(tip|send|pay|sent|paid)\b/i.test(text)
   const isSetupText = /\b(connect|configure|get started|install|link|mine|set ?up|start)\b/i.test(
     text,
@@ -1902,6 +1905,71 @@ async function postSlackReceiptMessage(
     await response.json(),
   )
   if (!json.ok) throw Slack.slackApiError('chat.postMessage', json.error)
+}
+
+async function postSlackMemoReply(
+  event: TipEvent,
+  ctx: HandlerContext,
+  memo: string,
+  threadTs: string,
+) {
+  const creatureMatch = memo.match(creaturePattern)
+  if (!creatureMatch) return
+
+  const installation = await getSlack().getInstallation(ctx.provider.id)
+  if (!installation) return
+
+  const fallback = `${creatureMatch[0].toUpperCase()}? Now we are talking.`
+  let reply = fallback
+  try {
+    const result = z
+      .parse(
+        z.object({ response: z.string().default('') }),
+        await env.AI.run('@cf/meta/llama-3.2-1b-instruct', {
+          max_tokens: 48,
+          messages: [
+            {
+              content:
+                'You are Tipbot in Slack. Someone just sent a tip with a memo. React to the memo in character. Keep it under 140 chars. Be short and pithy. Do not mention users. If the memo mentions goblins or other creatures, get REALLY EXCITED.',
+              role: 'system',
+            },
+            { content: memo, role: 'user' },
+          ],
+        }),
+      )
+      .response.replace(/[\r\n]+/g, ' ')
+      .trim()
+      .replace(/^['"]|['"]$/g, '')
+    if (isValidInvalidMentionAiReply(result)) reply = result
+  } catch (error) {
+    console.error('Failed to generate memo reply:', error)
+  }
+
+  const body = new URLSearchParams()
+  body.set('channel', event.channel.id.replace(/^slack:/, ''))
+  body.set('text', reply)
+  body.set('thread_ts', threadTs)
+  body.set('unfurl_links', 'false')
+  body.set('unfurl_media', 'false')
+  await getSlack()
+    .withBotToken(installation.botToken, async () => {
+      const response = await fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
+        body,
+        headers: { authorization: `Bearer ${installation.botToken}` },
+        method: 'POST',
+      })
+      const json = z.parse(
+        z.object({
+          error: z.string().optional(),
+          ok: z.boolean().optional(),
+        }),
+        await response.json(),
+      )
+      if (!json.ok) throw Slack.slackApiError('chat.postMessage', json.error)
+    })
+    .catch((error: unknown) => {
+      console.error('Failed to post memo reply:', error)
+    })
 }
 
 function createReceiptBlocks(

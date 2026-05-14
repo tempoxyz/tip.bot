@@ -649,12 +649,58 @@ test('@Tipbot mention accepts bot mention after recipient', async () => {
     .executeTakeFirstOrThrow()
 
   expect(response.status).toBe(200)
+  expect(aiRunMock).not.toHaveBeenCalled()
   await expectSlackThreadMessage(
     messageTs,
     `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for coffee · Receipt`,
   )
   expect(tip.confirmed_at).toEqual(expect.any(String))
   expect(tip.transaction_hash).toEqual(expect.any(String))
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention replies to creature memo with AI', async () => {
+  await connectTipAccounts()
+  aiRunMock.mockResolvedValueOnce({ response: 'GOBLINS? Tip lore unlocked.' } as never)
+  const messageTs = `1700000007.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.memberUserId}> <@${Constants.slack.botUserId}> for goblin snacks`,
+  })
+  const tip = await db
+    .selectFrom('tip')
+    .select(['confirmed_at', 'memo', 'transaction_hash'])
+    .where('memo', '=', 'goblin snacks')
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(aiRunMock).toHaveBeenCalledOnce()
+  await expectSlackThreadMessage(
+    messageTs,
+    `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for goblin snacks · Receipt`,
+  )
+  await expectSlackThreadMessage(messageTs, 'GOBLINS? Tip lore unlocked.')
+  expect(tip.confirmed_at).toEqual(expect.any(String))
+  expect(tip.transaction_hash).toEqual(expect.any(String))
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention falls back for creature memo when AI reply is invalid', async () => {
+  await connectTipAccounts()
+  aiRunMock.mockResolvedValueOnce({ response: '@Tipbot' } as never)
+  const messageTs = `1700000008.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.memberUserId}> <@${Constants.slack.botUserId}> for dragon chow`,
+  })
+
+  expect(response.status).toBe(200)
+  expect(aiRunMock).toHaveBeenCalledOnce()
+  await expectSlackThreadMessage(
+    messageTs,
+    `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for dragon chow · Receipt`,
+  )
+  await expectSlackThreadMessage(messageTs, 'DRAGON? Now we are talking.')
 }, 20_000) // 20 seconds
 
 test('@Tipbot mention accepts repeated bot mentions', async () => {
