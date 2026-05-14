@@ -1,8 +1,5 @@
-import { Handler } from 'accounts/server'
 import { Hono } from 'hono'
 import { Address, Base64, Hex } from 'ox'
-import { http } from 'viem'
-import { privateKeyToAccount } from 'viem/accounts'
 import { z } from 'zod'
 import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
@@ -367,7 +364,6 @@ export const api = new Hono<{
         ok: true as const,
         recipientProviderLabel,
         recipientProviderUserId: data.payload.recipientProviderUserId,
-        relayUrl: `https://${c.env.HOST}/api/relay/${data.payload.chainId}`,
         tokenAddress: Address.checksum(data.payload.tokenAddress),
         tokenCurrency: metadata.currency,
         tokenSymbol: metadata.symbol,
@@ -541,22 +537,6 @@ export const api = new Hono<{
           400,
         )
       }
-    },
-  )
-  .post(
-    '/api/relay/:chainId{[0-9]+}',
-    hono.validator('param', z.object({ chainId: z.coerce.number().int().positive() })),
-    async (c) => {
-      const params = c.req.valid('param')
-      const feePayerPrivateKey = Tempo.getFeePayerPrivateKey(c.env, params.chainId)
-      return await Handler.relay({
-        chains: [Tempo.getChain(params.chainId)],
-        ...(feePayerPrivateKey
-          ? { feePayer: { account: privateKeyToAccount(feePayerPrivateKey) } }
-          : {}),
-        path: '/api/relay',
-        transports: { [params.chainId]: http(Tempo.getRpcUrl(c.env, params.chainId)) },
-      }).fetch(c.req.raw)
     },
   )
   .post('/api/chat/slack', async (c) => {

@@ -277,9 +277,7 @@ describe('/tip @account', () => {
     const response = await postSlashCommand(`<@${Constants.slack.memberUserId}>`)
 
     expect(response.status).toBe(200)
-    await expectSlackMessage(
-      'Payment not sent. Your wallet has insufficient funds. Add funds and try again.',
-    )
+    await expectSlackMessage('Payment not sent. Your wallet has insufficient funds.')
     const postEphemeralCall = fetchSpy.mock.calls.find((call) => {
       const input = call[0]
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
@@ -297,10 +295,30 @@ describe('/tip @account', () => {
     expect(blocks).toEqual([
       {
         text: {
-          text: 'Payment not sent. Your wallet has insufficient funds. <https://wallet.tempo.xyz|Add funds> and try again.',
+          text: 'Payment not sent. Your wallet has insufficient funds.',
           type: 'mrkdwn',
         },
         type: 'section',
+      },
+      {
+        elements: [
+          {
+            style: 'primary',
+            text: { text: 'Add funds', type: 'plain_text' },
+            type: 'button',
+            url: 'https://wallet.tempo.xyz',
+          },
+          {
+            action_id: 'connect_cancel',
+            text: { text: 'Cancel', type: 'plain_text' },
+            type: 'button',
+          },
+        ],
+        type: 'actions',
+      },
+      {
+        elements: [{ text: 'Add funds on https://wallet.tempo.xyz', type: 'mrkdwn' }],
+        type: 'context',
       },
     ])
     handleTipRequest.mockRestore()
@@ -341,9 +359,7 @@ describe('/tip @account', () => {
     const response = await postSlashCommand(`<@${Constants.slack.memberUserId}>`, { triggerId })
 
     expect(response.status).toBe(200)
-    await expectSlackMessage(
-      'Payment not sent. Your wallet has insufficient funds. Add funds and try again.',
-    )
+    await expectSlackMessage('Payment not sent. Your wallet has insufficient funds.')
   })
 
   test('handles recorded tip without transaction', async () => {
@@ -529,6 +545,31 @@ test('@Tipbot mention shows confirmation action when approval is required', asyn
   expect(response.status).toBe(200)
   await expectSlackMessage('Tipbot needs your approval to send this payment.')
   await expectSlackThreadMessageNotContaining(messageTs, 'Receipt')
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention shows add funds action when sender has insufficient funds', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  const handleTipRequest = vi.spyOn(Tip, 'handleTipRequest').mockResolvedValue({
+    code: 'insufficient_funds',
+    ok: false,
+  })
+  const messageTs = `1700000009.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}>`,
+  })
+
+  expect(response.status).toBe(200)
+  await expectSlackPostEphemeralCall(
+    fetchSpy,
+    'Payment not sent. Your wallet has insufficient funds.',
+  )
+  await expectSlackPostEphemeralCall(fetchSpy, 'Add funds on https://wallet.tempo.xyz')
+  await expectSlackPostEphemeralCall(fetchSpy, '"url":"https://wallet.tempo.xyz"')
+  await expectSlackAssistantStatusCall(fetchSpy, messageTs, '')
+  handleTipRequest.mockRestore()
+  fetchSpy.mockRestore()
 }, 20_000) // 20 seconds
 
 test('@Tipbot mention clears assistant status after payment failure', async () => {

@@ -11,8 +11,7 @@ import { TxEnvelopeTempo } from 'ox/tempo'
 import { KeyAuthorization } from 'ox/tempo'
 import { BaseError, InsufficientFundsError, createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { signTransaction } from 'viem/actions'
-import { Account as TempoAccount, Actions, Transaction } from 'viem/tempo'
+import { Account as TempoAccount, Actions } from 'viem/tempo'
 import { getNodeError } from 'viem/utils'
 
 export type TipResult =
@@ -274,7 +273,7 @@ export async function getConfirmationTransactionRequest(env: Env, token: string)
   const recipient = await getConnectedMember(db, workspace.id, payload.recipientProviderUserId)
   if (!recipient) throw new Error('Recipient needs to connect Tipbot before receiving payments.')
 
-  return createSignedTransactionRequest(env, payload, sender, recipient)
+  return createSignedTransactionRequest(payload, sender, recipient)
 }
 
 export async function confirmTipRequest(
@@ -744,7 +743,7 @@ async function submitSignedTip(
   )
   if (existing) return existing
 
-  validateSignedTransaction(env, input)
+  validateSignedTransaction(input)
   const id = Nanoid.generate()
   const sponsorshipMemo = await createSponsorshipMemo(env, {
     amount: input.payload.amount,
@@ -781,7 +780,6 @@ async function submitSignedTip(
     .execute()
 
   try {
-    const feePayerPrivateKey = Tempo.getFeePayerPrivateKey(env, input.workspace.chain_id)
     const client = createClient({
       chain: Tempo.getChain(input.workspace.chain_id),
       transport: http(Tempo.getRpcUrl(env, input.workspace.chain_id)),
@@ -792,21 +790,9 @@ async function submitSignedTip(
     })
     if (balance < BigInt(input.payload.amount)) throw new InsufficientFundsError()
 
-    const rawTransaction = await (async () => {
-      if (!feePayerPrivateKey) return input.signedTransaction
-      const transaction = TxEnvelopeTempo.deserialize(input.signedTransaction as `0x76${string}`)
-      if (!transaction.signature || !transaction.from)
-        throw new Error('Payment approval is invalid.')
-      const feePayer = privateKeyToAccount(feePayerPrivateKey)
-      return (await signTransaction(client, {
-        ...Transaction.deserialize(input.signedTransaction),
-        account: feePayer,
-        feePayer,
-      } as never)) as `0x${string}`
-    })()
     const receipt = (await client.request({
       method: 'eth_sendRawTransactionSync' as never,
-      params: [rawTransaction] as never,
+      params: [input.signedTransaction] as never,
     })) as { status: `0x${string}`; transactionHash?: `0x${string}` }
     if (receipt.status !== '0x1' || !receipt.transactionHash)
       throw new Error('Tempo transaction failed.')
@@ -828,7 +814,7 @@ async function submitSignedTip(
     return {
       amount: formatAmount(input.payload.amount),
       chainId: input.workspace.chain_id,
-      feePayer: feePayerPrivateKey ? 'sponsor' : 'sender',
+      feePayer: 'sender',
       isDefaultToken: Address.isEqual(
         Address.checksum(input.tokenAddress),
         Address.checksum(input.workspace.default_token_address ?? Tempo.addressLookup.pathUsd),
@@ -859,7 +845,6 @@ async function submitSignedTip(
 }
 
 function createSignedTransactionRequest(
-  env: Env,
   payload: Confirmation.Payload,
   sender: ConnectedMember,
   recipient: ConnectedMember,
@@ -873,26 +858,21 @@ function createSignedTransactionRequest(
   return {
     calls: [{ data: call.data, to: call.to }],
     chainId: payload.chainId,
-    ...(Tempo.getFeePayerPrivateKey(env, payload.chainId)
-      ? { feePayer: true }
-      : { feeToken: Address.checksum(payload.tokenAddress) }),
+    feeToken: Address.checksum(payload.tokenAddress),
     from: sender.account.address,
   }
 }
 
-function validateSignedTransaction(
-  env: Env,
-  input: {
-    address: string
-    payload: Confirmation.Payload
-    recipient: ConnectedMember
-    sender: ConnectedMember
-    signedTransaction: `0x${string}`
-    tokenAddress: string
-  },
-) {
+function validateSignedTransaction(input: {
+  address: string
+  payload: Confirmation.Payload
+  recipient: ConnectedMember
+  sender: ConnectedMember
+  signedTransaction: `0x${string}`
+  tokenAddress: string
+}) {
   const transaction = TxEnvelopeTempo.deserialize(input.signedTransaction as `0x76${string}`)
-  const expected = createSignedTransactionRequest(env, input.payload, input.sender, input.recipient)
+  const expected = createSignedTransactionRequest(input.payload, input.sender, input.recipient)
   const call = transaction.calls[0]
   const expectedCall = expected.calls[0]
   if (
@@ -914,9 +894,7 @@ function validateSignedTransaction(
     throw new Error('Payment approval is invalid.')
   if (call.value && call.value !== 0n) throw new Error('Payment approval is invalid.')
   if (transaction.keyAuthorization) throw new Error('Payment approval is invalid.')
-  if (Tempo.getFeePayerPrivateKey(env, input.payload.chainId)) {
-    if (transaction.feePayerSignature !== null) throw new Error('Payment approval is invalid.')
-  } else if (transaction.feePayerSignature) throw new Error('Payment approval is invalid.')
+  if (transaction.feePayerSignature) throw new Error('Payment approval is invalid.')
 }
 
 function supportsTransferMemo(

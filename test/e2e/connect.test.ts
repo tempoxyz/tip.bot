@@ -70,24 +70,94 @@ test('slack member connects wallet from slack', async ({ app, db, page, request 
     ])
     .where('account_link_token.token_hash', '=', await AccountLink.hashToken(app.env, token))
     .executeTakeFirstOrThrow()
-  const accessKey = await db
-    .selectFrom('access_key')
-    .selectAll()
-    .where('account_id', '=', link.account_id)
-    .where('address', '=', link.access_key_address)
-    .executeTakeFirstOrThrow()
 
   expect(link.account_address).toBe(root.address)
   expect(link.access_key_authorization).toEqual(expect.any(String))
   expect(link.link_account_id).toBe(link.account_id)
   expect(link.member_account_id).toBe(link.account_id)
   expect(link.used_at).toEqual(expect.any(String))
-  expect(accessKey.authorization).toBe(link.access_key_authorization)
-  expect(accessKey.revoked_at).toBe(null)
-  expect(accessKey.token_address).toBe(Tempo.addressLookup.pathUsd)
 
   await page.goto(app.url({ params: { token }, to: '/connect/$token' }))
   await expect(page.getByText('This connection link is invalid or expired.')).toBeVisible()
+})
+
+test('slack member connects another link while wallet is already connected', async ({
+  app,
+  db,
+  factory,
+  page,
+}) => {
+  const firstAccessKey = AccessKey.generate()
+  const firstToken = crypto.randomUUID()
+  const firstTokenHash = await AccountLink.hashToken(app.env, firstToken)
+  const root = Account.fromSecp256k1(
+    '0x0000000000000000000000000000000000000000000000000000000000000001',
+  )
+  const secondAccessKey = AccessKey.generate()
+  const secondToken = crypto.randomUUID()
+  const secondTokenHash = await AccountLink.hashToken(app.env, secondToken)
+  const workspace = await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    provider_id: `T${crypto.randomUUID()}`,
+  })
+  const member = await factory.member.insert({
+    provider_user_id: `U${crypto.randomUUID()}`,
+    workspace_id: workspace.id,
+  })
+  await factory.account_link_token.insert(
+    {
+      access_key_address: firstAccessKey.address,
+      access_key_ciphertext: await AccessKey.encrypt(app.env, firstAccessKey.privateKey),
+      access_key_expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
+      access_key_public_key: firstAccessKey.publicKey,
+      member_id: member.id,
+      token_hash: firstTokenHash,
+    },
+    {
+      access_key_address: secondAccessKey.address,
+      access_key_ciphertext: await AccessKey.encrypt(app.env, secondAccessKey.privateKey),
+      access_key_expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
+      access_key_public_key: secondAccessKey.publicKey,
+      member_id: member.id,
+      token_hash: secondTokenHash,
+    },
+  )
+
+  const walletConnectTimeoutMs = 15_000 // 15 seconds
+  await page.goto(app.url({ params: { token: firstToken }, to: '/connect/$token' }))
+  await page.waitForLoadState('networkidle')
+  await page.getByRole('button', { name: 'Connect' }).click()
+  await expect(page.getByRole('heading', { name: 'Connected to Tipbot' })).toBeVisible({
+    timeout: walletConnectTimeoutMs,
+  })
+
+  await page.goto(app.url({ params: { token: secondToken }, to: '/connect/$token' }))
+  await page.waitForLoadState('networkidle')
+  await page.getByRole('button', { name: 'Connect' }).click()
+  await expect(page.getByRole('heading', { name: 'Connected to Tipbot' })).toBeVisible({
+    timeout: walletConnectTimeoutMs,
+  })
+
+  const links = await db
+    .selectFrom('account_link_token')
+    .select(['access_key_authorization', 'account_id', 'token_hash', 'used_at'])
+    .where('token_hash', 'in', [firstTokenHash, secondTokenHash])
+    .execute()
+  const firstLink = links.find((link) => link.token_hash === firstTokenHash)
+  const secondLink = links.find((link) => link.token_hash === secondTokenHash)
+  const account = await db
+    .selectFrom('account')
+    .selectAll()
+    .where('address', '=', root.address)
+    .executeTakeFirstOrThrow()
+
+  expect(links).toHaveLength(2)
+  expect(firstLink?.account_id).toBe(account.id)
+  expect(firstLink?.access_key_authorization).toEqual(expect.any(String))
+  expect(firstLink?.used_at).toEqual(expect.any(String))
+  expect(secondLink?.account_id).toBe(account.id)
+  expect(secondLink?.access_key_authorization).toEqual(expect.any(String))
+  expect(secondLink?.used_at).toEqual(expect.any(String))
 })
 
 test('slack member can disconnect an existing member and connect wallet', async ({
@@ -152,16 +222,17 @@ test('slack member can disconnect an existing member and connect wallet', async 
     .selectAll()
     .where('id', '=', duplicateMember.id)
     .executeTakeFirstOrThrow()
-  const storedAccessKey = await db
-    .selectFrom('access_key')
-    .selectAll()
-    .where('account_id', '=', account.id)
-    .where('address', '=', accessKey.address)
+  const link = await db
+    .selectFrom('account_link_token')
+    .select(['access_key_authorization', 'account_id', 'used_at'])
+    .where('token_hash', '=', await AccountLink.hashToken(app.env, token))
     .executeTakeFirstOrThrow()
 
   expect(updatedCurrentMember.account_id).toBe(account.id)
   expect(updatedDuplicateMember.account_id).toBe(null)
-  expect(storedAccessKey.authorization).toEqual(expect.any(String))
+  expect(link.account_id).toBe(account.id)
+  expect(link.access_key_authorization).toEqual(expect.any(String))
+  expect(link.used_at).toEqual(expect.any(String))
 })
 
 async function getConnectToken(app: { slackUrl: string }) {

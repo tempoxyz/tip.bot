@@ -2,7 +2,6 @@ import { Provider, dangerous_secp256k1 } from 'accounts'
 import { WebClient } from '@slack/web-api'
 import { env } from 'cloudflare:workers'
 import { testClient } from 'hono/testing'
-import { http as mswHttp, HttpResponse } from 'msw'
 import { Address, Secp256k1 } from 'ox'
 import { http, toHex } from 'viem'
 import { Account } from 'viem/tempo'
@@ -19,7 +18,6 @@ import * as DB from '#db/client.ts'
 import * as Schema from '#db/schemas.gen.ts'
 import * as Constants from '#test/constants.ts'
 import * as Factory from '#test/factory.ts'
-import { server as mswServer } from '#test/workers.server.ts'
 
 let apiChannelId = ''
 let waitUntil: Promise<unknown>[] = []
@@ -462,35 +460,6 @@ describe('/api/confirm/:token', () => {
     fetchSpy.mockRestore()
   }, 20_000) // 20 seconds
 
-  test('confirms one-time payments without fetching the public relay URL during submit', async () => {
-    const confirmation = await createConfirmationToken({
-      amount: 1,
-      memo: `internal-relay-${Nanoid.generate()}`,
-    })
-    const signedTransaction = await signConfirmationTransaction(confirmation)
-    mswServer.use(
-      mswHttp.all(`https://${env.HOST}/api/relay/:chainId`, () =>
-        HttpResponse.json({ code: 'relay_blocked_for_regression_test' }, { status: 522 }),
-      ),
-    )
-
-    const response = await client.api.confirm[':token'].$post({
-      json: { address: confirmation.senderRoot.address, signedTransaction },
-      param: { token: confirmation.token },
-    })
-    await Promise.all(waitUntil)
-    const tip = await db
-      .selectFrom('tip')
-      .selectAll()
-      .where('idempotency_key', '=', confirmation.payload.idempotencyKey)
-      .executeTakeFirstOrThrow()
-
-    expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toMatchObject({ ok: true })
-    expect(tip.confirmed_at).toEqual(expect.any(String))
-    expect(tip.transaction_hash).toEqual(expect.any(String))
-  }, 20_000) // 20 seconds
-
   test('confirms reusable access keys', async () => {
     const confirmation = await createConfirmationToken({
       amount: 1,
@@ -835,7 +804,6 @@ async function signConfirmationTransaction(
         rpcUrls: { default: { http: [env.RPC_URL_TESTNET!] } },
       },
     ],
-    feePayer: json.relayUrl,
     transports: { [confirmation.payload.chainId]: http(env.RPC_URL_TESTNET) },
   })
   await provider.request({

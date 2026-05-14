@@ -44,7 +44,7 @@ function Component() {
     )
 
   return (
-    <WalletProviders.Root feePayer={data.kind === 'onetime_payment' ? data.relayUrl : undefined}>
+    <WalletProviders.Root>
       <ConfirmPanel data={data} token={params.token} />
     </WalletProviders.Root>
   )

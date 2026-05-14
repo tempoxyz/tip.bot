@@ -807,11 +807,11 @@ async function handleTipText(
           return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
         if (result.code === 'pending') return 'Payment still sending.'
         if (result.code === 'insufficient_funds')
-          return 'Payment not sent. Your wallet has insufficient funds. Add funds and try again.'
+          return 'Payment not sent. Your wallet has insufficient funds.'
         return 'Payment failed.'
       })()
       if (result.code === 'insufficient_funds') {
-        await postSlackInsufficientFunds(event, ctx, message, options.threadTs)
+        await postSlackInsufficientFunds(event, ctx, options.threadTs)
         return
       }
       if (
@@ -1363,23 +1363,38 @@ async function postInvalidUsage(
   if (!json.ok) throw Slack.slackApiError('chat.postEphemeral', json.error)
 }
 
-async function postSlackInsufficientFunds(
-  event: TipEvent,
-  ctx: HandlerContext,
-  message: string,
-  threadTs?: string,
-) {
+async function postSlackInsufficientFunds(event: TipEvent, ctx: HandlerContext, threadTs?: string) {
   const installation = await getSlack().getInstallation(ctx.provider.id)
   if (!installation) throw new Error('Tibot app not installed for this workspace.')
 
-  const linkedText = message.replace('Add funds', '<https://wallet.tempo.xyz|Add funds>')
+  const message = 'Payment not sent. Your wallet has insufficient funds.'
   const body = new URLSearchParams()
   body.set(
     'blocks',
     JSON.stringify([
       {
-        text: { text: linkedText, type: 'mrkdwn' },
+        text: { text: message, type: 'mrkdwn' },
         type: 'section',
+      },
+      {
+        elements: [
+          {
+            style: 'primary',
+            text: { text: 'Add funds', type: 'plain_text' },
+            type: 'button',
+            url: 'https://wallet.tempo.xyz',
+          },
+          {
+            action_id: 'connect_cancel',
+            text: { text: 'Cancel', type: 'plain_text' },
+            type: 'button',
+          },
+        ],
+        type: 'actions',
+      },
+      {
+        elements: [{ text: 'Add funds on https://wallet.tempo.xyz', type: 'mrkdwn' }],
+        type: 'context',
       },
     ]),
   )
