@@ -505,7 +505,7 @@ describe('/api/confirm/:token', () => {
     expect(
       replies.messages?.some((message) =>
         message.text?.includes(
-          `<@${Constants.slack.memberUserId}> received a tip on <https://slack.com/app_redirect?channel=${apiChannelId}&message_ts=${parent.ts}&team=${confirmation.payload.providerId}|this> message:\n\n• <@${Constants.slack.adminUserId}> tipped $5.00 · <`,
+          `<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${confirmation.payload.providerId}&id=${apiChannelId}&message=${parent.ts}|this> message:\n\n• <@${Constants.slack.adminUserId}> tipped $5.00 · <`,
         ),
       ),
       JSON.stringify(replies.messages),

@@ -1067,7 +1067,10 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
     )
     return
   }
-  if (message.bot_id || message.subtype) {
+  if (
+    message.bot_id ||
+    (message.subtype && !['reply_broadcast', 'thread_broadcast'].includes(message.subtype))
+  ) {
     await postSlackEphemeral(
       provider.id,
       event.item.channel,
@@ -1380,18 +1383,18 @@ export async function updateReactionTipAggregate(
   )
   const text = (() => {
     if (messageGroups.length === 1) {
-      const reactedMessageUrl = new URL('https://slack.com/app_redirect')
-      reactedMessageUrl.searchParams.set('channel', options.channelId)
-      reactedMessageUrl.searchParams.set('message_ts', messageGroups[0]!.messageTs)
+      const reactedMessageUrl = new URL('slack://channel')
       reactedMessageUrl.searchParams.set('team', providerId)
+      reactedMessageUrl.searchParams.set('id', options.channelId)
+      reactedMessageUrl.searchParams.set('message', messageGroups[0]!.messageTs)
       return `<@${messageGroups[0]!.recipientProviderUserId}> received ${rowTexts.length === 1 ? 'a tip' : 'tips'} on <${reactedMessageUrl}|this> message:\n\n${messageGroups[0]!.lines.join('\n')}`
     }
     return `Tips received in this thread:\n\n${messageGroups
       .map((group) => {
-        const reactedMessageUrl = new URL('https://slack.com/app_redirect')
-        reactedMessageUrl.searchParams.set('channel', options.channelId)
-        reactedMessageUrl.searchParams.set('message_ts', group.messageTs)
+        const reactedMessageUrl = new URL('slack://channel')
         reactedMessageUrl.searchParams.set('team', providerId)
+        reactedMessageUrl.searchParams.set('id', options.channelId)
+        reactedMessageUrl.searchParams.set('message', group.messageTs)
         return `<@${group.recipientProviderUserId}> received ${group.lines.length === 1 ? 'a tip' : 'tips'} on <${reactedMessageUrl}|this> message:\n${group.lines.join('\n')}`
       })
       .join('\n\n')}`

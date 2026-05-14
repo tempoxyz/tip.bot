@@ -970,10 +970,82 @@ test('reaction tipping sends default tip and updates aggregate thread reply', as
   expect(tips[0]).toMatchObject({ amount: 1000, confirmed_at: expect.any(String) })
   await expectSlackThreadMessage(
     message.ts,
-    `<@${Constants.slack.memberUserId}> received a tip on <https://slack.com/app_redirect?channel=${channelId}&message_ts=${message.ts}&team=${providerId}|this> message:\n\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
+    `<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this> message:\n\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
     { channelId },
   )
 })
+
+for (const subtype of ['thread_broadcast', 'reply_broadcast']) {
+  test(`reaction tipping supports ${subtype} messages`, async () => {
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    await connectTipAccounts()
+    const channelId = await createSlackTestChannel('rt')
+    const parent = await memberSlack.chat.postMessage({
+      channel: channelId,
+      text: 'broadcast parent',
+    })
+    if (!parent.ts) throw new Error('Expected Slack parent message timestamp.')
+    const reply = await memberSlack.chat.postMessage({
+      channel: channelId,
+      text: `${subtype} reply`,
+      thread_ts: parent.ts,
+    })
+    if (!reply.ts) throw new Error('Expected Slack reply message timestamp.')
+    fetchSpy.mockImplementation((input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      const params = slackFetchBodyParams(init?.body)
+      if (url.endsWith('/conversations.replies') && params.get('ts') === reply.ts)
+        return Promise.resolve(
+          Response.json({
+            messages: [
+              {
+                subtype,
+                thread_ts: parent.ts,
+                ts: reply.ts,
+                user: Constants.slack.memberUserId,
+              },
+            ],
+            ok: true,
+          }),
+        )
+      return originalFetch(input, init)
+    })
+
+    const response = await postSlackReaction({
+      channelId,
+      messageTs: reply.ts,
+      reaction: 'money_with_wings',
+      userId: Constants.slack.adminUserId,
+    })
+    let reactionTip = await db
+      .selectFrom('reaction_tip')
+      .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
+      .selectAll('reaction_tip')
+      .where('workspace.provider_id', '=', providerId)
+      .executeTakeFirst()
+    for (let index = 0; index < 20 && !reactionTip; index++) {
+      await new Promise((resolve) => setTimeout(resolve, 10)) // 10 milliseconds
+      reactionTip = await db
+        .selectFrom('reaction_tip')
+        .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
+        .selectAll('reaction_tip')
+        .where('workspace.provider_id', '=', providerId)
+        .executeTakeFirst()
+    }
+
+    expect(response.status).toBe(200)
+    expect(reactionTip).toMatchObject({ message_ts: reply.ts, thread_ts: parent.ts })
+    expect(
+      fetchSpy.mock.calls.some((call) =>
+        slackFetchBodyParams(call[1]?.body)
+          .get('text')
+          ?.includes('Reaction tips only work on regular account messages'),
+      ),
+    ).toBe(false)
+    fetchSpy.mockRestore()
+  }, 20_000) // 20 seconds
+}
 
 test('reaction tipping updates one aggregate reply for multiple tipped messages in a thread', async () => {
   const connected = await connectTipAccounts()
@@ -1059,10 +1131,10 @@ test('reaction tipping updates one aggregate reply for multiple tipped messages 
 
   expect(aggregates, JSON.stringify(thread.messages)).toHaveLength(1)
   expect(aggregates?.[0]?.text).toContain(
-    `<@${Constants.slack.memberUserId}> received a tip on <https://slack.com/app_redirect?channel=${channelId}&message_ts=${parent.ts}&team=${providerId}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
+    `<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${parent.ts}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
   )
   expect(aggregates?.[0]?.text).toContain(
-    `<@${Constants.slack.memberUserId}> received a tip on <https://slack.com/app_redirect?channel=${channelId}&message_ts=${reply.ts}&team=${providerId}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
+    `<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${reply.ts}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
   )
 })
 
