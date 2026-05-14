@@ -438,6 +438,7 @@ describe('/tip @account', () => {
 })
 
 test('@Tipbot mention sends tip in thread', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
   await connectTipAccounts()
   const messageTs = `1700000000.${Nanoid.generate().slice(0, 6)}`
 
@@ -462,6 +463,7 @@ test('@Tipbot mention sends tip in thread', async () => {
     .executeTakeFirstOrThrow()
 
   expect(response.status).toBe(200)
+  await expectSlackAssistantStatusCall(fetchSpy, messageTs, 'is sending a tip', ['Sending tip'])
   await expectSlackThreadMessage(
     messageTs,
     `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 Receipt`,
@@ -474,6 +476,7 @@ test('@Tipbot mention sends tip in thread', async () => {
   })
   expect(tip.confirmed_at).toEqual(expect.any(String))
   expect(tip.transaction_hash).toEqual(expect.any(String))
+  fetchSpy.mockRestore()
 }, 20_000) // 20 seconds
 
 test('@Tipbot mention introduces itself', async () => {
@@ -1910,6 +1913,7 @@ async function expectSlackAssistantStatusCall(
   fetchSpy: { mock: { calls: Parameters<typeof fetch>[] } },
   threadTs: string,
   status: string,
+  loadingMessages?: readonly string[],
 ) {
   await expect
     .poll(
@@ -1924,8 +1928,12 @@ async function expectSlackAssistantStatusCall(
             params.get('channel_id') === Constants.slack.channelId &&
             params.get('status') === status &&
             params.get('thread_ts') === threadTs
-          )
-            return true
+          ) {
+            if (!loadingMessages) return true
+            const parsedLoadingMessages = parseSlackLoadingMessages(params.get('loading_messages'))
+            if (JSON.stringify(parsedLoadingMessages) === JSON.stringify(loadingMessages))
+              return true
+          }
         }
         return false
       },
@@ -1942,6 +1950,18 @@ async function expectSlackAssistantStatusCall(
       },
     )
     .toBe(true)
+}
+
+function parseSlackLoadingMessages(value: string | null) {
+  if (!value) return []
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (Array.isArray(parsed) && parsed.every((message) => typeof message === 'string'))
+      return parsed
+  } catch {
+    return []
+  }
+  return []
 }
 
 async function slackFetchCallBodyParams(call: Parameters<typeof fetch>) {

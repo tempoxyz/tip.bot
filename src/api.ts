@@ -256,15 +256,12 @@ export const api = new Hono<{
                   {
                     card: chat.Card({
                       children: [
-                        chat.CardText(
-                          `Wallet connected: \`${truncatedAddress}\` <${explorerUrl}|View>`,
-                        ),
+                        chat.CardText(`Connected \`${truncatedAddress}\` <${explorerUrl}|View>`),
                         chat.CardText(
                           `Mention \`@Tipbot @user\` or use \`/tip @user\` to send a payment. React with :${link.reaction_tip_emoji}: to tip a message.`,
                           { style: 'muted' },
                         ),
                       ],
-                      title: 'Connected',
                     }),
                     fallbackText: `Connected\nWallet: ${account.address}\nUse /tip @user to send your first tip.`,
                   },

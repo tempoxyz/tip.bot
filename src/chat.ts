@@ -87,7 +87,6 @@ export function getChat() {
       idempotencyKey: `mention:${providerId}:${raw.channel}:${raw.ts}`,
       insufficientFundsThreadTs: raw.thread_ts,
       mention: true,
-      thread,
       threadTs,
     })
   })
@@ -724,7 +723,6 @@ async function handleTipText(
     idempotencyKey: string
     insufficientFundsThreadTs?: string
     mention?: boolean
-    thread?: chat.Thread
     threadTs?: string
   },
 ) {
@@ -752,7 +750,12 @@ async function handleTipText(
     return
   }
 
-  void options.thread?.startTyping('Sending payment')
+  if (options.threadTs)
+    void setSlackAssistantThreadStatus(event, ctx, options.threadTs, 'is sending a tip', {
+      loadingMessages: ['Sending tip'],
+    }).catch(() => {
+      // Best effort only. Payment flow must not depend on Slack assistant UI.
+    })
   try {
     const result = await Tip.handleTipRequest(env, {
       amount: parsed.amount,
@@ -873,26 +876,36 @@ async function handleTipText(
       else await event.channel.postEphemeral(event.user, message, { fallbackToDM: false })
     }
   } finally {
-    // Clear Slack's assistant thread status ("Sending payment") after this request
-    // finishes or hands off to confirmation.
+    // Clear Slack's assistant thread status after this request finishes or hands off to
+    // confirmation.
     if (options.threadTs)
-      try {
-        const installation = await getSlack().getInstallation(ctx.provider.id)
-        if (installation) {
-          const body = new URLSearchParams()
-          body.set('channel_id', event.channel.id.replace(/^slack:/, ''))
-          body.set('thread_ts', options.threadTs)
-          body.set('status', '')
-          await fetch(`${env.SLACK_API_URL}/assistant.threads.setStatus`, {
-            body,
-            headers: { authorization: `Bearer ${installation.botToken}` },
-            method: 'POST',
-          })
-        }
-      } catch {
+      await setSlackAssistantThreadStatus(event, ctx, options.threadTs, '').catch(() => {
         // Best effort only. Payment/error flow must not depend on Slack assistant UI cleanup.
-      }
+      })
   }
+}
+
+async function setSlackAssistantThreadStatus(
+  event: TipEvent,
+  ctx: HandlerContext,
+  threadTs: string,
+  status: string,
+  options?: { loadingMessages?: readonly string[] },
+) {
+  const installation = await getSlack().getInstallation(ctx.provider.id)
+  if (!installation) return
+
+  const body = new URLSearchParams()
+  body.set('channel_id', event.channel.id.replace(/^slack:/, ''))
+  if (options?.loadingMessages)
+    body.set('loading_messages', JSON.stringify(options.loadingMessages))
+  body.set('status', status)
+  body.set('thread_ts', threadTs)
+  await fetch(`${env.SLACK_API_URL}/assistant.threads.setStatus`, {
+    body,
+    headers: { authorization: `Bearer ${installation.botToken}` },
+    method: 'POST',
+  })
 }
 
 async function handleSlackReactionTip(event: SlackReactionEvent, context: ReactionHandlerContext) {
