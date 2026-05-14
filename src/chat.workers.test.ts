@@ -418,7 +418,8 @@ test('reaction tipping ignores duplicate signed Slack event deliveries', async (
   expect(tips).toHaveLength(1)
 })
 
-test('reaction tipping silently ignores unknown sender', async () => {
+test('reaction tipping reports unconnected sender', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
   await connectTipAccounts()
   const message = await memberSlack.chat.postMessage({
     channel: Constants.slack.channelId,
@@ -440,10 +441,16 @@ test('reaction tipping silently ignores unknown sender', async () => {
 
   expect(response.status).toBe(200)
   expect(reactionTips).toHaveLength(0)
+  await expectSlackPostEphemeralCall(
+    fetchSpy,
+    'Payment not sent. Connect to Tipbot with `/tip connect` and try again.',
+  )
   await expectSlackThreadMessageNotContaining(message.ts, 'tipped')
+  fetchSpy.mockRestore()
 })
 
-test('reaction tipping silently ignores unconnected recipient', async () => {
+test('reaction tipping reports unconnected recipient', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
   await connectTipAccounts({ recipient: false })
   const message = await memberSlack.chat.postMessage({
     channel: Constants.slack.channelId,
@@ -465,10 +472,16 @@ test('reaction tipping silently ignores unconnected recipient', async () => {
 
   expect(response.status).toBe(200)
   expect(reactionTips).toHaveLength(0)
+  await expectSlackPostEphemeralCall(
+    fetchSpy,
+    `Payment not sent. <@${Constants.slack.memberUserId}> needs to connect Tipbot before receiving payments.`,
+  )
   await expectSlackThreadMessageNotContaining(message.ts, 'tipped')
+  fetchSpy.mockRestore()
 })
 
-test('reaction tipping silently ignores approval required', async () => {
+test('reaction tipping reports approval required', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
   await connectTipAccounts()
   await db.deleteFrom('access_key').execute()
   const message = await memberSlack.chat.postMessage({
@@ -498,7 +511,9 @@ test('reaction tipping silently ignores approval required', async () => {
   expect(response.status).toBe(200)
   expect(reactionTips).toHaveLength(0)
   expect(tips).toHaveLength(0)
+  await expectSlackPostEphemeralCall(fetchSpy, 'Tipbot needs your approval to send this payment.')
   await expectSlackThreadMessageNotContaining(message.ts, 'tipped')
+  fetchSpy.mockRestore()
 }, 20_000) // 20 seconds
 
 describe('/tip config', () => {
@@ -515,8 +530,8 @@ describe('/tip config', () => {
     await expectSlackMessage('PathUSD')
     await expectSlackMessage('Default amount')
     await expectSlackMessage('0.001')
-    await expectSlackMessage('Tip reaction emoji')
-    await expectSlackMessage('money_with_wings')
+    await expectSlackMessage('Reaction')
+    await expectSlackMessage('💸 `:money_with_wings:`')
   })
 
   test('handles missing workspace', async () => {
@@ -1261,6 +1276,37 @@ async function expectSlackPublicMessage(text: string) {
     ),
     JSON.stringify(history.messages),
   ).toBe(true)
+}
+
+async function expectSlackPostEphemeralCall(
+  fetchSpy: { mock: { calls: Parameters<typeof fetch>[] } },
+  text: string,
+) {
+  await expect
+    .poll(
+      () =>
+        fetchSpy.mock.calls.some((call) => {
+          const input = call[0]
+          const url =
+            typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+          return (
+            url.endsWith('/chat.postEphemeral') &&
+            call[1]?.body instanceof URLSearchParams &&
+            call[1].body.get('text')?.includes(text)
+          )
+        }),
+      {
+        message: fetchSpy.mock.calls
+          .map((call) => {
+            const input = call[0]
+            const url =
+              typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+            return `${url} ${call[1]?.body instanceof URLSearchParams ? call[1].body.get('text') : ''}`
+          })
+          .join('\n'),
+      },
+    )
+    .toBe(true)
 }
 
 async function findSlackMessageTs(text: string) {

@@ -881,15 +881,55 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
     }
     return { thread_ts: event.item.ts, user: event.item_user }
   })()
-  if (!message?.user) return
-  if (message.bot_id || message.subtype) return
+  if (!message?.user) {
+    await postSlackEphemeral(
+      provider.id,
+      event.item.channel,
+      event.user,
+      'Payment not sent. I could not find the message author.',
+    )
+    return
+  }
+  if (message.bot_id || message.subtype) {
+    await postSlackEphemeral(
+      provider.id,
+      event.item.channel,
+      event.user,
+      'Payment not sent. Reaction tips only work on regular account messages.',
+    )
+    return
+  }
   const recipientProviderUserId = event.item_user ?? message.user
-  if (recipientProviderUserId === event.user) return
+  if (recipientProviderUserId === event.user) {
+    await postSlackEphemeral(
+      provider.id,
+      event.item.channel,
+      event.user,
+      'Payment not sent. Cannot send a payment to yourself.',
+    )
+    return
+  }
 
   const sender = await getConnectedSlackMember(db, workspace.id, event.user)
-  if (!sender) return
+  if (!sender) {
+    await postSlackEphemeral(
+      provider.id,
+      event.item.channel,
+      event.user,
+      'Payment not sent. Connect to Tipbot with `/tip connect` and try again.',
+    )
+    return
+  }
   const recipient = await getConnectedSlackMember(db, workspace.id, recipientProviderUserId)
-  if (!recipient) return
+  if (!recipient) {
+    await postSlackEphemeral(
+      provider.id,
+      event.item.channel,
+      event.user,
+      `Payment not sent. <@${recipientProviderUserId}> needs to connect Tipbot before receiving payments.`,
+    )
+    return
+  }
 
   const existing = await db
     .selectFrom('reaction_tip')
@@ -982,10 +1022,78 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
 
   if (result.code === 'confirmation_required' && result.confirmUrl) {
     await db.deleteFrom('reaction_tip').where('idempotency_key', '=', idempotencyKey).execute()
+    await postSlackEphemeral(
+      provider.id,
+      event.item.channel,
+      event.user,
+      `Tipbot needs your approval to send this payment. Confirm payment: ${result.confirmUrl}`,
+      {
+        blocks: [
+          {
+            text: { text: 'Tipbot needs your approval to send this payment.', type: 'mrkdwn' },
+            type: 'section',
+          },
+          {
+            elements: [
+              {
+                style: 'primary',
+                text: { text: 'Confirm payment', type: 'plain_text' },
+                type: 'button',
+                url: result.confirmUrl,
+              },
+            ],
+            type: 'actions',
+          },
+        ],
+      },
+    )
     return
   }
 
   await db.deleteFrom('reaction_tip').where('idempotency_key', '=', idempotencyKey).execute()
+  await postSlackEphemeral(
+    provider.id,
+    event.item.channel,
+    event.user,
+    (() => {
+      if (result.code === 'insufficient_funds')
+        return 'Payment not sent. Your wallet has insufficient funds. Add funds and try again.'
+      if (result.code === 'pending') return 'Payment still sending.'
+      return 'Payment failed.'
+    })(),
+  )
+}
+
+async function postSlackEphemeral(
+  providerId: string,
+  channelId: string,
+  userId: string,
+  text: string,
+  options?: { blocks?: unknown[] },
+) {
+  const installation = await getSlack().getInstallation(providerId)
+  if (!installation) return
+
+  const body = new URLSearchParams()
+  if (options?.blocks) body.set('blocks', JSON.stringify(options.blocks))
+  body.set('channel', channelId)
+  body.set('text', text)
+  body.set('user', userId)
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
+      body,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok) throw Slack.slackApiError('chat.postEphemeral', json.error)
 }
 
 function getProvider(event: chat.SlashCommandEvent): ProviderContext {
@@ -1408,7 +1516,7 @@ function configCard(
             ['Network', networkLabel],
             ['Default token', token.symbol],
             ['Default amount', formatAmount(workspace.default_amount)],
-            ['Tip reaction emoji', workspace.reaction_tip_emoji],
+            ['Reaction', `💸 \`:${workspace.reaction_tip_emoji}:\``],
           ],
         }),
         ...(options?.canEdit
@@ -1426,7 +1534,7 @@ function configCard(
         ...(options?.updated ? [chat.CardText('Workspace settings updated')] : []),
       ],
     }),
-    fallbackText: `Network ${networkLabel}\nDefault token ${token.symbol} ${Tempo.formatTokenLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}\nTip reaction emoji ${workspace.reaction_tip_emoji}${options?.updated ? '\nWorkspace settings updated' : ''}`,
+    fallbackText: `Network ${networkLabel}\nDefault token ${token.symbol} ${Tempo.formatTokenLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}\nReaction 💸 \`:${workspace.reaction_tip_emoji}:\`${options?.updated ? '\nWorkspace settings updated' : ''}`,
   }
 }
 
