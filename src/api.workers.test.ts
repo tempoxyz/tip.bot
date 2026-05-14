@@ -460,6 +460,58 @@ describe('/api/confirm/:token', () => {
     fetchSpy.mockRestore()
   }, 20_000) // 20 seconds
 
+  test('updates reaction tip aggregate after confirmed payment', async () => {
+    const parent = await slack.chat.postMessage({
+      channel: apiChannelId,
+      text: 'reaction confirmation parent',
+    })
+    if (!parent.ts) throw new Error('Expected Slack parent message timestamp.')
+    const idempotencyKey = `${Chat.reactionTipIdempotencyPrefix}${Nanoid.generate()}`
+    const confirmation = await createConfirmationToken({ idempotencyKey })
+    await Chat.getChat().initialize()
+    await Chat.getSlack().setInstallation(confirmation.payload.providerId, {
+      botToken: Constants.slack.botToken,
+      botUserId: Constants.slack.botUserId,
+      teamName: Constants.slack.teamName,
+    })
+    await factory.reaction_tip.insert({
+      channel_id: apiChannelId,
+      idempotency_key: idempotencyKey,
+      message_ts: parent.ts,
+      reaction: 'money_with_wings',
+      recipient_member_id: confirmation.recipientMember.id,
+      sender_member_id: confirmation.senderMember.id,
+      thread_ts: parent.ts,
+      tip_id: null,
+      workspace_id: confirmation.workspace.id,
+    })
+    const signedTransaction = await signConfirmationTransaction(confirmation)
+
+    const response = await client.api.confirm[':token'].$post({
+      json: { address: confirmation.senderRoot.address, signedTransaction },
+      param: { token: confirmation.token },
+    })
+    await Promise.all(waitUntil)
+    const reactionTip = await db
+      .selectFrom('reaction_tip')
+      .select('tip_id')
+      .where('idempotency_key', '=', idempotencyKey)
+      .executeTakeFirstOrThrow()
+    const replies = await slack.conversations.replies({ channel: apiChannelId, ts: parent.ts })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true })
+    expect(reactionTip.tip_id).toEqual(expect.any(String))
+    expect(
+      replies.messages?.some((message) =>
+        message.text?.includes(
+          `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}>`,
+        ),
+      ),
+      JSON.stringify(replies.messages),
+    ).toBe(true)
+  }, 20_000) // 20 seconds
+
   test('confirms reusable access keys', async () => {
     const confirmation = await createConfirmationToken({
       amount: 1,
@@ -711,6 +763,7 @@ async function createPendingAccountLink(
 async function createConfirmationToken(
   options: {
     amount?: number
+    idempotencyKey?: string
     kind?: Confirmation.Payload['kind']
     memo?: string | null
     providerId?: string
@@ -750,7 +803,7 @@ async function createConfirmationToken(
     amount,
     chainId: Tempo.chainLookup.localnet,
     expiresAt: new Date(Date.now() + AccountLink.confirmationLinkTtlMs).toISOString(), // 10 minutes
-    idempotencyKey: `confirm:${nonce}`,
+    idempotencyKey: options.idempotencyKey ?? `confirm:${nonce}`,
     kind,
     memo: options.memo ?? null,
     nonce,

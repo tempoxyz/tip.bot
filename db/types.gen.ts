@@ -89,6 +89,7 @@ type reaction_tip_thread = {
 }
 
 type tip = {
+  access_key_id: string | null
   amount: number
   chain_id: k.Generated<number>
   confirmed_at: string | null

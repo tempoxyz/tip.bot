@@ -10,7 +10,8 @@ import { env } from 'cloudflare:workers'
 import { testClient } from 'hono/testing'
 import { AbiFunction } from 'ox'
 import { KeyAuthorization } from 'ox/tempo'
-import { Account } from 'viem/tempo'
+import { createClient, http, parseUnits } from 'viem'
+import { Account, Actions } from 'viem/tempo'
 import { beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api } from '#/api.ts'
 import * as Schema from '#db/schemas.gen.ts'
@@ -176,6 +177,7 @@ describe('/tip @account', () => {
       .where('id', '=', connected.accessKey.id)
       .execute()
     await factory.tip.insert({
+      access_key_id: connected.accessKey.id,
       amount: 1_000_000,
       chain_id: connected.workspace.chain_id,
       confirmed_at: new Date().toISOString(),
@@ -770,6 +772,48 @@ test('reaction tipping sends default tip and updates aggregate thread reply', as
   )
 })
 
+test('reaction tipping ignores one-time confirmed tips for access key limit', async () => {
+  const connected = await connectTipAccounts()
+  if (!connected.recipientMember) throw new Error('Expected connected recipient.')
+  await factory.tip.insert({
+    access_key_id: null,
+    amount: 100_000_000,
+    chain_id: connected.workspace.chain_id,
+    confirmed_at: new Date().toISOString(),
+    idempotency_key: `onetime-${Nanoid.generate()}`,
+    recipient_id: connected.recipientAccount.id,
+    recipient_member_id: connected.recipientMember.id,
+    sender_id: connected.senderAccount.id,
+    sender_member_id: connected.senderMember.id,
+    token_address: Tempo.addressLookup.pathUsd,
+    transaction_hash: `0x${Nanoid.generate().padEnd(64, '1').slice(0, 64)}`,
+    workspace_id: connected.workspace.id,
+  })
+  await Actions.token.mintSync(
+    createClient({
+      chain: Tempo.getChain(Tempo.chainLookup.localnet),
+      transport: http(env.RPC_URL_TESTNET),
+    }),
+    {
+      account: Account.fromSecp256k1(env.FEE_PAYER_PRIVATE_KEY_TESTNET),
+      amount: parseUnits('1', 6),
+      to: Account.fromSecp256k1(Constants.tip.senderRootPrivateKey).address,
+      token: Tempo.addressLookup.pathUsd,
+    },
+  )
+  const result = await Tip.handleTipRequest(env, {
+    idempotencyKey: `reaction-accounting-${Nanoid.generate()}`,
+    memo: null,
+    provider: 'slack',
+    providerChannelId: Constants.slack.channelId,
+    providerId,
+    recipientProviderUserId: Constants.slack.memberUserId,
+    senderProviderUserId: Constants.slack.adminUserId,
+  })
+
+  expect(result).toMatchObject({ ok: true, status: 'sent' })
+})
+
 test('reaction tipping ignores duplicate signed Slack event deliveries', async () => {
   await connectTipAccounts()
   const channelId = await createSlackTestChannel('rt')
@@ -909,6 +953,8 @@ test('reaction tipping reports approval required', async () => {
   expect(reactionTips).toHaveLength(0)
   expect(tips).toHaveLength(0)
   await expectSlackPostEphemeralCall(fetchSpy, 'Tipbot needs your approval to send this payment.')
+  await expectSlackPostEphemeralCall(fetchSpy, '"action_id":"confirm_cancel"')
+  await expectSlackPostEphemeralCall(fetchSpy, '"text":"Cancel"')
   await expectSlackThreadMessageNotContaining(message.ts, 'tipped', { channelId })
   fetchSpy.mockRestore()
 }, 20_000) // 20 seconds
@@ -1304,7 +1350,7 @@ describe('/tip disconnect', () => {
       .execute()
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('Disconnect')
+    await expectSlackMessage('Disconnected')
     expect(updatedMember.account_id).toBe(null)
     expect(accessKeys).toEqual([])
   })

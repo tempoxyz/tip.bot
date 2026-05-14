@@ -401,7 +401,7 @@ const handlers = {
       .set({ account_id: null, updated_at: new Date().toISOString() })
       .where('id', '=', member.id)
       .execute()
-    await event.channel.postEphemeral(event.user, 'Disconnect', {
+    await event.channel.postEphemeral(event.user, 'Disconnected', {
       fallbackToDM: false,
     })
   },
@@ -1088,7 +1088,6 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
   }
 
   if (result.code === 'confirmation_required' && result.confirmUrl) {
-    await db.deleteFrom('reaction_tip').where('idempotency_key', '=', idempotencyKey).execute()
     await postSlackEphemeral(
       provider.id,
       event.item.channel,
@@ -1103,10 +1102,16 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
           {
             elements: [
               {
+                action_id: 'confirm_payment',
                 style: 'primary',
                 text: { text: 'Confirm payment', type: 'plain_text' },
                 type: 'button',
                 url: result.confirmUrl,
+              },
+              {
+                action_id: 'confirm_cancel',
+                text: { text: 'Cancel', type: 'plain_text' },
+                type: 'button',
               },
             ],
             type: 'actions',

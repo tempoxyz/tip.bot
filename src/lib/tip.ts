@@ -137,6 +137,7 @@ export async function handleTipRequest(
     if (!supportsTip(authorization, { amount, memo: input.memo, tokenAddress })) continue
     if (
       !(await hasTrackedAccessKeyLimitRemaining(db, {
+        accessKeyId: row.id,
         accountId: sender.account.id,
         amount,
         authorization,
@@ -585,6 +586,7 @@ async function submitTip(
   await db
     .insertInto('tip')
     .values({
+      access_key_id: input.accessKeyId ?? null,
       amount: input.amount,
       chain_id: input.workspace.chain_id,
       confirmed_at: null,
@@ -758,6 +760,7 @@ async function submitSignedTip(
   await db
     .insertInto('tip')
     .values({
+      access_key_id: null,
       amount: input.payload.amount,
       chain_id: input.workspace.chain_id,
       confirmed_at: null,
@@ -937,6 +940,7 @@ function supportsTip(
 async function hasTrackedAccessKeyLimitRemaining(
   db: DB.Type,
   input: {
+    accessKeyId: string
     accountId: string
     amount: number
     authorization: KeyAuthorization.KeyAuthorization
@@ -961,6 +965,7 @@ async function hasTrackedAccessKeyLimitRemaining(
     const tips = await db
       .selectFrom('tip')
       .select('amount')
+      .where('access_key_id', '=', input.accessKeyId)
       .where('sender_id', '=', input.accountId)
       .where('chain_id', '=', input.chainId)
       .where('token_address', '=', Address.checksum(input.tokenAddress))

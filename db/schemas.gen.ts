@@ -78,6 +78,7 @@ export const reaction_tip_thread = z.object({
 })
 
 export const tip = z.object({
+  access_key_id: z.string().nullable(),
   amount: z.number(),
   chain_id: z.number(),
   confirmed_at: z.string().nullable(),
