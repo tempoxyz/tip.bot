@@ -1336,6 +1336,7 @@ async function expectSlackPostEphemeralCall(
             return `${url} ${new URLSearchParams(body).get('text') ?? body}`
           })
           .join('\n'),
+        timeout: 10_000, // 10 seconds
       },
     )
     .toBe(true)

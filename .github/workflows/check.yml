@@ -57,8 +57,8 @@ jobs:
         env:
           SLACK_APP_ID: ci-placeholder
 
-  test:
-    name: Test
+  test-unit:
+    name: Test Unit
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -69,8 +69,20 @@ jobs:
       - name: Setup pnpm
         uses: ./.github/actions/setup-pnpm
 
-      - name: Setup Docker
-        uses: docker/setup-docker-action@b2189fbf2a6592b51fee7cdd93ee2bfaeba733db # v5.1.0
+      - name: Test unit
+        run: pnpm test --project unit --run
+
+  test-workers:
+    name: Test Workers
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: ./.github/actions/setup-pnpm
 
       - name: Cache Tempo Docker image
         id: docker-cache
@@ -91,8 +103,8 @@ jobs:
           docker pull "${image}"
           docker save "${image}" -o /tmp/tempo-image.tar
 
-      - name: Test
-        run: pnpm test
+      - name: Test workers
+        run: pnpm test --project workers --run
         env:
           FEE_PAYER_PRIVATE_KEY_MAINNET: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
           FEE_PAYER_PRIVATE_KEY_TESTNET: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'

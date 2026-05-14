@@ -7,16 +7,18 @@ const host = normalizeHost(
 const baseUrl = host ? `https://${host}` : undefined
 const appId = args[3] ?? appIdFromEnv()
 
-if (!command || !['create', 'manifest', 'update', 'validate'].includes(command)) usage()
+if (!command || !['create', 'export', 'manifest', 'update', 'validate'].includes(command)) usage()
 if (!appEnv || !['local', 'production'].includes(appEnv))
   usage('Expected app env: local or production')
 if (!baseUrl) usage('Expected a host')
-if (['update'].includes(command) && !appId) usage('Expected Slack app ID')
+if (['export', 'update'].includes(command) && !appId) usage('Expected Slack app ID')
 
 const manifest = createManifest()
 
 if (command === 'manifest') {
   console.log(JSON.stringify(manifest, null, 2))
+} else if (command === 'export') {
+  console.log(JSON.stringify(await slackApi('apps.manifest.export', { app_id: appId }), null, 2))
 } else {
   const result = await slackApi(`apps.manifest.${command}`, {
     app_id: appId,
@@ -24,7 +26,11 @@ if (command === 'manifest') {
   })
 
   if (command === 'create') printCreateResult(result)
-  else console.log(JSON.stringify(result, null, 2))
+  else {
+    console.log(JSON.stringify(result, null, 2))
+    if (command === 'update')
+      printManifestSummary(await slackApi('apps.manifest.export', { app_id: appId }))
+  }
 }
 
 function createManifest() {
@@ -102,6 +108,26 @@ function printCreateResult(result: Record<string, unknown>) {
   console.log(`SLACK_APP_ID=${String(result.app_id)}`)
 }
 
+function printManifestSummary(result: Record<string, unknown>) {
+  const manifest = result.manifest as
+    | {
+        oauth_config?: { scopes?: { bot?: string[] } }
+        settings?: { event_subscriptions?: { bot_events?: string[] } }
+      }
+    | undefined
+  console.log('\nCurrent Slack manifest summary:')
+  console.log(
+    JSON.stringify(
+      {
+        bot_events: manifest?.settings?.event_subscriptions?.bot_events ?? [],
+        bot_scopes: manifest?.oauth_config?.scopes?.bot ?? [],
+      },
+      null,
+      2,
+    ),
+  )
+}
+
 async function slackApi(method: string, body: Record<string, unknown>) {
   const token = requiredConfigToken()
   const response = await fetch(`https://slack.com/api/${method}`, {
@@ -154,6 +180,7 @@ function usage(message?: string): never {
   console.error(`
 Usage:
   pnpm slack:app manifest <local|production> <host>
+  pnpm slack:app export <local|production> <host> <appId>
   pnpm slack:app validate <local|production> <host>
   pnpm slack:app create <local|production> <host>
   pnpm slack:app update <local|production> <host> <appId>
