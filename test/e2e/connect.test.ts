@@ -1,7 +1,10 @@
 import type { APIRequestContext } from '@playwright/test'
 import { WebClient } from '@slack/web-api'
+import * as AccessKey from '#/lib/accessKey.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import { createSlackHeaders } from '#/lib/slack.ts'
+import * as Tempo from '#/lib/tempo.ts'
+import { Account } from 'viem/tempo'
 import * as Constants from '../constants.ts'
 import { expect, test } from './fixture.ts'
 
@@ -32,11 +35,14 @@ test('slack member opens valid connection link', async ({ app, factory, page }) 
   await expect(page.getByText('Authorize Tipbot to connect your Tempo Wallet')).toBeVisible()
 })
 
-test('slack member connects wallet from slack', async ({ app, page, request }) => {
+test('slack member connects wallet from slack', async ({ app, db, page, request }) => {
   await installSlack(app, request)
   await postSlashCommand(app, 'disconnect')
   await postSlashCommand(app, 'connect')
   const token = await getConnectToken(app)
+  const root = Account.fromSecp256k1(
+    '0x0000000000000000000000000000000000000000000000000000000000000001',
+  )
 
   await page.goto(app.url({ params: { token }, to: '/connect/$token' }))
   await page.waitForLoadState('networkidle')
@@ -49,8 +55,113 @@ test('slack member connects wallet from slack', async ({ app, page, request }) =
   })
   await expect(page.getByText('You can close this tab and return to Slack.')).toBeVisible()
 
+  const link = await db
+    .selectFrom('account_link_token')
+    .innerJoin('member', 'member.id', 'account_link_token.member_id')
+    .innerJoin('account', 'account.id', 'member.account_id')
+    .select([
+      'account.address as account_address',
+      'account.id as account_id',
+      'account_link_token.access_key_address',
+      'account_link_token.access_key_authorization',
+      'account_link_token.account_id as link_account_id',
+      'account_link_token.used_at',
+      'member.account_id as member_account_id',
+    ])
+    .where('account_link_token.token_hash', '=', await AccountLink.hashToken(app.env, token))
+    .executeTakeFirstOrThrow()
+  const accessKey = await db
+    .selectFrom('access_key')
+    .selectAll()
+    .where('account_id', '=', link.account_id)
+    .where('address', '=', link.access_key_address)
+    .executeTakeFirstOrThrow()
+
+  expect(link.account_address).toBe(root.address)
+  expect(link.access_key_authorization).toEqual(expect.any(String))
+  expect(link.link_account_id).toBe(link.account_id)
+  expect(link.member_account_id).toBe(link.account_id)
+  expect(link.used_at).toEqual(expect.any(String))
+  expect(accessKey.authorization).toBe(link.access_key_authorization)
+  expect(accessKey.revoked_at).toBe(null)
+  expect(accessKey.token_address).toBe(Tempo.addressLookup.pathUsd)
+
   await page.goto(app.url({ params: { token }, to: '/connect/$token' }))
   await expect(page.getByText('This connection link is invalid or expired.')).toBeVisible()
+})
+
+test('slack member can disconnect an existing member and connect wallet', async ({
+  app,
+  db,
+  factory,
+  page,
+}) => {
+  const token = crypto.randomUUID()
+  const accessKey = AccessKey.generate()
+  const root = Account.fromSecp256k1(
+    '0x0000000000000000000000000000000000000000000000000000000000000001',
+  )
+  const workspace = await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    provider_id: `T${crypto.randomUUID()}`,
+  })
+  const currentMember = await factory.member.insert({
+    provider_user_id: `U${crypto.randomUUID()}`,
+    workspace_id: workspace.id,
+  })
+  const existingAccount = await db
+    .selectFrom('account')
+    .selectAll()
+    .where('address', '=', root.address)
+    .executeTakeFirst()
+  const account = existingAccount ?? (await factory.account.insert({ address: root.address }))
+  const duplicateMember = await factory.member.insert({
+    account_id: account.id,
+    provider_user_id: `U${crypto.randomUUID()}`,
+    workspace_id: workspace.id,
+  })
+  await factory.account_link_token.insert({
+    access_key_address: accessKey.address,
+    access_key_ciphertext: await AccessKey.encrypt(app.env, accessKey.privateKey),
+    access_key_expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
+    access_key_public_key: accessKey.publicKey,
+    member_id: currentMember.id,
+    token_hash: await AccountLink.hashToken(app.env, token),
+  })
+
+  await page.goto(app.url({ params: { token }, to: '/connect/$token' }))
+  await page.waitForLoadState('networkidle')
+  await page.getByRole('button', { name: 'Connect' }).click()
+
+  const walletConnectTimeoutMs = 15_000 // 15 seconds
+  await expect(
+    page.getByText('This wallet is already connected to another Slack account in this workspace.'),
+  ).toBeVisible({ timeout: walletConnectTimeoutMs })
+  await page.getByRole('button', { name: 'Disconnect existing account and connect' }).click()
+  await expect(page.getByRole('heading', { name: 'Connected to Tipbot' })).toBeVisible({
+    timeout: walletConnectTimeoutMs,
+  })
+
+  const updatedCurrentMember = await db
+    .selectFrom('member')
+    .selectAll()
+    .where('id', '=', currentMember.id)
+    .executeTakeFirstOrThrow()
+  const updatedDuplicateMember = await db
+    .selectFrom('member')
+    .selectAll()
+    .where('id', '=', duplicateMember.id)
+    .executeTakeFirstOrThrow()
+  const storedAccessKey = await db
+    .selectFrom('access_key')
+    .selectAll()
+    .where('account_id', '=', account.id)
+    .where('address', '=', accessKey.address)
+    .executeTakeFirstOrThrow()
+
+  expect(updatedCurrentMember.account_id).toBe(account.id)
+  expect(updatedDuplicateMember.account_id).toBe(null)
+  expect(storedAccessKey.authorization).toEqual(expect.any(String))
 })
 
 async function getConnectToken(app: { slackUrl: string }) {

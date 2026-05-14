@@ -31,7 +31,24 @@ if (command === 'manifest') {
     if (command === 'update')
       printManifestSummary(await slackApi('apps.manifest.export', { app_id: appId }))
   }
+  printScopeReasons()
 }
+
+const scopeReasons = {
+  'app_mentions:read': 'Detect @Tipbot messages so members can send tips by mentioning Tipbot.',
+  'assistant:write':
+    'Show a temporary sending payment status while Tipbot processes a mentioned tip.',
+  'channels:history':
+    'Read messages Tipbot is asked to act on in public channels, including reaction and mention tips.',
+  'channels:read': 'Check public channel metadata and respond in the correct conversation.',
+  'chat:write': 'Send tip receipts, connection prompts, confirmation prompts, and error messages.',
+  commands: 'Register and handle the /tip slash command.',
+  'groups:history':
+    'Read messages Tipbot is asked to act on in private channels where Tipbot has been added.',
+  'groups:read': 'Check private channel metadata where Tipbot has been added.',
+  'reactions:read': 'Detect configured tip reaction emoji and identify the message being tipped.',
+  'users:read': 'Resolve Slack users for mentions, admin checks, and connected account status.',
+} as const
 
 function createManifest() {
   const appName =
@@ -128,6 +145,13 @@ function printManifestSummary(result: Record<string, unknown>) {
       2,
     ),
   )
+}
+
+function printScopeReasons() {
+  console.log(
+    '\nSlack OAuth scope reasons to add manually in OAuth & Permissions > Manage Reasons:',
+  )
+  for (const [scope, reason] of Object.entries(scopeReasons)) console.log(`- ${scope}: ${reason}`)
 }
 
 async function slackApi(method: string, body: Record<string, unknown>) {

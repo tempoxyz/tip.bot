@@ -113,7 +113,7 @@ describe('/api/chat/slack/install', () => {
       `https://${env.HOST}/api/chat/slack/oauth/callback`,
     )
     expect(url.searchParams.get('scope')).toBe(
-      'channels:history,channels:read,chat:write,commands,groups:history,groups:read,reactions:read,users:read',
+      'app_mentions:read,assistant:write,channels:history,channels:read,chat:write,commands,groups:history,groups:read,reactions:read,users:read',
     )
     expect(url.searchParams.get('state')).toMatch(/^[^.]+\.[^.]+$/)
   })
