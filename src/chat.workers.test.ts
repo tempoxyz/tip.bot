@@ -476,6 +476,32 @@ test('@Tipbot mention sends tip in thread', async () => {
   expect(tip.transaction_hash).toEqual(expect.any(String))
 }, 20_000) // 20 seconds
 
+test('@Tipbot mention introduces itself', async () => {
+  const messageTs = `1700000000.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> introduce yourself`,
+  })
+  const tips = await db
+    .selectFrom('tip')
+    .innerJoin('workspace', 'workspace.id', 'tip.workspace_id')
+    .selectAll('tip')
+    .where('workspace.provider_id', '=', providerId)
+    .execute()
+
+  expect(response.status).toBe(200)
+  await expectSlackThreadMessage(
+    messageTs,
+    'I’m Tipbot: sometime tipper, sometime messenger, always bot.',
+  )
+  await expectSlackThreadMessage(
+    messageTs,
+    'Connect with `/tip connect`, then send stablecoins with `@Tipbot @account for coffee`, `/tip @account for coffee`, or a 💸 reaction.',
+  )
+  expect(tips).toHaveLength(0)
+})
+
 test('@Tipbot mention accepts bot mention after recipient', async () => {
   await connectTipAccounts()
   const messageTs = `1700000001.${Nanoid.generate().slice(0, 6)}`
@@ -981,6 +1007,64 @@ describe('/tip config', () => {
     await expectSlackPostEphemeralCall(fetchSpy, '"text":":money_with_wings:"')
     fetchSpy.mockRestore()
   })
+
+  test('opens mainnet edit modal with only mainnet tokens', async () => {
+    await db
+      .updateTable('workspace')
+      .set({ chain_id: Tempo.chainLookup.mainnet })
+      .where('provider_id', '=', providerId)
+      .execute()
+    await postSlashCommand('config')
+    const messageTs = await findSlackMessageTs('Network')
+    const fetchOriginal = globalThis.fetch
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    fetchSpy.mockImplementation((input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.endsWith('/views.open'))
+        return Promise.resolve(Response.json({ ok: true, view: { id: 'V1' } }))
+      return fetchOriginal(input, init)
+    })
+
+    const response = await postSlackInteraction({
+      actions: [{ action_id: 'config_edit', type: 'button' }],
+      channel: { id: Constants.slack.channelId },
+      container: {
+        channel_id: Constants.slack.channelId,
+        message_ts: messageTs,
+        type: 'message',
+      },
+      message: { ts: messageTs },
+      team: { id: providerId },
+      trigger_id: 'config-edit-mainnet-trigger',
+      type: 'block_actions',
+      user: { id: Constants.slack.adminUserId, name: Constants.slack.adminUserName },
+    })
+
+    expect(response.status).toBe(200)
+    await expect
+      .poll(
+        async () => {
+          for (const call of fetchSpy.mock.calls) {
+            const input = call[0]
+            const url =
+              typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+            if (!url.endsWith('/views.open')) continue
+            const view = (await slackFetchCallBodyParams(call)).get('view')
+            if (!view) continue
+            const json = JSON.parse(view) as {
+              blocks: { block_id?: string; element?: { options?: { value: string }[] } }[]
+            }
+            return json.blocks
+              .find((block) => block.block_id === 'default_token')
+              ?.element?.options?.map((option) => option.value)
+          }
+          return null
+        },
+        { timeout: 10_000 }, // 10 seconds
+      )
+      .toEqual(['pathUSD', 'USDC.e', 'USDT0'])
+    fetchSpy.mockRestore()
+  }, 20_000) // 20 seconds
 
   test('handles missing workspace', async () => {
     await db.deleteFrom('workspace').where('provider_id', '=', providerId).execute()

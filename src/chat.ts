@@ -65,13 +65,18 @@ export function getChat() {
     const installation = await getSlack().getInstallation(providerId)
     if (!installation?.botUserId) throw new Error('Slack app installation missing bot user id.')
 
+    const threadTs = raw.thread_ts ?? raw.ts
+    const event = { channel: thread.channel, user: message.author } satisfies TipEvent
     const context = {
       db: DB.create(env.DB),
       provider: { id: providerId, type: 'slack' },
       text: parseSlackMentionTipText(raw.text, installation.botUserId) ?? '',
     } satisfies HandlerContext
-    const threadTs = raw.thread_ts ?? raw.ts
-    const event = { channel: thread.channel, user: message.author } satisfies TipEvent
+
+    if (isSlackIntroduceYourselfText(raw.text, installation.botUserId)) {
+      await postSlackIntroduction(event, context, threadTs)
+      return
+    }
 
     if (!context.text) {
       await postInvalidUsage(event, context, { mention: true, threadTs })
@@ -202,16 +207,10 @@ const actions = {
     }
 
     const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
-    const tokenValue = (() => {
-      if (tokenAddress.toLowerCase() === Tempo.addressLookup.usdcE.toLowerCase()) return 'USDC.e'
-      if (tokenAddress.toLowerCase() === Tempo.addressLookup.usdt0.toLowerCase()) return 'USDT0'
-      if (tokenAddress.toLowerCase() === Tempo.addressLookup.alphaUsd.toLowerCase())
-        return 'AlphaUSD'
-      if (tokenAddress.toLowerCase() === Tempo.addressLookup.betaUsd.toLowerCase()) return 'BetaUSD'
-      if (tokenAddress.toLowerCase() === Tempo.addressLookup.thetaUsd.toLowerCase())
-        return 'ThetaUSD'
-      return 'pathUSD'
-    })()
+    const tokenOptions = workspaceTokenOptions(workspace.chain_id)
+    const tokenValue =
+      tokenOptions.find((option) => option.address.toLowerCase() === tokenAddress.toLowerCase())
+        ?.value ?? 'pathUSD'
     await event.openModal(
       chat.Modal({
         callbackId: 'config_edit',
@@ -229,14 +228,9 @@ const actions = {
             id: 'default_token',
             initialOption: tokenValue,
             label: 'Default token',
-            options: [
-              chat.SelectOption({ label: 'PathUSD', value: 'pathUSD' }),
-              chat.SelectOption({ label: 'USDC.e', value: 'USDC.e' }),
-              chat.SelectOption({ label: 'USDT0', value: 'USDT0' }),
-              chat.SelectOption({ label: 'AlphaUSD', value: 'AlphaUSD' }),
-              chat.SelectOption({ label: 'BetaUSD', value: 'BetaUSD' }),
-              chat.SelectOption({ label: 'ThetaUSD', value: 'ThetaUSD' }),
-            ],
+            options: tokenOptions.map((option) =>
+              chat.SelectOption({ label: option.label, value: option.value }),
+            ),
           }),
           chat.TextInput({
             id: 'default_amount',
@@ -281,15 +275,9 @@ const modalSubmits = {
       if (event.values.network === 'testnet') return Tempo.chainLookup.testnet
       return null
     })()
-    const tokenAddress = (() => {
-      if (event.values.default_token === 'pathUSD') return Tempo.addressLookup.pathUsd
-      if (event.values.default_token === 'USDC.e') return Tempo.addressLookup.usdcE
-      if (event.values.default_token === 'USDT0') return Tempo.addressLookup.usdt0
-      if (event.values.default_token === 'AlphaUSD') return Tempo.addressLookup.alphaUsd
-      if (event.values.default_token === 'BetaUSD') return Tempo.addressLookup.betaUsd
-      if (event.values.default_token === 'ThetaUSD') return Tempo.addressLookup.thetaUsd
-      return null
-    })()
+    const tokenAddress =
+      workspaceTokenOptions().find((option) => option.value === event.values.default_token)
+        ?.address ?? null
     const amount = Tip.parseAmount(event.values.default_amount ?? '')
     const reactionTipEmoji = (() => {
       // Store Slack emoji names without surrounding colons for reaction event matching.
@@ -669,6 +657,14 @@ const commandNames = ['config', 'connect', 'disconnect', 'help', 'leaderboard', 
 const commandPattern = new RegExp(`^(${commandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
 const actionNames = ['config_edit', 'connect_cancel', 'confirm_cancel'] as const
 const modalSubmitNames = ['config_edit'] as const
+const tokenOptions = [
+  { address: Tempo.addressLookup.pathUsd, label: 'PathUSD', value: 'pathUSD' },
+  { address: Tempo.addressLookup.usdcE, label: 'USDC.e', value: 'USDC.e' },
+  { address: Tempo.addressLookup.usdt0, label: 'USDT0', value: 'USDT0' },
+  { address: Tempo.addressLookup.alphaUsd, label: 'AlphaUSD', value: 'AlphaUSD' },
+  { address: Tempo.addressLookup.betaUsd, label: 'BetaUSD', value: 'BetaUSD' },
+  { address: Tempo.addressLookup.thetaUsd, label: 'ThetaUSD', value: 'ThetaUSD' },
+] as const
 const workspaceSettingsAccountAddressAllowlist = [
   '0x00ec0495bb6d03a32d75c460ca2f2a9e53654348',
 ] as const
@@ -1345,6 +1341,14 @@ function parseSlackMentionTipText(value: string, botUserId: string) {
   return text
 }
 
+function isSlackIntroduceYourselfText(value: string, botUserId: string) {
+  const botMentionPattern = new RegExp(`<@${escapeRegex(botUserId)}(?:\\|[^>]+)?>`, 'g')
+  return (
+    value.replace(botMentionPattern, ' ').replace(/\s+/g, ' ').trim().toLowerCase() ===
+    'introduce yourself'
+  )
+}
+
 function escapeRegex(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -1410,6 +1414,36 @@ async function postInvalidUsage(
     await response.json(),
   )
   if (!json.ok) throw Slack.slackApiError('chat.postEphemeral', json.error)
+}
+
+async function postSlackIntroduction(event: TipEvent, ctx: HandlerContext, threadTs: string) {
+  const installation = await getSlack().getInstallation(ctx.provider.id)
+  if (!installation) throw new Error('Tibot app not installed for this workspace.')
+
+  const text =
+    'I’m Tipbot: sometime tipper, sometime messenger, always bot.\n' +
+    'Connect with `/tip connect`, then send stablecoins with `@Tipbot @account for coffee`, `/tip @account for coffee`, or a 💸 reaction.'
+  const body = new URLSearchParams()
+  body.set('channel', event.channel.id.replace(/^slack:/, ''))
+  body.set('text', text)
+  body.set('thread_ts', threadTs)
+  body.set('unfurl_links', 'false')
+  body.set('unfurl_media', 'false')
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
+      body,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok) throw Slack.slackApiError('chat.postMessage', json.error)
 }
 
 async function postSlackInsufficientFunds(event: TipEvent, ctx: HandlerContext, threadTs?: string) {
@@ -1815,6 +1849,11 @@ function configToken(workspace: DB_gen.Selectable.workspace) {
   return Tempo.getTokenMetadataFallback(
     workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
   )
+}
+
+function workspaceTokenOptions(chainId?: number) {
+  if (chainId === undefined) return tokenOptions
+  return tokenOptions.filter((option) => Tempo.isAllowedToken(chainId, option.address))
 }
 
 function slackTableCell(text: string, style?: { code?: boolean }) {
