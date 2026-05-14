@@ -414,6 +414,7 @@ const handlers = {
       ['/tip disconnect', 'Disconnect from Tipbot'],
       ['/tip help', 'Show help message'],
       ['/tip leaderboard', 'Show top tippers and recipients'],
+      ['/tip stats', 'Show your tip stats'],
       ['/tip status', 'Check connection status'],
     ]
     const paymentExampleRows = [
@@ -643,6 +644,115 @@ const handlers = {
       fallbackToDM: false,
     })
   },
+  async stats(event, ctx) {
+    if (ctx.text) {
+      await postInvalidUsage(event, ctx)
+      return
+    }
+    const workspace = await ctx.db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', ctx.provider.type)
+      .where('provider_id', '=', ctx.provider.id)
+      .executeTakeFirst()
+    if (!workspace) {
+      await event.channel.postEphemeral(
+        event.user,
+        'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+        { fallbackToDM: false },
+      )
+      return
+    }
+
+    const member = await ctx.db
+      .selectFrom('member')
+      .selectAll()
+      .where('workspace_id', '=', workspace.id)
+      .where('provider_user_id', '=', event.user.userId)
+      .executeTakeFirst()
+
+    if (!member) {
+      await event.channel.postEphemeral(
+        event.user,
+        'Your tip stats\nReceived $0.00 (0 tips)\nTipped $0.00 (0 tips)\nMost tipped None\nMost tipped by None',
+        { fallbackToDM: false },
+      )
+      return
+    }
+
+    const received = await ctx.db
+      .selectFrom('tip')
+      .select([
+        sql<number>`coalesce(sum("tip"."amount"), 0)`.as('amount'),
+        sql<number>`count("tip"."id")`.as('tip_count'),
+      ])
+      .where('tip.workspace_id', '=', workspace.id)
+      .where('tip.recipient_member_id', '=', member.id)
+      .where('tip.confirmed_at', 'is not', null)
+      .executeTakeFirstOrThrow()
+    const sent = await ctx.db
+      .selectFrom('tip')
+      .select([
+        sql<number>`coalesce(sum("tip"."amount"), 0)`.as('amount'),
+        sql<number>`count("tip"."id")`.as('tip_count'),
+      ])
+      .where('tip.workspace_id', '=', workspace.id)
+      .where('tip.sender_member_id', '=', member.id)
+      .where('tip.confirmed_at', 'is not', null)
+      .executeTakeFirstOrThrow()
+    const mostTipped = await ctx.db
+      .selectFrom('tip')
+      .innerJoin('member', 'member.id', 'tip.recipient_member_id')
+      .select([
+        'member.provider_user_id',
+        sql<number>`coalesce(sum("tip"."amount"), 0)`.as('amount'),
+        sql<number>`count("tip"."id")`.as('tip_count'),
+      ])
+      .where('tip.workspace_id', '=', workspace.id)
+      .where('tip.sender_member_id', '=', member.id)
+      .where('tip.confirmed_at', 'is not', null)
+      .groupBy(['member.id', 'member.provider_user_id'])
+      .orderBy('amount', 'desc')
+      .orderBy('tip_count', 'desc')
+      .orderBy('member.provider_user_id', 'asc')
+      .executeTakeFirst()
+    const mostTippedBy = await ctx.db
+      .selectFrom('tip')
+      .innerJoin('member', 'member.id', 'tip.sender_member_id')
+      .select([
+        'member.provider_user_id',
+        sql<number>`coalesce(sum("tip"."amount"), 0)`.as('amount'),
+        sql<number>`count("tip"."id")`.as('tip_count'),
+      ])
+      .where('tip.workspace_id', '=', workspace.id)
+      .where('tip.recipient_member_id', '=', member.id)
+      .where('tip.confirmed_at', 'is not', null)
+      .groupBy(['member.id', 'member.provider_user_id'])
+      .orderBy('amount', 'desc')
+      .orderBy('tip_count', 'desc')
+      .orderBy('member.provider_user_id', 'asc')
+      .executeTakeFirst()
+
+    await event.channel.postEphemeral(
+      event.user,
+      [
+        'Your tip stats',
+        `Received ${formatCurrencyAmount(formatAmount(Number(received.amount)), 'USD')} (${Number(received.tip_count)} ${Number(received.tip_count) === 1 ? 'tip' : 'tips'})`,
+        `Tipped ${formatCurrencyAmount(formatAmount(Number(sent.amount)), 'USD')} (${Number(sent.tip_count)} ${Number(sent.tip_count) === 1 ? 'tip' : 'tips'})`,
+        `Most tipped ${
+          mostTipped
+            ? `<@${mostTipped.provider_user_id}> ${formatCurrencyAmount(formatAmount(Number(mostTipped.amount)), 'USD')} (${Number(mostTipped.tip_count)} ${Number(mostTipped.tip_count) === 1 ? 'tip' : 'tips'})`
+            : 'None'
+        }`,
+        `Most tipped by ${
+          mostTippedBy
+            ? `<@${mostTippedBy.provider_user_id}> ${formatCurrencyAmount(formatAmount(Number(mostTippedBy.amount)), 'USD')} (${Number(mostTippedBy.tip_count)} ${Number(mostTippedBy.tip_count) === 1 ? 'tip' : 'tips'})`
+            : 'None'
+        }`,
+      ].join('\n'),
+      { fallbackToDM: false },
+    )
+  },
   async default(event, ctx) {
     if (!event.triggerId) {
       await event.channel.postEphemeral(event.user, 'Payment not sent. Try again.', {
@@ -661,7 +771,15 @@ const handlers = {
   (event: chat.SlashCommandEvent, ctx: HandlerContext) => Promise<void>
 >
 
-const commandNames = ['config', 'connect', 'disconnect', 'help', 'leaderboard', 'status'] as const
+const commandNames = [
+  'config',
+  'connect',
+  'disconnect',
+  'help',
+  'leaderboard',
+  'stats',
+  'status',
+] as const
 const commandPattern = new RegExp(`^(${commandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
 const actionNames = ['config_edit', 'connect_cancel', 'confirm_cancel'] as const
 const modalSubmitNames = ['config_edit'] as const

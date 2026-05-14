@@ -1868,6 +1868,7 @@ describe('/tip help', () => {
     await expectSlackMessage('/tip disconnect')
     await expectSlackMessage('/tip help')
     await expectSlackMessage('/tip leaderboard')
+    await expectSlackMessage('/tip stats')
     await expectSlackMessage('/tip status')
   })
 })
@@ -1981,6 +1982,136 @@ describe('/tip leaderboard', () => {
     expect(response.status).toBe(200)
     await expectSlackPublicMessage('No confirmed tips yet.')
     await expectSlackMessage('No confirmed tips yet.')
+  })
+})
+
+describe('/tip stats', () => {
+  test('shows current user totals and top counterparties', async () => {
+    const workspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', providerId)
+      .executeTakeFirstOrThrow()
+    const otherWorkspace = await factory.workspace.insert({ provider_id: `T${Nanoid.generate()}` })
+    const adminAccount = await factory.account.insert({})
+    const memberAccount = await factory.account.insert({})
+    const thirdAccount = await factory.account.insert({})
+    const adminMember = await factory.member.insert({
+      account_id: adminAccount.id,
+      provider_user_id: Constants.slack.adminUserId,
+      workspace_id: workspace.id,
+    })
+    const memberMember = await factory.member.insert({
+      account_id: memberAccount.id,
+      provider_user_id: Constants.slack.memberUserId,
+      workspace_id: workspace.id,
+    })
+    const thirdMember = await factory.member.insert({
+      account_id: thirdAccount.id,
+      provider_user_id: 'U000000003',
+      workspace_id: workspace.id,
+    })
+    const otherMember = await factory.member.insert({
+      account_id: thirdAccount.id,
+      provider_user_id: 'U000000004',
+      workspace_id: otherWorkspace.id,
+    })
+    const now = new Date().toISOString()
+    const transactionHashPrefix = `0x${Nanoid.generate()}`
+    const tips = [
+      {
+        amount: 1000,
+        confirmed_at: now,
+        recipient_id: memberAccount.id,
+        recipient_member_id: memberMember.id,
+        sender_id: adminAccount.id,
+        sender_member_id: adminMember.id,
+        transaction_hash: `${transactionHashPrefix}1`,
+        workspace_id: workspace.id,
+      },
+      {
+        amount: 2000,
+        confirmed_at: now,
+        recipient_id: memberAccount.id,
+        recipient_member_id: memberMember.id,
+        sender_id: adminAccount.id,
+        sender_member_id: adminMember.id,
+        transaction_hash: `${transactionHashPrefix}2`,
+        workspace_id: workspace.id,
+      },
+      {
+        amount: 500,
+        confirmed_at: now,
+        recipient_id: thirdAccount.id,
+        recipient_member_id: thirdMember.id,
+        sender_id: adminAccount.id,
+        sender_member_id: adminMember.id,
+        transaction_hash: `${transactionHashPrefix}3`,
+        workspace_id: workspace.id,
+      },
+      {
+        amount: 7000,
+        confirmed_at: now,
+        recipient_id: adminAccount.id,
+        recipient_member_id: adminMember.id,
+        sender_id: memberAccount.id,
+        sender_member_id: memberMember.id,
+        transaction_hash: `${transactionHashPrefix}4`,
+        workspace_id: workspace.id,
+      },
+      {
+        amount: 1000,
+        confirmed_at: now,
+        recipient_id: adminAccount.id,
+        recipient_member_id: adminMember.id,
+        sender_id: thirdAccount.id,
+        sender_member_id: thirdMember.id,
+        transaction_hash: `${transactionHashPrefix}5`,
+        workspace_id: workspace.id,
+      },
+      {
+        amount: 9000,
+        confirmed_at: null,
+        recipient_id: memberAccount.id,
+        recipient_member_id: memberMember.id,
+        sender_id: adminAccount.id,
+        sender_member_id: adminMember.id,
+        workspace_id: workspace.id,
+      },
+      {
+        amount: 1000000,
+        confirmed_at: now,
+        recipient_id: thirdAccount.id,
+        recipient_member_id: otherMember.id,
+        sender_id: adminAccount.id,
+        sender_member_id: otherMember.id,
+        transaction_hash: `${transactionHashPrefix}6`,
+        workspace_id: otherWorkspace.id,
+      },
+    ]
+    for (const tip of tips) await factory.tip.insert(tip)
+
+    const response = await postSlashCommand('stats')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('Your tip stats')
+    await expectSlackMessage('Received $0.008 (2 tips)')
+    await expectSlackMessage('Tipped $0.0035 (3 tips)')
+    await expectSlackMessage(`Most tipped <@${Constants.slack.memberUserId}> $0.003 (2 tips)`)
+    await expectSlackMessage(`Most tipped by <@${Constants.slack.memberUserId}> $0.007 (1 tip)`)
+    await expectSlackMessageNotContaining('U000000004')
+    await expectSlackMessageNotContaining('$1.00')
+  })
+
+  test('shows zero stats when the user has no member', async () => {
+    const response = await postSlashCommand('stats')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('Your tip stats')
+    await expectSlackMessage('Received $0.00 (0 tips)')
+    await expectSlackMessage('Tipped $0.00 (0 tips)')
+    await expectSlackMessage('Most tipped None')
+    await expectSlackMessage('Most tipped by None')
   })
 })
 
