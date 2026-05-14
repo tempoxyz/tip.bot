@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { Address, Base64, Hex } from 'ox'
+import * as chat from 'chat'
 import { z } from 'zod'
 import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
@@ -99,6 +100,7 @@ export const api = new Hono<{
           'workspace.default_token_address',
           'workspace.id as workspace_id',
           'workspace.provider_id',
+          'workspace.reaction_tip_emoji',
         ])
         .where(
           'account_link_token.token_hash',
@@ -240,16 +242,34 @@ export const api = new Hono<{
               const installation = await Chat.getSlack().getInstallation(link.provider_id)
               if (!installation) return
 
+              const channelRef = Chat.getChat().channel(
+                link.provider_channel_id!.startsWith('slack:')
+                  ? link.provider_channel_id!
+                  : `slack:${link.provider_channel_id!}`,
+              )
+              const truncatedAddress = `${account.address.slice(0, 6)}…${account.address.slice(-4)}`
+              const explorerUrl = Tempo.explorerLink(link.chain_id, account.address)
+
               await Chat.getSlack().withBotToken(installation.botToken, () =>
-                Chat.getChat()
-                  .channel(
-                    link.provider_channel_id!.startsWith('slack:')
-                      ? link.provider_channel_id!
-                      : `slack:${link.provider_channel_id!}`,
-                  )
-                  .postEphemeral(link.member_provider_user_id, 'Connected', {
-                    fallbackToDM: false,
-                  }),
+                channelRef.postEphemeral(
+                  link.member_provider_user_id,
+                  {
+                    card: chat.Card({
+                      children: [
+                        chat.CardText(
+                          `Wallet connected: \`${truncatedAddress}\` <${explorerUrl}|View>`,
+                        ),
+                        chat.CardText(
+                          `Mention \`@Tipbot @user\` or use \`/tip @user\` to send a payment. React with :${link.reaction_tip_emoji}: to tip a message.`,
+                          { style: 'muted' },
+                        ),
+                      ],
+                      title: 'Connected',
+                    }),
+                    fallbackText: `Connected\nWallet: ${account.address}\nUse /tip @user to send your first tip.`,
+                  },
+                  { fallbackToDM: false },
+                ),
               )
             })().catch((error) => {
               console.error('Failed to notify Slack member after wallet connection:', error)

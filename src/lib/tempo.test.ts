@@ -72,5 +72,8 @@ test('formats Tempo token symbols and transaction links', () => {
     currency: 'USD',
     symbol: '0x0000…0002',
   })
+  expect(Tempo.explorerLink(Tempo.chainLookup.testnet, Tempo.addressLookup.pathUsd)).toContain(
+    `/address/${Tempo.addressLookup.pathUsd}`,
+  )
   expect(Tempo.formatTxLink(Tempo.chainLookup.testnet, '0xabc')).toContain('/tx/0xabc')
 })
