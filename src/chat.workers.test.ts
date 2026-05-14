@@ -263,11 +263,23 @@ describe('/tip @account', () => {
     await connectTipAccounts({ recipient: false })
 
     const response = await postSlashCommand(`<@${Constants.slack.memberUserId}>`)
+    const pendingTips = await db
+      .selectFrom('pending_tip')
+      .innerJoin('workspace', 'workspace.id', 'pending_tip.workspace_id')
+      .selectAll('pending_tip')
+      .where('workspace.provider_id', '=', providerId)
+      .execute()
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      `Payment not sent. <@${Constants.slack.memberUserId}> needs to connect Tipbot before receiving payments.`,
+      `Payment pending. <@${Constants.slack.memberUserId}> needs to connect Tipbot with \`/tip connect\`. The payment will be sent automatically once they connect.`,
     )
+    expect(pendingTips).toHaveLength(1)
+    expect(pendingTips[0]).toMatchObject({
+      amount: 1000,
+      provider_channel_id: `slack:${Constants.slack.channelId}`,
+      recipient_provider_user_id: Constants.slack.memberUserId,
+    })
     await expectSlackMessageNotContaining('tried to tip you')
   })
 
@@ -975,6 +987,78 @@ test('reaction tipping sends default tip and updates aggregate thread reply', as
   )
 })
 
+for (const subtype of ['thread_broadcast', 'reply_broadcast']) {
+  test(`reaction tipping supports ${subtype} messages`, async () => {
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    await connectTipAccounts()
+    const channelId = await createSlackTestChannel('rt')
+    const parent = await memberSlack.chat.postMessage({
+      channel: channelId,
+      text: 'broadcast parent',
+    })
+    if (!parent.ts) throw new Error('Expected Slack parent message timestamp.')
+    const reply = await memberSlack.chat.postMessage({
+      channel: channelId,
+      text: `${subtype} reply`,
+      thread_ts: parent.ts,
+    })
+    if (!reply.ts) throw new Error('Expected Slack reply message timestamp.')
+    fetchSpy.mockImplementation((input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      const params = slackFetchBodyParams(init?.body)
+      if (url.endsWith('/conversations.replies') && params.get('ts') === reply.ts)
+        return Promise.resolve(
+          Response.json({
+            messages: [
+              {
+                subtype,
+                thread_ts: parent.ts,
+                ts: reply.ts,
+                user: Constants.slack.memberUserId,
+              },
+            ],
+            ok: true,
+          }),
+        )
+      return originalFetch(input, init)
+    })
+
+    const response = await postSlackReaction({
+      channelId,
+      messageTs: reply.ts,
+      reaction: 'money_with_wings',
+      userId: Constants.slack.adminUserId,
+    })
+    let reactionTip = await db
+      .selectFrom('reaction_tip')
+      .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
+      .selectAll('reaction_tip')
+      .where('workspace.provider_id', '=', providerId)
+      .executeTakeFirst()
+    for (let index = 0; index < 20 && !reactionTip; index++) {
+      await new Promise((resolve) => setTimeout(resolve, 10)) // 10 milliseconds
+      reactionTip = await db
+        .selectFrom('reaction_tip')
+        .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
+        .selectAll('reaction_tip')
+        .where('workspace.provider_id', '=', providerId)
+        .executeTakeFirst()
+    }
+
+    expect(response.status).toBe(200)
+    expect(reactionTip).toMatchObject({ message_ts: reply.ts, thread_ts: parent.ts })
+    expect(
+      fetchSpy.mock.calls.some((call) =>
+        slackFetchBodyParams(call[1]?.body)
+          .get('text')
+          ?.includes('Reaction tips only work on regular account messages'),
+      ),
+    ).toBe(false)
+    fetchSpy.mockRestore()
+  }, 20_000) // 20 seconds
+}
+
 test('reaction tipping updates one aggregate reply for multiple tipped messages in a thread', async () => {
   const connected = await connectTipAccounts()
   if (!connected.recipientMember) throw new Error('Expected connected recipient.')
@@ -1207,7 +1291,7 @@ test('reaction tipping reports unconnected recipient', async () => {
   expect(reactionTips).toHaveLength(0)
   await expectSlackPostEphemeralCall(
     fetchSpy,
-    `Payment not sent. <@${Constants.slack.memberUserId}> needs to connect Tipbot before receiving payments.`,
+    `Payment pending. <@${Constants.slack.memberUserId}> needs to connect Tipbot with \`/tip connect\`. The payment will be sent automatically once they connect.`,
   )
   await expectSlackThreadMessageNotContaining(message.ts, 'tipped', { channelId })
   fetchSpy.mockRestore()

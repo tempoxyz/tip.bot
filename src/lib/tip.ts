@@ -1082,26 +1082,30 @@ async function createPendingTip(
     }
 
   const now = new Date().toISOString()
-  await db
-    .insertInto('pending_tip')
-    .values({
-      amount: input.amount,
-      created_at: now,
-      id: Nanoid.generate(),
-      idempotency_key: input.idempotencyKey,
-      memo: input.memo,
-      provider: input.provider,
-      provider_channel_id: input.providerChannelId,
-      provider_id: input.providerId,
-      provider_thread_id: input.providerThreadId ?? null,
-      recipient_provider_label: input.recipientProviderLabel ?? null,
-      recipient_provider_user_id: input.recipientProviderUserId,
-      sender_member_id: input.senderMemberId,
-      token_address: Address.checksum(input.tokenAddress),
-      updated_at: now,
-      workspace_id: input.workspace.id,
-    })
-    .execute()
+  try {
+    await db
+      .insertInto('pending_tip')
+      .values({
+        amount: input.amount,
+        created_at: now,
+        id: Nanoid.generate(),
+        idempotency_key: input.idempotencyKey,
+        memo: input.memo,
+        provider: input.provider,
+        provider_channel_id: input.providerChannelId,
+        provider_id: input.providerId,
+        provider_thread_id: input.providerThreadId ?? null,
+        recipient_provider_label: input.recipientProviderLabel ?? null,
+        recipient_provider_user_id: input.recipientProviderUserId,
+        sender_member_id: input.senderMemberId,
+        token_address: Address.checksum(input.tokenAddress),
+        updated_at: now,
+        workspace_id: input.workspace.id,
+      })
+      .execute()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+  }
 
   return {
     code: 'recipient_pending',
@@ -1130,6 +1134,8 @@ export async function claimPendingTips(
 
   const results: Array<{
     pendingTipId: string
+    providerChannelId: string
+    providerThreadId: string | null
     result: TipResult
     senderMemberId: string
   }> = []
@@ -1171,9 +1177,15 @@ export async function claimPendingTips(
 
     results.push({
       pendingTipId: pending.id,
+      providerChannelId: pending.provider_channel_id,
+      providerThreadId: pending.provider_thread_id,
       result,
       senderMemberId: pending.sender_member_id,
     })
   }
   return results
+}
+
+function isUniqueConstraintError(error: unknown) {
+  return error instanceof Error && /unique constraint|constraint failed/i.test(error.message)
 }

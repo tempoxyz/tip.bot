@@ -1069,7 +1069,10 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
     )
     return
   }
-  if (message.bot_id || message.subtype) {
+  if (
+    message.bot_id ||
+    (message.subtype && !['reply_broadcast', 'thread_broadcast'].includes(message.subtype))
+  ) {
     await postSlackEphemeral(
       provider.id,
       event.item.channel,

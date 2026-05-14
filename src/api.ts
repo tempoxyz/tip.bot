@@ -251,13 +251,18 @@ export const api = new Hono<{
                   .where('id', '=', entry.senderMemberId)
                   .executeTakeFirst()
                 if (!sender) continue
-                const channelId = link.provider_channel_id?.replace(/^slack:/, '')
+                const channelId = entry.providerChannelId.replace(/^slack:/, '')
                 if (!channelId) continue
                 const tipAmount = entry.result.isDefaultToken
                   ? formatCurrencyAmount(entry.result.amount, entry.result.tokenCurrency)
-                  : formatTipAmount(entry.result.amount, entry.result.tokenCurrency, entry.result.tokenSymbol)
+                  : formatTipAmount(
+                      entry.result.amount,
+                      entry.result.tokenCurrency,
+                      entry.result.tokenSymbol,
+                    )
                 const body = new URLSearchParams()
                 body.set('channel', channelId)
+                if (entry.providerThreadId) body.set('thread_ts', entry.providerThreadId)
                 body.set(
                   'text',
                   `<@${sender.provider_user_id}> ${entry.result.memo ? 'sent' : 'tipped'} <@${link.member_provider_user_id}> ${tipAmount}${entry.result.memo ? ` for ${entry.result.memo}` : ''}. · <${Tempo.formatTxLink(entry.result.chainId, entry.result.transactionHash)}|Receipt>`,
