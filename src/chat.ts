@@ -168,7 +168,7 @@ const actions = {
       .executeTakeFirst()
     if (!workspace) return
 
-    if (!(await isSlackAdmin(raw.team.id, event.user.userId))) {
+    if (!(await canManageSlackWorkspaceSettings(raw.team.id, event.user.userId))) {
       const channelId = raw.channel?.id ?? raw.container?.channel_id
       if (channelId)
         await getChat()
@@ -274,7 +274,7 @@ const modalSubmits = {
       }),
       JSON.parse(event.privateMetadata ?? '{}'),
     )
-    if (!(await isSlackAdmin(metadata.providerId, event.user.userId))) return
+    if (!(await canManageSlackWorkspaceSettings(metadata.providerId, event.user.userId))) return
 
     const chainId = (() => {
       if (event.values.network === 'mainnet') return Tempo.chainLookup.mainnet
@@ -357,11 +357,9 @@ const handlers = {
       return
     }
 
-    await event.channel.postEphemeral(
-      event.user,
-      configCard(workspace, { canEdit: await isSlackAdmin(ctx.provider.id, event.user.userId) }),
-      { fallbackToDM: false },
-    )
+    await postConfigEphemeral(event, ctx, workspace, {
+      canEdit: await canManageSlackWorkspaceSettings(ctx.provider.id, event.user.userId),
+    })
   },
   async connect(event, ctx) {
     await postConnectLink(event, ctx)
@@ -409,8 +407,14 @@ const handlers = {
     const installation = await getSlack().getInstallation(ctx.provider.id)
     if (!installation) return
 
+    const workspace = await ctx.db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', ctx.provider.type)
+      .where('provider_id', '=', ctx.provider.id)
+      .executeTakeFirst()
+
     const commandRows = [
-      ['@Tipbot @account [amount] [token] [for memo]', 'Send payment'],
       ['/tip @account [amount] [token] [for memo]', 'Send payment'],
       ['/tip config', 'Manage workspace configuration'],
       ['/tip connect', 'Connect to Tipbot'],
@@ -427,6 +431,13 @@ const handlers = {
       ['/tip @account 0.005 USDC', 'Send custom token'],
       ['/tip @account 0.005 USDC for coffee', 'Send custom token with memo'],
     ]
+    const mentionExampleRows = [
+      ['@Tipbot @account [amount] [token] [for memo]', 'Send payment by mentioning Tipbot'],
+      [
+        `[emoji] :${workspace?.reaction_tip_emoji ?? 'money_with_wings'}:`,
+        'Send default amount by reacting to a message',
+      ],
+    ]
     const body = new URLSearchParams()
     body.set('channel', event.channel.id.replace(/^slack:/, ''))
     body.set(
@@ -435,6 +446,8 @@ const handlers = {
         commandRows.map((row) => `${row[0]} ${row[1]}`).join('\n'),
         '',
         paymentExampleRows.map((row) => `${row[0]} ${row[1]}`).join('\n'),
+        '',
+        mentionExampleRows.map((row) => `${row[0]} ${row[1]}`).join('\n'),
       ].join('\n'),
     )
     body.set(
@@ -452,8 +465,18 @@ const handlers = {
         },
         {
           rows: [
-            [slackTableCell('Example'), slackTableCell('Description')],
+            [slackTableCell(' '), slackTableCell('Description')],
             ...paymentExampleRows.map((row) => [
+              slackTableCell(row[0], { code: true }),
+              slackTableCell(row[1]),
+            ]),
+          ],
+          type: 'table',
+        },
+        {
+          rows: [
+            [slackTableCell('Interaction'), slackTableCell('Description')],
+            ...mentionExampleRows.map((row) => [
               slackTableCell(row[0], { code: true }),
               slackTableCell(row[1]),
             ]),
@@ -646,6 +669,9 @@ const commandNames = ['config', 'connect', 'disconnect', 'help', 'leaderboard', 
 const commandPattern = new RegExp(`^(${commandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
 const actionNames = ['config_edit', 'connect_cancel', 'confirm_cancel'] as const
 const modalSubmitNames = ['config_edit'] as const
+const workspaceSettingsAccountAddressAllowlist = [
+  '0x00ec0495bb6d03a32d75c460ca2f2a9e53654348',
+] as const
 
 type HandlerContext = {
   db: DB.Type
@@ -1657,6 +1683,22 @@ async function isSlackAdmin(providerId: string, providerUserId: string) {
   return Boolean(info.ok && (info.user?.is_admin || info.user?.is_owner))
 }
 
+async function canManageSlackWorkspaceSettings(providerId: string, providerUserId: string) {
+  if (await isSlackAdmin(providerId, providerUserId)) return true
+
+  const member = await DB.create(env.DB)
+    .selectFrom('workspace')
+    .innerJoin('member', 'member.workspace_id', 'workspace.id')
+    .innerJoin('account', 'account.id', 'member.account_id')
+    .select('member.id')
+    .where('workspace.provider', '=', 'slack')
+    .where('workspace.provider_id', '=', providerId)
+    .where('member.provider_user_id', '=', providerUserId)
+    .where(sql<string>`lower("account"."address")`, 'in', workspaceSettingsAccountAddressAllowlist)
+    .executeTakeFirst()
+  return Boolean(member)
+}
+
 function configCard(
   workspace: DB_gen.Selectable.workspace,
   options?: { canEdit?: boolean; updated?: boolean },
@@ -1695,11 +1737,111 @@ function configCard(
   }
 }
 
+async function postConfigEphemeral(
+  event: chat.SlashCommandEvent,
+  ctx: HandlerContext,
+  workspace: DB_gen.Selectable.workspace,
+  options?: { canEdit?: boolean },
+) {
+  const installation = await getSlack().getInstallation(ctx.provider.id)
+  if (!installation) return
+
+  const body = new URLSearchParams()
+  body.set('channel', event.channel.id.replace(/^slack:/, ''))
+  body.set('text', configFallbackText(workspace))
+  body.set(
+    'blocks',
+    JSON.stringify([
+      {
+        rows: [
+          [slackTableCell('Setting'), slackTableCell('Value')],
+          [slackTableCell('Network'), slackTableCell(configNetworkLabel(workspace))],
+          [slackTableCell('Default token'), slackTableCell(configToken(workspace).symbol)],
+          [
+            slackTableCell('Default amount'),
+            slackTableCell(formatAmount(workspace.default_amount)),
+          ],
+          [slackTableCell('Reaction'), slackTableReactionCell(workspace.reaction_tip_emoji)],
+        ],
+        type: 'table',
+      },
+      ...(options?.canEdit
+        ? [
+            {
+              elements: [
+                {
+                  action_id: 'config_edit',
+                  text: { text: 'Edit settings', type: 'plain_text' },
+                  type: 'button',
+                },
+              ],
+              type: 'actions',
+            },
+          ]
+        : []),
+    ]),
+  )
+  body.set('user', event.user.userId)
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
+      body,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok) throw Slack.slackApiError('chat.postEphemeral', json.error)
+}
+
+function configFallbackText(
+  workspace: DB_gen.Selectable.workspace,
+  options?: { updated?: boolean },
+) {
+  const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
+  return `Setting Value\nNetwork ${configNetworkLabel(workspace)}\nDefault token ${configToken(workspace).symbol} ${Tempo.formatTokenLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}\nReaction 💸 \`:${workspace.reaction_tip_emoji}:\`${options?.updated ? '\nWorkspace settings updated' : ''}`
+}
+
+function configNetworkLabel(workspace: DB_gen.Selectable.workspace) {
+  return workspace.chain_id === Tempo.chainLookup.mainnet ? 'Mainnet' : 'Testnet'
+}
+
+function configToken(workspace: DB_gen.Selectable.workspace) {
+  return Tempo.getTokenMetadataFallback(
+    workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+  )
+}
+
 function slackTableCell(text: string, style?: { code?: boolean }) {
   return {
     elements: [
       {
         elements: [style ? { style, text, type: 'text' } : { text, type: 'text' }],
+        type: 'rich_text_section',
+      },
+    ],
+    type: 'rich_text',
+  }
+}
+
+function slackTableReactionCell(emojiName: string) {
+  return slackTableRichCell([
+    { name: emojiName, type: 'emoji' },
+    { text: ' ', type: 'text' },
+    { style: { code: true }, text: `:${emojiName}:`, type: 'text' },
+  ])
+}
+
+function slackTableRichCell(elements: unknown[]) {
+  return {
+    elements: [
+      {
+        elements,
         type: 'rich_text_section',
       },
     ],

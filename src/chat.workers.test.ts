@@ -961,6 +961,8 @@ test('reaction tipping reports approval required', async () => {
 
 describe('/tip config', () => {
   test('shows current config', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
     const response = await postSlashCommand('config')
 
     expect(response.status).toBe(200)
@@ -975,6 +977,9 @@ describe('/tip config', () => {
     await expectSlackMessage('0.001')
     await expectSlackMessage('Reaction')
     await expectSlackMessage('💸 `:money_with_wings:`')
+    await expectSlackPostEphemeralCall(fetchSpy, '"style":{"code":true}')
+    await expectSlackPostEphemeralCall(fetchSpy, '"text":":money_with_wings:"')
+    fetchSpy.mockRestore()
   })
 
   test('handles missing workspace', async () => {
@@ -1057,6 +1062,43 @@ describe('/tip config', () => {
     expect(workspace.default_amount).toBe(2000)
     expect(workspace.default_token_address).toBe(Tempo.addressLookup.betaUsd)
     expect(workspace.reaction_tip_emoji).toBe('tip')
+  })
+
+  test('allows settings edit from allowlisted connected account', async () => {
+    const workspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', providerId)
+      .executeTakeFirstOrThrow()
+    const account = await factory.account.insert({
+      address: '0x00Ec0495bB6d03a32D75C460CA2f2a9E53654348',
+    })
+    await factory.member.insert({
+      account_id: account.id,
+      provider_user_id: Constants.slack.memberUserId,
+      workspace_id: workspace.id,
+    })
+
+    const response = await postSlackInteraction(
+      createViewSubmissionPayload({
+        amount: '0.002',
+        network: 'testnet',
+        token: 'BetaUSD',
+        userId: Constants.slack.memberUserId,
+        userName: Constants.slack.memberUserName,
+      }),
+    )
+    const updatedWorkspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', providerId)
+      .executeTakeFirstOrThrow()
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe('')
+    expect(updatedWorkspace.chain_id).toBe(Tempo.chainLookup.testnet)
+    expect(updatedWorkspace.default_amount).toBe(2000)
+    expect(updatedWorkspace.default_token_address).toBe(Tempo.addressLookup.betaUsd)
   })
 
   test('rejects invalid edit modal amount', async () => {
@@ -1393,6 +1435,9 @@ describe('/tip help', () => {
     await expectSlackMessage('/tip @account 0.005 for coffee')
     await expectSlackMessage('/tip @account 0.005 USDC')
     await expectSlackMessage('/tip @account 0.005 USDC for coffee')
+    await expectSlackMessage('@Tipbot @account [amount] [token] [for memo]')
+    await expectSlackMessage('[emoji] :money_with_wings:')
+    await expectSlackMessage('Send default amount by reacting to a message')
     await expectSlackMessageNotContaining('Payment examples')
     await expectSlackMessage('/tip config')
     await expectSlackMessage('/tip connect')
@@ -1997,11 +2042,16 @@ function createViewSubmissionPayload(input: {
   emoji?: string
   network: string
   token: string
+  userId?: string
+  userName?: string
 }) {
   return {
     team: { id: providerId },
     type: 'view_submission',
-    user: { id: Constants.slack.adminUserId, name: 'admin' },
+    user: {
+      id: input.userId ?? Constants.slack.adminUserId,
+      name: input.userName ?? Constants.slack.adminUserName,
+    },
     view: {
       callback_id: 'config_edit',
       id: `V${Nanoid.generate()}`,
