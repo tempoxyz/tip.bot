@@ -11,7 +11,7 @@ import { testClient } from 'hono/testing'
 import { AbiFunction } from 'ox'
 import { KeyAuthorization } from 'ox/tempo'
 import { Account } from 'viem/tempo'
-import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api } from '#/api.ts'
 import * as Schema from '#db/schemas.gen.ts'
 import * as Constants from '#test/constants.ts'
@@ -20,6 +20,7 @@ import { createSlackHeaders } from '#/lib/slack.ts'
 
 let waitUntil: Promise<unknown>[] = []
 let providerId = ''
+let unconnectedProviderUserId = ''
 const db = DB.create(env.DB)
 const executionCtx = {
   passThroughOnException: vi.fn(),
@@ -33,11 +34,18 @@ const factory = Factory.create(db)
 const memberSlack = new WebClient('member', { slackApiUrl: env.SLACK_API_URL })
 const slack = new WebClient(Constants.slack.botToken, { slackApiUrl: env.SLACK_API_URL })
 
+beforeAll(async () => {
+  const user = await slack.users.lookupByEmail({ email: Constants.slack.unconnectedUserEmail })
+  unconnectedProviderUserId = user.user?.id ?? ''
+  if (!unconnectedProviderUserId) throw new Error('Expected Slack unconnected test user.')
+})
+
 beforeEach(async () => {
   waitUntil = []
   providerId = `T${Nanoid.generate()}`
   executionCtx.passThroughOnException.mockClear()
   executionCtx.waitUntil.mockClear()
+  vi.restoreAllMocks()
   const history = await slack.conversations.history({ channel: Constants.slack.channelId })
   await Promise.all(
     (history.messages ?? [])
@@ -347,18 +355,21 @@ describe('/tip @account', () => {
 
 test('reaction tipping sends default tip and updates aggregate thread reply', async () => {
   await connectTipAccounts()
+  const channelId = await createSlackTestChannel('rt')
   const message = await memberSlack.chat.postMessage({
-    channel: Constants.slack.channelId,
+    channel: channelId,
     text: 'nice work',
   })
   if (!message.ts) throw new Error('Expected Slack message timestamp.')
 
   const response = await postSlackReaction({
+    channelId,
     messageTs: message.ts,
     reaction: 'money_with_wings',
     userId: Constants.slack.adminUserId,
   })
   const readdResponse = await postSlackReaction({
+    channelId,
     eventTs: `${message.ts}-readd`,
     messageTs: message.ts,
     reaction: 'money_with_wings',
@@ -379,19 +390,22 @@ test('reaction tipping sends default tip and updates aggregate thread reply', as
   await expectSlackThreadMessage(
     message.ts,
     `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}>`,
+    { channelId },
   )
 })
 
 test('reaction tipping ignores duplicate signed Slack event deliveries', async () => {
   await connectTipAccounts()
+  const channelId = await createSlackTestChannel('rt')
   const message = await memberSlack.chat.postMessage({
-    channel: Constants.slack.channelId,
+    channel: channelId,
     text: 'duplicate reaction delivery',
   })
   if (!message.ts) throw new Error('Expected Slack message timestamp.')
 
   const eventId = `Ev${Nanoid.generate()}`
   const firstResponse = await postSlackReaction({
+    channelId,
     eventId,
     eventTs: `${message.ts}-reaction`,
     messageTs: message.ts,
@@ -399,6 +413,7 @@ test('reaction tipping ignores duplicate signed Slack event deliveries', async (
     userId: Constants.slack.adminUserId,
   })
   const secondResponse = await postSlackReaction({
+    channelId,
     eventId,
     eventTs: `${message.ts}-reaction`,
     messageTs: message.ts,
@@ -421,16 +436,18 @@ test('reaction tipping ignores duplicate signed Slack event deliveries', async (
 test('reaction tipping reports unconnected sender', async () => {
   const fetchSpy = vi.spyOn(globalThis, 'fetch')
   await connectTipAccounts()
+  const channelId = await createSlackTestChannel('rt')
   const message = await memberSlack.chat.postMessage({
-    channel: Constants.slack.channelId,
+    channel: channelId,
     text: 'unknown sender should not tip',
   })
   if (!message.ts) throw new Error('Expected Slack message timestamp.')
 
   const response = await postSlackReaction({
+    channelId,
     messageTs: message.ts,
     reaction: 'money_with_wings',
-    userId: Constants.slack.missingUserId,
+    userId: unconnectedProviderUserId,
   })
   const reactionTips = await db
     .selectFrom('reaction_tip')
@@ -445,20 +462,22 @@ test('reaction tipping reports unconnected sender', async () => {
     fetchSpy,
     'Payment not sent. Connect to Tipbot with `/tip connect` and try again.',
   )
-  await expectSlackThreadMessageNotContaining(message.ts, 'tipped')
+  await expectSlackThreadMessageNotContaining(message.ts, 'tipped', { channelId })
   fetchSpy.mockRestore()
 })
 
 test('reaction tipping reports unconnected recipient', async () => {
   const fetchSpy = vi.spyOn(globalThis, 'fetch')
   await connectTipAccounts({ recipient: false })
+  const channelId = await createSlackTestChannel('rt')
   const message = await memberSlack.chat.postMessage({
-    channel: Constants.slack.channelId,
+    channel: channelId,
     text: 'unconnected recipient should not receive tip',
   })
   if (!message.ts) throw new Error('Expected Slack message timestamp.')
 
   const response = await postSlackReaction({
+    channelId,
     messageTs: message.ts,
     reaction: 'money_with_wings',
     userId: Constants.slack.adminUserId,
@@ -476,7 +495,7 @@ test('reaction tipping reports unconnected recipient', async () => {
     fetchSpy,
     `Payment not sent. <@${Constants.slack.memberUserId}> needs to connect Tipbot before receiving payments.`,
   )
-  await expectSlackThreadMessageNotContaining(message.ts, 'tipped')
+  await expectSlackThreadMessageNotContaining(message.ts, 'tipped', { channelId })
   fetchSpy.mockRestore()
 })
 
@@ -484,13 +503,15 @@ test('reaction tipping reports approval required', async () => {
   const fetchSpy = vi.spyOn(globalThis, 'fetch')
   await connectTipAccounts()
   await db.deleteFrom('access_key').execute()
+  const channelId = await createSlackTestChannel('rt')
   const message = await memberSlack.chat.postMessage({
-    channel: Constants.slack.channelId,
+    channel: channelId,
     text: 'approval required reaction tip',
   })
   if (!message.ts) throw new Error('Expected Slack message timestamp.')
 
   const response = await postSlackReaction({
+    channelId,
     messageTs: message.ts,
     reaction: 'money_with_wings',
     userId: Constants.slack.adminUserId,
@@ -512,7 +533,7 @@ test('reaction tipping reports approval required', async () => {
   expect(reactionTips).toHaveLength(0)
   expect(tips).toHaveLength(0)
   await expectSlackPostEphemeralCall(fetchSpy, 'Tipbot needs your approval to send this payment.')
-  await expectSlackThreadMessageNotContaining(message.ts, 'tipped')
+  await expectSlackThreadMessageNotContaining(message.ts, 'tipped', { channelId })
   fetchSpy.mockRestore()
 }, 20_000) // 20 seconds
 
@@ -950,7 +971,7 @@ describe('/tip help', () => {
     await expectSlackMessage('/tip @account 0.005 for coffee')
     await expectSlackMessage('/tip @account 0.005 USDC')
     await expectSlackMessage('/tip @account 0.005 USDC for coffee')
-    await expectSlackMessage('Payment examples')
+    await expectSlackMessageNotContaining('Payment examples')
     await expectSlackMessage('/tip config')
     await expectSlackMessage('/tip connect')
     await expectSlackMessage('/tip disconnect')
@@ -1233,8 +1254,10 @@ async function findOrCreateAccount(address: string) {
   return await factory.account.insert({ address })
 }
 
-async function expectSlackMessage(text: string) {
-  const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+async function expectSlackMessage(text: string, options: { channelId?: string } = {}) {
+  const history = await slack.conversations.history({
+    channel: options.channelId ?? Constants.slack.channelId,
+  })
 
   expect(history.ok).toBe(true)
   expect(
@@ -1243,9 +1266,13 @@ async function expectSlackMessage(text: string) {
   ).toBe(true)
 }
 
-async function expectSlackThreadMessage(messageTs: string, text: string) {
+async function expectSlackThreadMessage(
+  messageTs: string,
+  text: string,
+  options: { channelId?: string } = {},
+) {
   const history = await slack.conversations.replies({
-    channel: Constants.slack.channelId,
+    channel: options.channelId ?? Constants.slack.channelId,
     ts: messageTs,
   })
 
@@ -1256,9 +1283,13 @@ async function expectSlackThreadMessage(messageTs: string, text: string) {
   ).toBe(true)
 }
 
-async function expectSlackThreadMessageNotContaining(messageTs: string, text: string) {
+async function expectSlackThreadMessageNotContaining(
+  messageTs: string,
+  text: string,
+  options: { channelId?: string } = {},
+) {
   const history = await slack.conversations.replies({
-    channel: Constants.slack.channelId,
+    channel: options.channelId ?? Constants.slack.channelId,
     ts: messageTs,
   })
 
@@ -1289,10 +1320,10 @@ async function expectSlackPostEphemeralCall(
           const input = call[0]
           const url =
             typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+          const body = String(call[1]?.body ?? '')
           return (
             url.endsWith('/chat.postEphemeral') &&
-            call[1]?.body instanceof URLSearchParams &&
-            call[1].body.get('text')?.includes(text)
+            new URLSearchParams(body).get('text')?.includes(text) === true
           )
         }),
       {
@@ -1301,7 +1332,8 @@ async function expectSlackPostEphemeralCall(
             const input = call[0]
             const url =
               typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-            return `${url} ${call[1]?.body instanceof URLSearchParams ? call[1].body.get('text') : ''}`
+            const body = String(call[1]?.body ?? '')
+            return `${url} ${new URLSearchParams(body).get('text') ?? body}`
           })
           .join('\n'),
       },
@@ -1329,6 +1361,17 @@ async function expectNoSlackMessages() {
   const history = await slack.conversations.history({ channel: Constants.slack.channelId })
 
   expect(history).toMatchObject({ messages: [], ok: true })
+}
+
+async function createSlackTestChannel(prefix: string) {
+  const channel = await slack.conversations.create({
+    name: `${prefix}${Nanoid.generate()
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '')}`,
+  })
+  const channelId = channel.channel?.id
+  if (!channelId) throw new Error('Expected Slack test channel.')
+  return channelId
 }
 
 async function postSlashCommand(
@@ -1366,6 +1409,7 @@ async function postSlackInteraction(payload: unknown) {
 }
 
 async function postSlackReaction(options: {
+  channelId?: string
   eventId?: string
   eventTs?: string
   messageTs: string
@@ -1376,7 +1420,7 @@ async function postSlackReaction(options: {
     event: {
       event_ts: options.eventTs ?? `${options.messageTs}-reaction`,
       item: {
-        channel: Constants.slack.channelId,
+        channel: options.channelId ?? Constants.slack.channelId,
         ts: options.messageTs,
         type: 'message',
       },

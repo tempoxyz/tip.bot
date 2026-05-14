@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers'
 import { testClient } from 'hono/testing'
 import { Address, Secp256k1 } from 'ox'
 import { Account } from 'viem/tempo'
-import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api } from '#/api.ts'
 import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
@@ -17,6 +17,7 @@ import * as Schema from '#db/schemas.gen.ts'
 import * as Constants from '#test/constants.ts'
 import * as Factory from '#test/factory.ts'
 
+let apiChannelId = ''
 let waitUntil: Promise<unknown>[] = []
 const db = DB.create(env.DB)
 const factory = Factory.create(db)
@@ -29,6 +30,12 @@ const executionCtx = {
 }
 const client = testClient(api, env, executionCtx)
 const slack = new WebClient(Constants.slack.botToken, { slackApiUrl: env.SLACK_API_URL })
+
+beforeAll(async () => {
+  const channel = await slack.conversations.create({ name: `api${Date.now()}` })
+  apiChannelId = channel.channel?.id ?? ''
+  if (!apiChannelId) throw new Error('Expected Slack API test channel.')
+})
 
 beforeEach(async () => {
   waitUntil = []
@@ -368,7 +375,7 @@ describe('/api/confirm/:token', () => {
       .selectAll()
       .where('account_id', '=', confirmation.senderAccount.id)
       .execute()
-    const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+    const history = await slack.conversations.history({ channel: apiChannelId })
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({ ok: true })
@@ -414,7 +421,7 @@ describe('/api/confirm/:token', () => {
       .selectAll()
       .where('account_id', '=', confirmation.senderAccount.id)
       .execute()
-    const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+    const history = await slack.conversations.history({ channel: apiChannelId })
 
     expect(response.status).toBe(200)
     expect(tip.confirmed_at).toEqual(expect.any(String))
@@ -681,7 +688,7 @@ async function createConfirmationToken(
     memo: options.memo ?? null,
     nonce,
     provider: 'slack',
-    providerChannelId: Constants.slack.channelId,
+    providerChannelId: apiChannelId,
     providerId,
     recipientProviderUserId: Constants.slack.memberUserId,
     senderProviderUserId: Constants.slack.adminUserId,

@@ -20,6 +20,8 @@ export const slack = {
   teamDomain: 'emulate',
   teamId: 'T000000001',
   teamName: 'Emulate',
+  unconnectedUserEmail: 'unconnected@example.com',
+  unconnectedUserName: 'unconnected',
 } as const
 
 export const seed = {
@@ -32,6 +34,10 @@ export const seed = {
       {
         email: slack.memberUserEmail,
         name: slack.memberUserName,
+      },
+      {
+        email: slack.unconnectedUserEmail,
+        name: slack.unconnectedUserName,
       },
     ],
   },

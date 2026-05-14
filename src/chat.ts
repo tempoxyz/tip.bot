@@ -386,7 +386,6 @@ const handlers = {
       [
         commandRows.map((row) => `${row[0]} ${row[1]}`).join('\n'),
         '',
-        'Payment examples',
         paymentRows.map((row) => `${row[0]} ${row[1]}`).join('\n'),
       ].join('\n'),
     )
@@ -402,10 +401,6 @@ const handlers = {
             ]),
           ],
           type: 'table',
-        },
-        {
-          text: { text: 'Payment examples', type: 'mrkdwn' },
-          type: 'section',
         },
         {
           rows: [
@@ -1082,7 +1077,10 @@ async function postSlackEphemeral(
   const response = await getSlack().withBotToken(installation.botToken, () =>
     fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
       body,
-      headers: { authorization: `Bearer ${installation.botToken}` },
+      headers: {
+        authorization: `Bearer ${installation.botToken}`,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
       method: 'POST',
     }),
   )
