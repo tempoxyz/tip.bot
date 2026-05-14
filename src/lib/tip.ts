@@ -2,6 +2,7 @@ import * as AccessKey from '#/lib/accessKey.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as Confirmation from '#/lib/confirmation.ts'
 import * as DB from '#db/client.ts'
+import { replaceEmojiShortcodes } from '#/lib/emoji.ts'
 import { formatAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Tempo from '#/lib/tempo.ts'
@@ -225,7 +226,7 @@ export function parseTipText(value: string) {
 
 export function encodeTransferMemo(memo: string | null) {
   if (!memo) return Hex.padRight('0x', 32)
-  const hex = Hex.fromString(memo)
+  const hex = Hex.fromString(replaceEmojiShortcodes(memo))
   if (Hex.size(hex) > 32) throw new Error('Memo must be at most 32 bytes.')
   return Hex.padRight(hex, 32)
 }
