@@ -8,6 +8,7 @@ import { useConnect, useConnection, useConnectors } from 'wagmi'
 import * as z from 'zod/mini'
 import { api } from '#/api.ts'
 import { WalletProviders } from '#/components/WalletProviders.tsx'
+import { getErrorMessage } from '#/lib/error.ts'
 import { formatCurrencyAmount } from '#/lib/format.ts'
 import { rpc } from '#/lib/rpc.ts'
 import * as Tempo from '#/lib/tempo.ts'
@@ -143,7 +144,7 @@ function ConfirmPanel(props: {
       setStatus('sent')
     } catch (error) {
       setStatus('idle')
-      setError(error instanceof Error ? error.message : 'Payment failed.')
+      setError(getErrorMessage(error, 'Payment failed.'))
     }
   }
 
@@ -191,29 +192,30 @@ function ConfirmPanel(props: {
               </div>
               <div className="space-y-5 border-b border-gray5 py-6">
                 <h3 className="text-lg font-bold text-gray10">Payment details</h3>
-                <div className="flex flex-col gap-2 rounded-xl border border-gray5 bg-bg1 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-                  <span className="text-sm font-medium text-gray8">Amount</span>
-                  <span className="text-xl font-bold text-gray10 sm:text-2xl">
-                    {formatCurrencyAmount(data.amount, data.tokenCurrency)} {data.tokenSymbol}
-                  </span>
-                </div>
-                <div className="flex flex-col gap-2 rounded-xl border border-gray5 bg-bg1 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-                  <span className="text-sm font-medium text-gray8">To</span>
-                  <span className="text-xl font-bold text-gray10 sm:text-2xl">{recipient}</span>
-                </div>
-                {data.memo ? (
-                  <div className="flex flex-col gap-2 rounded-xl border border-gray5 bg-bg1 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-                    <span className="text-sm font-medium text-gray8">For</span>
-                    <span className="text-xl font-bold text-gray10 sm:text-2xl">{data.memo}</span>
+                <div className="divide-y divide-gray5 rounded-xl border border-gray5 bg-bg1">
+                  <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
+                    <span className="text-base font-bold text-gray8 sm:text-lg">Amount</span>
+                    <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
+                      {formatCurrencyAmount(data.amount, data.tokenCurrency)} {data.tokenSymbol}
+                    </span>
                   </div>
-                ) : null}
+                  <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
+                    <span className="text-base font-bold text-gray8 sm:text-lg">To</span>
+                    <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
+                      {recipient}
+                    </span>
+                  </div>
+                  {data.memo ? (
+                    <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
+                      <span className="text-base font-bold text-gray8 sm:text-lg">For</span>
+                      <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
+                        {data.memo}
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
               </div>
               <div className="space-y-4 pt-6">
-                <p className="text-base text-gray9">
-                  {data.kind === 'reusable_access_key'
-                    ? `Tipbot can send future ${data.tokenSymbol} tips from Slack, up to ${formatCurrencyAmount(data.accessKeyLimit, data.tokenCurrency)} per day. You can disconnect anytime.`
-                    : 'Tipbot will use this approval once and won’t save a new access key.'}
-                </p>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                   <button
                     className="inline-flex h-12 items-center justify-center rounded-lg bg-green8 px-6 text-lg font-bold text-white transition-colors outline-none hover:bg-green7 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
@@ -230,6 +232,11 @@ function ConfirmPanel(props: {
                     Cancel
                   </a>
                 </div>
+                <p className="text-base text-gray9">
+                  {data.kind === 'reusable_access_key'
+                    ? `Tipbot can send future ${data.tokenSymbol} tips from Slack, up to ${formatCurrencyAmount(data.accessKeyLimit, data.tokenCurrency)} per day. You can disconnect anytime.`
+                    : 'Tipbot will use this approval once and won’t save a new access key.'}
+                </p>
                 {error ? <p className="text-sm font-medium text-red9">{error}</p> : null}
               </div>
             </div>

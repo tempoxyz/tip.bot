@@ -303,6 +303,7 @@ describe('/tip @account', () => {
       {
         elements: [
           {
+            action_id: 'add_funds',
             style: 'primary',
             text: { text: 'Add funds', type: 'plain_text' },
             type: 'button',
@@ -565,9 +566,58 @@ test('@Tipbot mention shows add funds action when sender has insufficient funds'
     fetchSpy,
     'Payment not sent. Your wallet has insufficient funds.',
   )
+  expect(
+    fetchSpy.mock.calls.some((call) => {
+      const input = call[0]
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      const params = slackFetchBodyParams(call[1]?.body)
+      return (
+        url.endsWith('/chat.postEphemeral') &&
+        params.get('text')?.includes('Payment not sent. Your wallet has insufficient funds.') &&
+        !params.has('thread_ts')
+      )
+    }),
+  ).toBe(true)
   await expectSlackPostEphemeralCall(fetchSpy, 'Add funds on https://wallet.tempo.xyz')
   await expectSlackPostEphemeralCall(fetchSpy, '"url":"https://wallet.tempo.xyz"')
   await expectSlackAssistantStatusCall(fetchSpy, messageTs, '')
+  handleTipRequest.mockRestore()
+  fetchSpy.mockRestore()
+}, 20_000) // 20 seconds
+
+test('@Tipbot thread mention shows add funds action in thread', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  const handleTipRequest = vi.spyOn(Tip, 'handleTipRequest').mockResolvedValue({
+    code: 'insufficient_funds',
+    ok: false,
+  })
+  const parentTs = `1700000010.${Nanoid.generate().slice(0, 6)}`
+  const messageTs = `1700000011.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}>`,
+    threadTs: parentTs,
+  })
+
+  expect(response.status).toBe(200)
+  await expectSlackPostEphemeralCall(
+    fetchSpy,
+    'Payment not sent. Your wallet has insufficient funds.',
+  )
+  expect(
+    fetchSpy.mock.calls.some((call) => {
+      const input = call[0]
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      const params = slackFetchBodyParams(call[1]?.body)
+      return (
+        url.endsWith('/chat.postEphemeral') &&
+        params.get('text')?.includes('Payment not sent. Your wallet has insufficient funds.') &&
+        params.get('thread_ts') === parentTs
+      )
+    }),
+  ).toBe(true)
+  await expectSlackAssistantStatusCall(fetchSpy, parentTs, '')
   handleTipRequest.mockRestore()
   fetchSpy.mockRestore()
 }, 20_000) // 20 seconds

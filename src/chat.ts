@@ -80,6 +80,7 @@ export function getChat() {
 
     await handleTipText(event, context, {
       idempotencyKey: `mention:${providerId}:${raw.channel}:${raw.ts}`,
+      insufficientFundsThreadTs: raw.thread_ts,
       mention: true,
       thread,
       threadTs,
@@ -690,7 +691,13 @@ type SlackReactionEvent = z.infer<typeof slackReactionEventSchema>
 async function handleTipText(
   event: TipEvent,
   ctx: HandlerContext,
-  options: { idempotencyKey: string; mention?: boolean; thread?: chat.Thread; threadTs?: string },
+  options: {
+    idempotencyKey: string
+    insufficientFundsThreadTs?: string
+    mention?: boolean
+    thread?: chat.Thread
+    threadTs?: string
+  },
 ) {
   const parsed = Tip.parseTipText(ctx.text)
   if (!parsed) {
@@ -811,7 +818,11 @@ async function handleTipText(
         return 'Payment failed.'
       })()
       if (result.code === 'insufficient_funds') {
-        await postSlackInsufficientFunds(event, ctx, options.threadTs)
+        await postSlackInsufficientFunds(
+          event,
+          ctx,
+          options.mention ? options.insufficientFundsThreadTs : options.threadTs,
+        )
         return
       }
       if (
@@ -1379,6 +1390,7 @@ async function postSlackInsufficientFunds(event: TipEvent, ctx: HandlerContext, 
       {
         elements: [
           {
+            action_id: 'add_funds',
             style: 'primary',
             text: { text: 'Add funds', type: 'plain_text' },
             type: 'button',

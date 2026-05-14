@@ -9,6 +9,7 @@ import { useConnect, useConnection, useConnectors } from 'wagmi'
 import * as z from 'zod/mini'
 import { api } from '#/api.ts'
 import { WalletProviders } from '#/components/WalletProviders.tsx'
+import { getErrorMessage } from '#/lib/error.ts'
 import { formatCurrencyAmount, formatPeriod } from '#/lib/format.ts'
 import { rpc } from '#/lib/rpc.ts'
 import * as Tempo from '#/lib/tempo.ts'
@@ -103,7 +104,7 @@ function ConnectPanel(props: {
       setStatus('connected')
     } catch (error) {
       setStatus('idle')
-      setError(error instanceof Error ? error.message : 'Could not connect to Tipbot.')
+      setError(getErrorMessage(error, 'Could not connect to Tipbot.'))
     }
   }
 
@@ -118,7 +119,7 @@ function ConnectPanel(props: {
       setStatus('connected')
     } catch (error) {
       setStatus('idle')
-      setError(error instanceof Error ? error.message : 'Could not connect to Tipbot.')
+      setError(getErrorMessage(error, 'Could not connect to Tipbot.'))
     }
   }
 
