@@ -173,6 +173,7 @@ export default defineConfig({
               const env = envMod.Env.parse(config.inject('env'))
               return {
                 main: 'src/entry-server.ts',
+                remoteBindings: false,
                 wrangler: { configPath: 'wrangler.jsonc' },
                 miniflare: {
                   bindings: env,

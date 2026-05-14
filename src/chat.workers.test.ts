@@ -20,6 +20,7 @@ import * as Factory from '#test/factory.ts'
 import { createSlackHeaders } from '#/lib/slack.ts'
 
 let waitUntil: Promise<unknown>[] = []
+let aiRunMock: ReturnType<typeof vi.spyOn>
 let providerId = ''
 let unconnectedProviderUserId = ''
 const db = DB.create(env.DB)
@@ -47,6 +48,7 @@ beforeEach(async () => {
   executionCtx.passThroughOnException.mockClear()
   executionCtx.waitUntil.mockClear()
   vi.restoreAllMocks()
+  aiRunMock = vi.spyOn(env.AI, 'run').mockResolvedValue({ response: 'Ack.' } as never)
   const history = await slack.conversations.history({ channel: Constants.slack.channelId })
   await Promise.all(
     (history.messages ?? [])
@@ -531,6 +533,60 @@ test('@Tipbot mention introduces itself', async () => {
   expect(tips).toHaveLength(0)
 })
 
+test('@Tipbot mention answers thanks without AI', async () => {
+  const messageTs = `1700000011.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> thanks`,
+  })
+  const tips = await db
+    .selectFrom('tip')
+    .innerJoin('workspace', 'workspace.id', 'tip.workspace_id')
+    .selectAll('tip')
+    .where('workspace.provider_id', '=', providerId)
+    .execute()
+
+  expect(response.status).toBe(200)
+  expect(aiRunMock).not.toHaveBeenCalled()
+  await expectSlackThreadMessage(messageTs, 'Anytime.')
+  expect(tips).toHaveLength(0)
+})
+
+test('@Tipbot mention falls back when AI returns bare Tipbot mention', async () => {
+  aiRunMock.mockResolvedValueOnce({ response: '@Tipbot' } as never)
+  const messageTs = `1700000013.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> hello`,
+  })
+
+  expect(response.status).toBe(200)
+  await expectSlackThreadMessage(messageTs, 'Anytime.')
+})
+
+test('@Tipbot mention gets excited about goblins', async () => {
+  aiRunMock.mockResolvedValueOnce({ response: 'GOBLINS? NOW WE RIDE.' } as never)
+  const messageTs = `1700000012.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> goblins`,
+  })
+
+  expect(response.status).toBe(200)
+  expect(aiRunMock).toHaveBeenCalledWith(
+    '@cf/meta/llama-3.2-1b-instruct',
+    expect.objectContaining({
+      messages: expect.arrayContaining([
+        expect.objectContaining({ content: expect.stringContaining('REALLY EXCITED') }),
+      ]),
+    }),
+  )
+  await expectSlackThreadMessage(messageTs, 'GOBLINS? NOW WE RIDE.')
+})
+
 test('@Tipbot mention accepts bot mention after recipient', async () => {
   await connectTipAccounts()
   const messageTs = `1700000001.${Nanoid.generate().slice(0, 6)}`
@@ -578,7 +634,9 @@ test('@Tipbot mention accepts repeated bot mentions', async () => {
 }, 20_000) // 20 seconds
 
 test('@Tipbot mention rejects ambiguous mentions', async () => {
-  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  aiRunMock.mockResolvedValueOnce({
+    response: 'Almost. Try `@Tipbot tip @account [amount] [token] [for memo]`.',
+  } as never)
   const messageTs = `1700000003.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
@@ -594,16 +652,14 @@ test('@Tipbot mention rejects ambiguous mentions', async () => {
 
   expect(response.status).toBe(200)
   expect(tips).toHaveLength(0)
-  await expectSlackPostEphemeralCall(
-    fetchSpy,
-    'Invalid `@Tipbot` usage. Try `@Tipbot @account [amount] [token] [for memo]` or `@Tipbot tip @account`.',
+  await expectSlackThreadMessage(
+    messageTs,
+    'Almost. Try `@Tipbot tip @account [amount] [token] [for memo]`.',
   )
   await expectSlackThreadMessageNotContaining(messageTs, 'tipped')
-  fetchSpy.mockRestore()
 })
 
 test('@Tipbot mention rejects natural language before recipient', async () => {
-  const fetchSpy = vi.spyOn(globalThis, 'fetch')
   const messageTs = `1700000004.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
@@ -619,9 +675,8 @@ test('@Tipbot mention rejects natural language before recipient', async () => {
 
   expect(response.status).toBe(200)
   expect(tips).toHaveLength(0)
-  await expectSlackPostEphemeralCall(fetchSpy, 'Invalid `@Tipbot` usage.')
+  await expectSlackThreadMessage(messageTs, 'Ack.')
   await expectSlackThreadMessageNotContaining(messageTs, 'tipped')
-  fetchSpy.mockRestore()
 })
 
 test('@Tipbot mention shows confirmation action when approval is required', async () => {

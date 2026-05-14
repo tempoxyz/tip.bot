@@ -68,19 +68,20 @@ export function getChat() {
 
     const threadTs = raw.thread_ts ?? raw.ts
     const event = { channel: thread.channel, user: message.author } satisfies TipEvent
+    const mentionText = normalizeSlackMentionText(raw.text, installation.botUserId)
     const context = {
       db: DB.create(env.DB),
       provider: { id: providerId, type: 'slack' },
-      text: parseSlackMentionTipText(raw.text, installation.botUserId) ?? '',
+      text: parseSlackMentionTipText(mentionText) ?? '',
     } satisfies HandlerContext
 
-    if (isSlackIntroduceYourselfText(raw.text, installation.botUserId)) {
+    if (isSlackIntroduceYourselfText(mentionText)) {
       await postSlackIntroduction(event, context, threadTs)
       return
     }
 
     if (!context.text) {
-      await postInvalidUsage(event, context, { mention: true, threadTs })
+      await postInvalidMentionReply(event, context, mentionText, threadTs)
       return
     }
 
@@ -732,6 +733,10 @@ async function handleTipText(
 ) {
   const parsed = Tip.parseTipText(ctx.text)
   if (!parsed) {
+    if (options.mention && options.threadTs) {
+      await postInvalidMentionReply(event, ctx, ctx.text, options.threadTs)
+      return
+    }
     await postInvalidUsage(event, ctx, { mention: options.mention, threadTs: options.threadTs })
     return
   }
@@ -1362,9 +1367,12 @@ function isUniqueConstraintError(error: unknown) {
   return error instanceof Error && /unique constraint|constraint failed/i.test(error.message)
 }
 
-function parseSlackMentionTipText(value: string, botUserId: string) {
+function normalizeSlackMentionText(value: string, botUserId: string) {
   const botMentionPattern = new RegExp(`<@${escapeRegex(botUserId)}(?:\\|[^>]+)?>`, 'g')
-  const text = value.replace(botMentionPattern, ' ').replace(/\s+/g, ' ').trim()
+  return value.replace(botMentionPattern, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function parseSlackMentionTipText(text: string) {
   const mentions = [...text.matchAll(/<@([A-Z0-9_]+)(?:\|[^>]+)?>/g)]
   if (mentions.length !== 1) return null
   const prefix = text.slice(0, mentions[0]!.index).trim().toLowerCase()
@@ -1372,12 +1380,8 @@ function parseSlackMentionTipText(value: string, botUserId: string) {
   return text.slice(mentions[0]!.index).trim()
 }
 
-function isSlackIntroduceYourselfText(value: string, botUserId: string) {
-  const botMentionPattern = new RegExp(`<@${escapeRegex(botUserId)}(?:\\|[^>]+)?>`, 'g')
-  return (
-    value.replace(botMentionPattern, ' ').replace(/\s+/g, ' ').trim().toLowerCase() ===
-    'introduce yourself'
-  )
+function isSlackIntroduceYourselfText(text: string) {
+  return text.toLowerCase() === 'introduce yourself'
 }
 
 function escapeRegex(value: string) {
@@ -1445,6 +1449,89 @@ async function postInvalidUsage(
     await response.json(),
   )
   if (!json.ok) throw Slack.slackApiError('chat.postEphemeral', json.error)
+}
+
+async function postInvalidMentionReply(
+  event: TipEvent,
+  ctx: HandlerContext,
+  mentionText: string,
+  threadTs: string,
+) {
+  const installation = await getSlack().getInstallation(ctx.provider.id)
+  if (!installation) throw new Error('Tibot app not installed for this workspace.')
+
+  const body = new URLSearchParams()
+  body.set('channel', event.channel.id.replace(/^slack:/, ''))
+  body.set('text', await generateInvalidMentionReply(mentionText))
+  body.set('thread_ts', threadTs)
+  body.set('unfurl_links', 'false')
+  body.set('unfurl_media', 'false')
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
+      body,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok) throw Slack.slackApiError('chat.postMessage', json.error)
+}
+
+async function generateInvalidMentionReply(mentionText: string) {
+  const text = mentionText.trim()
+  const isCreatureText =
+    /\b(creature|creatures|dragon|dragons|elf|elves|fae|fairy|goblin|goblins|gnome|gnomes|gremlin|gremlins|kobold|kobolds|monster|monsters|orc|orcs|troll|trolls)\b/i.test(
+      text,
+    )
+  const isTipText = /<@[A-Z0-9_]+|\b(tip|send|pay|sent|paid|for)\b/i.test(text)
+  const isThanksText = /^(thank you|thanks|ty|thx|thank u)$/i.test(text)
+  const fallback = (() => {
+    if (isThanksText) return 'Anytime.'
+    if (isCreatureText && isTipText)
+      return 'GOBLINS? Excellent. For tips: `@Tipbot tip @account [amount] [token] [for memo]`.'
+    if (isCreatureText) return 'GOBLINS? Now we are talking.'
+    if (isTipText) return 'Almost. Try `@Tipbot tip @account [amount] [token] [for memo]`.'
+    return 'Anytime.'
+  })()
+  if (isThanksText) return fallback
+
+  try {
+    const result = z
+      .parse(
+        z.object({ response: z.string().default('') }),
+        await env.AI.run('@cf/meta/llama-3.2-1b-instruct', {
+          max_tokens: 48,
+          messages: [
+            {
+              content:
+                'You are Tipbot in Slack. Reply to an invalid @Tipbot mention. Keep it under 140 chars. Be short and pithy. Do not mention users. If the user mentions goblins or other creatures, get REALLY EXCITED. If the user seems to be trying to send a tip/payment, include this exact syntax: `@Tipbot tip @account [amount] [token] [for memo]`. Otherwise just acknowledge or deflect lightly.',
+              role: 'system',
+            },
+            { content: text || '(empty mention)', role: 'user' },
+          ],
+        }),
+      )
+      .response.replace(/[\r\n]+/g, ' ')
+      .trim()
+      .replace(/^['"]|['"]$/g, '')
+    if (isValidInvalidMentionAiReply(result)) return result
+  } catch (error) {
+    console.error('Failed to generate invalid mention reply:', error)
+  }
+  return fallback
+}
+
+function isValidInvalidMentionAiReply(value: string) {
+  if (!value || value.length > 200) return false
+  if (/^@?tipbot[.!?]?$/i.test(value)) return false
+  if (/@Tipbot|<@[A-Z0-9_]+/i.test(value)) return false
+  return true
 }
 
 async function postSlackIntroduction(event: TipEvent, ctx: HandlerContext, threadTs: string) {

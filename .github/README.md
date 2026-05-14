@@ -31,3 +31,13 @@ To allow any Slack workspace to install the app, enable unlisted distribution ma
 5. Click **Activate Public Distribution**
 
 All other changes deployed via CI.
+
+### Cloudflare API token
+
+Create or update the deployment token in the [Cloudflare API Tokens dashboard](https://dash.cloudflare.com/profile/api-tokens).
+
+This API token will affect the below accounts and zones, along with their respective permissions:
+
+- All accounts — Workers Observability:Edit, Workers Builds Configuration:Edit, Workers AI:Edit, D1:Edit, Workers Tail:Read, Workers Scripts:Edit, Account Settings:Read
+- Tempo Production Resources
+  - tip.bot — Workers Routes:Edit
