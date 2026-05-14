@@ -805,7 +805,7 @@ async function handleTipText(
         options.threadTs,
       )
       if (result.memo && options.threadTs)
-        void postSlackMemoReply(event, ctx, result.memo, options.threadTs)
+        await postSlackMemoReply(event, ctx, result.memo, options.threadTs)
     } else if (result.ok)
       await postSlackReceiptMessage(
         event,
@@ -1952,13 +1952,21 @@ async function postSlackMemoReply(
   body.set('unfurl_links', 'false')
   body.set('unfurl_media', 'false')
   await getSlack()
-    .withBotToken(installation.botToken, () =>
-      fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
+    .withBotToken(installation.botToken, async () => {
+      const response = await fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
         body,
         headers: { authorization: `Bearer ${installation.botToken}` },
         method: 'POST',
-      }),
-    )
+      })
+      const json = z.parse(
+        z.object({
+          error: z.string().optional(),
+          ok: z.boolean().optional(),
+        }),
+        await response.json(),
+      )
+      if (!json.ok) throw Slack.slackApiError('chat.postMessage', json.error)
+    })
     .catch((error: unknown) => {
       console.error('Failed to post memo reply:', error)
     })
