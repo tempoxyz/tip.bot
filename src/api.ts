@@ -341,7 +341,7 @@ export const api = new Hono<{
           return c.json(
             {
               code: result.code,
-              message: result.message ?? 'Payment failed.',
+              message: result.code === 'failed' ? 'Payment failed. Try again.' : result.message,
               ok: false as const,
             },
             400,

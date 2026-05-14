@@ -11,7 +11,8 @@ import { TxEnvelopeTempo } from 'ox/tempo'
 import { KeyAuthorization } from 'ox/tempo'
 import { BaseError, InsufficientFundsError, createClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { Account as TempoAccount, Actions } from 'viem/tempo'
+import { signTransaction } from 'viem/actions'
+import { Account as TempoAccount, Actions, Transaction } from 'viem/tempo'
 import { getNodeError } from 'viem/utils'
 
 export type TipResult =
@@ -758,25 +759,32 @@ async function submitSignedTip(
     .execute()
 
   try {
+    const feePayerPrivateKey = Tempo.getFeePayerPrivateKey(env, input.workspace.chain_id)
     const client = createClient({
       chain: Tempo.getChain(input.workspace.chain_id),
-      transport: http(`https://${env.HOST}/api/relay/${input.workspace.chain_id}`),
+      transport: http(Tempo.getRpcUrl(env, input.workspace.chain_id)),
     })
-    const balance = await Actions.token.getBalance(
-      createClient({
-        chain: Tempo.getChain(input.workspace.chain_id),
-        transport: http(Tempo.getRpcUrl(env, input.workspace.chain_id)),
-      }),
-      {
-        account: input.sender.account.address as Address.Address,
-        token: input.tokenAddress as Address.Address,
-      },
-    )
+    const balance = await Actions.token.getBalance(client, {
+      account: input.sender.account.address as Address.Address,
+      token: input.tokenAddress as Address.Address,
+    })
     if (balance < BigInt(input.payload.amount)) throw new InsufficientFundsError()
 
+    const rawTransaction = await (async () => {
+      if (!feePayerPrivateKey) return input.signedTransaction
+      const transaction = TxEnvelopeTempo.deserialize(input.signedTransaction as `0x76${string}`)
+      if (!transaction.signature || !transaction.from)
+        throw new Error('Payment approval is invalid.')
+      const feePayer = privateKeyToAccount(feePayerPrivateKey)
+      return (await signTransaction(client, {
+        ...Transaction.deserialize(input.signedTransaction),
+        account: feePayer,
+        feePayer,
+      } as never)) as `0x${string}`
+    })()
     const receipt = (await client.request({
       method: 'eth_sendRawTransactionSync' as never,
-      params: [input.signedTransaction] as never,
+      params: [rawTransaction] as never,
     })) as { status: `0x${string}`; transactionHash?: `0x${string}` }
     if (receipt.status !== '0x1' || !receipt.transactionHash)
       throw new Error('Tempo transaction failed.')
@@ -798,7 +806,7 @@ async function submitSignedTip(
     return {
       amount: formatAmount(input.payload.amount),
       chainId: input.workspace.chain_id,
-      feePayer: Tempo.getFeePayerPrivateKey(env, input.workspace.chain_id) ? 'sponsor' : 'sender',
+      feePayer: feePayerPrivateKey ? 'sponsor' : 'sender',
       isDefaultToken: Address.isEqual(
         Address.checksum(input.tokenAddress),
         Address.checksum(input.workspace.default_token_address ?? Tempo.addressLookup.pathUsd),
