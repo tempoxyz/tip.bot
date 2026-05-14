@@ -100,6 +100,7 @@ export const api = new Hono<{
           'workspace.default_token_address',
           'workspace.id as workspace_id',
           'workspace.provider_id',
+          'workspace.reaction_tip_emoji',
         ])
         .where(
           'account_link_token.token_hash',
@@ -259,7 +260,7 @@ export const api = new Hono<{
                           `Wallet connected: \`${truncatedAddress}\` <${explorerUrl}|View>`,
                         ),
                         chat.CardText(
-                          'Mention `@Tipbot @user` or use `/tip @user` to send a payment. React with 💸 to tip a message.',
+                          `Mention \`@Tipbot @user\` or use \`/tip @user\` to send a payment. React with :${link.reaction_tip_emoji}: to tip a message.`,
                           { style: 'muted' },
                         ),
                       ],
