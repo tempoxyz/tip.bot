@@ -257,6 +257,82 @@ const actions = {
   async confirm_cancel(event) {
     await event.adapter.deleteMessage(event.threadId, event.messageId)
   },
+  async request_pay(event) {
+    const raw = z.parse(
+      z.object({
+        channel: z.object({ id: z.string().min(1) }).optional(),
+        container: z.object({ channel_id: z.string().min(1).optional() }).optional(),
+        team: z.object({ id: z.string().min(1) }),
+        trigger_id: z.string().min(1).optional(),
+      }),
+      event.raw,
+    )
+    const channelId = raw.channel?.id ?? raw.container?.channel_id
+    if (!channelId) return
+
+    const metadata = z.parse(
+      z.object({
+        amount: z.number().int().positive(),
+        memo: z.string().nullable(),
+        requesterUserId: z.string().min(1),
+        tokenAddress: z.string().optional(),
+      }),
+      JSON.parse(event.value ?? '{}'),
+    )
+    if (metadata.requesterUserId === event.user.userId) {
+      await getChat()
+        .channel(`slack:${channelId}`)
+        .postEphemeral(event.user, 'You cannot pay your own tip request.', { fallbackToDM: false })
+      return
+    }
+
+    const providerId = raw.team.id
+    const idempotencyKey = `request:${providerId}:${channelId}:${event.messageId}:${event.user.userId}`
+    const result = await Tip.handleTipRequest(env, {
+      amount: metadata.amount,
+      idempotencyKey,
+      memo: metadata.memo,
+      provider: 'slack',
+      providerChannelId: channelId,
+      providerId,
+      recipientProviderUserId: metadata.requesterUserId,
+      senderProviderUserId: event.user.userId,
+      tokenAddress: metadata.tokenAddress,
+    }).catch(
+      (error) =>
+        ({
+          code: 'failed',
+          message: error instanceof Error ? error.message : 'Payment failed.',
+          ok: false,
+        }) satisfies Tip.TipResult,
+    )
+
+    const channel = getChat().channel(`slack:${channelId}`)
+    if (result.ok && result.status === 'sent')
+      await postSlackReceiptMessage(
+        { channel, user: event.user },
+        { db: DB.create(env.DB), provider: { id: providerId, type: 'slack' }, text: '' },
+        `${channel.mentionUser(result.senderProviderUserId)} tipped ${channel.mentionUser(result.recipientProviderUserId)} ${result.isDefaultToken ? formatCurrencyAmount(result.amount, result.tokenCurrency) : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)}${result.memo ? ` for ${result.memo}` : ''}.`,
+        result.chainId,
+        result.transactionHash,
+      )
+    else if (result.ok)
+      await channel.postEphemeral(event.user, 'Payment sent.', { fallbackToDM: false })
+    else {
+      const message = (() => {
+        if (result.code === 'self_tip') return 'You cannot pay your own tip request.'
+        if (result.code === 'sender_unconnected' || result.code === 'missing_sender_access_key')
+          return 'Connect to Tipbot with `/tip connect` first.'
+        if (result.code === 'recipient_unconnected')
+          return 'The requester needs to connect Tipbot before receiving payments.'
+        if (result.code === 'insufficient_funds') return 'Your wallet has insufficient funds.'
+        if (result.code === 'confirmation_required' && result.confirmUrl)
+          return `Tipbot needs your approval. <${result.confirmUrl}|Confirm payment>`
+        return 'Payment failed.'
+      })()
+      await channel.postEphemeral(event.user, message, { fallbackToDM: false })
+    }
+  },
 } as const satisfies Record<
   (typeof actionNames)[number],
   (event: chat.ActionEvent) => Promise<void>
@@ -411,6 +487,7 @@ const handlers = {
       ['/tip disconnect', 'Disconnect from Tipbot'],
       ['/tip help', 'Show help message'],
       ['/tip leaderboard', 'Show top tippers and recipients'],
+      ['/tip request @account [amount] [for memo]', 'Request payment from someone'],
       ['/tip status', 'Check connection status'],
     ]
     const paymentExampleRows = [
@@ -606,6 +683,71 @@ const handlers = {
     )
     if (!json.ok) throw Slack.slackApiError('chat.postMessage', json.error)
   },
+  async request(event, ctx) {
+    const parsed = Tip.parseTipText(ctx.text)
+    if (!parsed) {
+      await event.channel.postEphemeral(
+        event.user,
+        'Invalid request. Try `/tip request @account [amount] [for memo]`.',
+        { fallbackToDM: false },
+      )
+      return
+    }
+    if (parsed.recipientProviderUserId === event.user.userId) {
+      await event.channel.postEphemeral(event.user, 'Cannot request a tip from yourself.', {
+        fallbackToDM: false,
+      })
+      return
+    }
+
+    const workspace = await ctx.db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', ctx.provider.type)
+      .where('provider_id', '=', ctx.provider.id)
+      .executeTakeFirst()
+    if (!workspace) {
+      await event.channel.postEphemeral(
+        event.user,
+        'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+        { fallbackToDM: false },
+      )
+      return
+    }
+
+    const amount = parsed.amount ?? workspace.default_amount
+    const tokenAddress = parsed.token
+      ? Tempo.getTokenAddress(workspace.chain_id, parsed.token)
+      : null
+    if (parsed.token && !tokenAddress) {
+      await event.channel.postEphemeral(
+        event.user,
+        'This token is not supported on this network.',
+        { fallbackToDM: false },
+      )
+      return
+    }
+
+    const resolvedTokenAddress =
+      tokenAddress ?? workspace.default_token_address ?? Tempo.addressLookup.pathUsd
+    const token = Tempo.getTokenMetadataFallback(resolvedTokenAddress)
+    const displayAmount = formatCurrencyAmount(formatAmount(amount), token.currency)
+    const memoSuffix = parsed.memo ? ` for ${parsed.memo}` : ''
+    const metadata = JSON.stringify({
+      amount,
+      memo: parsed.memo,
+      requesterUserId: event.user.userId,
+      tokenAddress: parsed.token ? tokenAddress : undefined,
+    })
+
+    await postSlackTipRequest(event, ctx, {
+      amount: displayAmount,
+      memo: memoSuffix,
+      metadata,
+      recipientProviderUserId: parsed.recipientProviderUserId,
+      threadTs: ctx.threadTs,
+    })
+  },
   async status(event, ctx) {
     const workspace = await ctx.db
       .selectFrom('workspace')
@@ -658,9 +800,17 @@ const handlers = {
   (event: chat.SlashCommandEvent, ctx: HandlerContext) => Promise<void>
 >
 
-const commandNames = ['config', 'connect', 'disconnect', 'help', 'leaderboard', 'status'] as const
+const commandNames = [
+  'config',
+  'connect',
+  'disconnect',
+  'help',
+  'leaderboard',
+  'request',
+  'status',
+] as const
 const commandPattern = new RegExp(`^(${commandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
-const actionNames = ['config_edit', 'connect_cancel', 'confirm_cancel'] as const
+const actionNames = ['config_edit', 'connect_cancel', 'confirm_cancel', 'request_pay'] as const
 const modalSubmitNames = ['config_edit'] as const
 const tokenOptions = [
   { address: Tempo.addressLookup.pathUsd, label: 'PathUSD', value: 'pathUSD' },
@@ -1993,6 +2143,65 @@ function configToken(workspace: DB_gen.Selectable.workspace) {
 function workspaceTokenOptions(chainId?: number) {
   if (chainId === undefined) return tokenOptions
   return tokenOptions.filter((option) => Tempo.isAllowedToken(chainId, option.address))
+}
+
+async function postSlackTipRequest(
+  event: TipEvent,
+  ctx: HandlerContext,
+  options: {
+    amount: string
+    memo: string
+    metadata: string
+    recipientProviderUserId: string
+    threadTs?: string
+  },
+) {
+  const installation = await getSlack().getInstallation(ctx.provider.id)
+  if (!installation) throw new Error('Tibot app not installed for this workspace.')
+
+  const text = `${event.channel.mentionUser(event.user.userId)} requested ${options.amount} from ${event.channel.mentionUser(options.recipientProviderUserId)}${options.memo}.`
+  const body = new URLSearchParams()
+  body.set(
+    'blocks',
+    JSON.stringify([
+      {
+        text: { text, type: 'mrkdwn' },
+        type: 'section',
+      },
+      {
+        elements: [
+          {
+            action_id: 'request_pay',
+            style: 'primary',
+            text: { text: `Send ${options.amount}`, type: 'plain_text' },
+            type: 'button',
+            value: options.metadata,
+          },
+        ],
+        type: 'actions',
+      },
+    ]),
+  )
+  body.set('channel', event.channel.id.replace(/^slack:/, ''))
+  body.set('text', text)
+  if (options.threadTs) body.set('thread_ts', options.threadTs)
+  body.set('unfurl_links', 'false')
+  body.set('unfurl_media', 'false')
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
+      body,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok) throw Slack.slackApiError('chat.postMessage', json.error)
 }
 
 function slackTableCell(text: string, style?: { code?: boolean }) {
