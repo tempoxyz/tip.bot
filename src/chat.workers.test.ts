@@ -533,8 +533,7 @@ test('@Tipbot mention introduces itself', async () => {
   expect(tips).toHaveLength(0)
 })
 
-test('@Tipbot mention answers thanks with AI', async () => {
-  aiRunMock.mockResolvedValueOnce({ response: 'Anytime.' } as never)
+test('@Tipbot mention answers thanks without AI', async () => {
   const messageTs = `1700000011.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
@@ -549,12 +548,22 @@ test('@Tipbot mention answers thanks with AI', async () => {
     .execute()
 
   expect(response.status).toBe(200)
-  expect(aiRunMock).toHaveBeenCalledWith(
-    '@cf/meta/llama-3.2-1b-instruct',
-    expect.objectContaining({ max_tokens: 48 }),
-  )
+  expect(aiRunMock).not.toHaveBeenCalled()
   await expectSlackThreadMessage(messageTs, 'Anytime.')
   expect(tips).toHaveLength(0)
+})
+
+test('@Tipbot mention falls back when AI returns bare Tipbot mention', async () => {
+  aiRunMock.mockResolvedValueOnce({ response: '@Tipbot' } as never)
+  const messageTs = `1700000013.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> hello`,
+  })
+
+  expect(response.status).toBe(200)
+  await expectSlackThreadMessage(messageTs, 'Anytime.')
 })
 
 test('@Tipbot mention gets excited about goblins', async () => {

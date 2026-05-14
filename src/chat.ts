@@ -1490,13 +1490,16 @@ async function generateInvalidMentionReply(mentionText: string) {
       text,
     )
   const isTipText = /<@[A-Z0-9_]+|\b(tip|send|pay|sent|paid|for)\b/i.test(text)
+  const isThanksText = /^(thank you|thanks|ty|thx|thank u)$/i.test(text)
   const fallback = (() => {
+    if (isThanksText) return 'Anytime.'
     if (isCreatureText && isTipText)
       return 'GOBLINS? Excellent. For tips: `@Tipbot tip @account [amount] [token] [for memo]`.'
     if (isCreatureText) return 'GOBLINS? Now we are talking.'
     if (isTipText) return 'Almost. Try `@Tipbot tip @account [amount] [token] [for memo]`.'
     return 'Anytime.'
   })()
+  if (isThanksText) return fallback
 
   try {
     const result = z
@@ -1517,11 +1520,18 @@ async function generateInvalidMentionReply(mentionText: string) {
       .response.replace(/[\r\n]+/g, ' ')
       .trim()
       .replace(/^['"]|['"]$/g, '')
-    if (result && result.length <= 200) return result
+    if (isValidInvalidMentionAiReply(result)) return result
   } catch (error) {
     console.error('Failed to generate invalid mention reply:', error)
   }
   return fallback
+}
+
+function isValidInvalidMentionAiReply(value: string) {
+  if (!value || value.length > 200) return false
+  if (/^@?tipbot[.!?]?$/i.test(value)) return false
+  if (/@Tipbot|<@[A-Z0-9_]+/i.test(value)) return false
+  return true
 }
 
 async function postSlackIntroduction(event: TipEvent, ctx: HandlerContext, threadTs: string) {
