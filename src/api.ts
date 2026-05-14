@@ -235,6 +235,49 @@ export const api = new Hono<{
           .where('id', '=', link.id)
           .execute()
 
+        c.executionCtx.waitUntil(
+          Tip.claimPendingTips(c.env, link.workspace_id, link.member_provider_user_id)
+            .then(async (claimed) => {
+              if (claimed.length === 0) return
+              await Chat.getChat().initialize()
+              const installation = await Chat.getSlack().getInstallation(link.provider_id)
+              if (!installation) return
+
+              for (const entry of claimed) {
+                if (!entry.result.ok) continue
+                const sender = await c.var.db
+                  .selectFrom('member')
+                  .select('provider_user_id')
+                  .where('id', '=', entry.senderMemberId)
+                  .executeTakeFirst()
+                if (!sender) continue
+                const channelId = link.provider_channel_id?.replace(/^slack:/, '')
+                if (!channelId) continue
+                const tipAmount = entry.result.isDefaultToken
+                  ? formatCurrencyAmount(entry.result.amount, entry.result.tokenCurrency)
+                  : formatTipAmount(entry.result.amount, entry.result.tokenCurrency, entry.result.tokenSymbol)
+                const body = new URLSearchParams()
+                body.set('channel', channelId)
+                body.set(
+                  'text',
+                  `<@${sender.provider_user_id}> ${entry.result.memo ? 'sent' : 'tipped'} <@${link.member_provider_user_id}> ${tipAmount}${entry.result.memo ? ` for ${entry.result.memo}` : ''}. · <${Tempo.formatTxLink(entry.result.chainId, entry.result.transactionHash)}|Receipt>`,
+                )
+                body.set('unfurl_links', 'false')
+                body.set('unfurl_media', 'false')
+                await Chat.getSlack().withBotToken(installation.botToken, () =>
+                  fetch(`${c.env.SLACK_API_URL}/chat.postMessage`, {
+                    body,
+                    headers: { authorization: `Bearer ${installation.botToken}` },
+                    method: 'POST',
+                  }),
+                )
+              }
+            })
+            .catch((error) => {
+              console.error('Failed to claim pending tips:', error)
+            }),
+        )
+
         if (link.provider_channel_id)
           c.executionCtx.waitUntil(
             (async () => {

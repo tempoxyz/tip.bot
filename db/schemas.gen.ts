@@ -51,6 +51,26 @@ export const member = z.object({
   workspace_id: z.string(),
 })
 
+export const pending_tip = z.object({
+  amount: z.number(),
+  claimed_at: z.string().nullable(),
+  created_at: z.string(),
+  expired_at: z.string().nullable(),
+  id: z.string(),
+  idempotency_key: z.string(),
+  memo: z.string().nullable(),
+  provider: z.literal('slack'),
+  provider_channel_id: z.string(),
+  provider_id: z.string(),
+  provider_thread_id: z.string().nullable(),
+  recipient_provider_label: z.string().nullable(),
+  recipient_provider_user_id: z.string(),
+  sender_member_id: z.string(),
+  token_address: z.string(),
+  updated_at: z.string(),
+  workspace_id: z.string(),
+})
+
 export const reaction_tip = z.object({
   channel_id: z.string(),
   created_at: z.string(),
@@ -117,6 +137,7 @@ export const db = {
   account: account,
   account_link_token: account_link_token,
   member: member,
+  pending_tip: pending_tip,
   reaction_tip: reaction_tip,
   reaction_tip_thread: reaction_tip_thread,
   tip: tip,

@@ -853,6 +853,8 @@ async function handleTipText(
           return 'Payment not sent. Cannot send a payment to yourself.'
         if (result.code === 'recipient_unconnected')
           return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
+        if (result.code === 'recipient_pending')
+          return `Payment pending. ${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipientProviderUserId)} needs to connect Tipbot with \`/tip connect\`. The payment will be sent automatically once they connect.`
         if (result.code === 'pending') return 'Payment still sending.'
         if (result.code === 'insufficient_funds')
           return 'Payment not sent. Your wallet has insufficient funds.'
@@ -1032,25 +1034,18 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
     return
   }
   const recipient = await getConnectedSlackMember(db, workspace.id, recipientProviderUserId)
-  if (!recipient) {
-    await postSlackEphemeral(
-      provider.id,
-      event.item.channel,
-      event.user,
-      `Payment not sent. <@${recipientProviderUserId}> needs to connect Tipbot before receiving payments.`,
-    )
-    return
-  }
 
-  const existing = await db
-    .selectFrom('reaction_tip')
-    .select('id')
-    .where('workspace_id', '=', workspace.id)
-    .where('channel_id', '=', event.item.channel)
-    .where('message_ts', '=', event.item.ts)
-    .where('reaction', '=', event.reaction)
-    .where('sender_member_id', '=', sender.memberId)
-    .executeTakeFirst()
+  const existing = recipient
+    ? await db
+        .selectFrom('reaction_tip')
+        .select('id')
+        .where('workspace_id', '=', workspace.id)
+        .where('channel_id', '=', event.item.channel)
+        .where('message_ts', '=', event.item.ts)
+        .where('reaction', '=', event.reaction)
+        .where('sender_member_id', '=', sender.memberId)
+        .executeTakeFirst()
+    : null
   if (existing) return
 
   const idempotencyKey = [
@@ -1062,33 +1057,35 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
     sender.memberId,
     event.event_ts,
   ].join(':')
-  const inserted = await (async () => {
-    const now = new Date().toISOString()
-    try {
-      await db
-        .insertInto('reaction_tip')
-        .values({
-          channel_id: event.item.channel,
-          created_at: now,
-          id: Nanoid.generate(),
-          idempotency_key: idempotencyKey,
-          message_ts: event.item.ts,
-          reaction: event.reaction,
-          recipient_member_id: recipient.memberId,
-          sender_member_id: sender.memberId,
-          thread_ts: message.thread_ts ?? event.item.ts,
-          tip_id: null,
-          updated_at: now,
-          workspace_id: workspace.id,
-        })
-        .execute()
-      return true
-    } catch (error) {
-      if (isUniqueConstraintError(error)) return false
-      throw error
-    }
-  })()
-  if (!inserted) return
+  if (recipient) {
+    const inserted = await (async () => {
+      const now = new Date().toISOString()
+      try {
+        await db
+          .insertInto('reaction_tip')
+          .values({
+            channel_id: event.item.channel,
+            created_at: now,
+            id: Nanoid.generate(),
+            idempotency_key: idempotencyKey,
+            message_ts: event.item.ts,
+            reaction: event.reaction,
+            recipient_member_id: recipient.memberId,
+            sender_member_id: sender.memberId,
+            thread_ts: message.thread_ts ?? event.item.ts,
+            tip_id: null,
+            updated_at: now,
+            workspace_id: workspace.id,
+          })
+          .execute()
+        return true
+      } catch (error) {
+        if (isUniqueConstraintError(error)) return false
+        throw error
+      }
+    })()
+    if (!inserted) return
+  }
 
   const result = await Tip.handleTipRequest(env, {
     idempotencyKey,
@@ -1096,7 +1093,7 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
     provider: provider.type,
     providerChannelId: event.item.channel,
     providerId: provider.id,
-    recipientProviderUserId: recipient.providerUserId,
+    recipientProviderUserId: recipientProviderUserId,
     senderProviderUserId: sender.providerUserId,
   }).catch(
     (error) =>
@@ -1162,6 +1159,16 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
           },
         ],
       },
+    )
+    return
+  }
+
+  if (result.code === 'recipient_pending') {
+    await postSlackEphemeral(
+      provider.id,
+      event.item.channel,
+      event.user,
+      `Payment pending. <@${recipientProviderUserId}> needs to connect Tipbot with \`/tip connect\`. The payment will be sent automatically once they connect.`,
     )
     return
   }

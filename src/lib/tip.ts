@@ -36,6 +36,7 @@ export type TipResult =
         | 'insufficient_funds'
         | 'missing_sender_access_key'
         | 'pending'
+        | 'recipient_pending'
         | 'recipient_unconnected'
         | 'self_tip'
         | 'sender_unconnected'
@@ -114,12 +115,21 @@ export async function handleTipRequest(
   if (!sender) return { code: 'sender_unconnected', ok: false }
   const recipient = await getConnectedMember(db, workspace.id, input.recipientProviderUserId)
   if (!recipient)
-    return {
-      code: 'recipient_unconnected',
-      ok: false,
+    return await createPendingTip(db, {
+      amount,
+      idempotencyKey: input.idempotencyKey,
+      memo: input.memo,
+      provider: input.provider,
+      providerChannelId: input.providerChannelId,
+      providerId: input.providerId,
+      providerThreadId: input.providerThreadId,
+      recipientProviderLabel: input.recipientProviderLabel,
       recipientProviderUserId: input.recipientProviderUserId,
+      senderMemberId: sender.member.id,
       senderProviderUserId: input.senderProviderUserId,
-    }
+      tokenAddress,
+      workspace,
+    })
 
   const accessKeys = await db
     .selectFrom('access_key')
@@ -1037,4 +1047,132 @@ async function createSponsorshipMemo(
     ),
   )
   return `0x74697001${Hex.fromBytes(new Uint8Array(digest)).slice(10, 66)}`
+}
+
+async function createPendingTip(
+  db: DB.Type,
+  input: {
+    amount: number
+    idempotencyKey: string
+    memo: string | null
+    provider: Database.Selectable.workspace['provider']
+    providerChannelId: string
+    providerId: string
+    providerThreadId?: string
+    recipientProviderLabel?: string
+    recipientProviderUserId: string
+    senderMemberId: string
+    senderProviderUserId: string
+    tokenAddress: string
+    workspace: Database.Selectable.workspace
+  },
+): Promise<TipResult> {
+  const existing = await db
+    .selectFrom('pending_tip')
+    .select('id')
+    .where('idempotency_key', '=', input.idempotencyKey)
+    .executeTakeFirst()
+  if (existing)
+    return {
+      code: 'recipient_pending',
+      ok: false,
+      recipientProviderUserId: input.recipientProviderUserId,
+      senderProviderUserId: input.senderProviderUserId,
+    }
+
+  const now = new Date().toISOString()
+  await db
+    .insertInto('pending_tip')
+    .values({
+      amount: input.amount,
+      created_at: now,
+      id: Nanoid.generate(),
+      idempotency_key: input.idempotencyKey,
+      memo: input.memo,
+      provider: input.provider,
+      provider_channel_id: input.providerChannelId,
+      provider_id: input.providerId,
+      provider_thread_id: input.providerThreadId ?? null,
+      recipient_provider_label: input.recipientProviderLabel ?? null,
+      recipient_provider_user_id: input.recipientProviderUserId,
+      sender_member_id: input.senderMemberId,
+      token_address: Address.checksum(input.tokenAddress),
+      updated_at: now,
+      workspace_id: input.workspace.id,
+    })
+    .execute()
+
+  return {
+    code: 'recipient_pending',
+    ok: false,
+    recipientProviderUserId: input.recipientProviderUserId,
+    senderProviderUserId: input.senderProviderUserId,
+  }
+}
+
+export async function claimPendingTips(
+  env: Env,
+  workspaceId: string,
+  recipientProviderUserId: string,
+) {
+  const db = DB.create(env.DB)
+  const pendingTips = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('workspace_id', '=', workspaceId)
+    .where('recipient_provider_user_id', '=', recipientProviderUserId)
+    .where('claimed_at', 'is', null)
+    .where('expired_at', 'is', null)
+    .orderBy('created_at', 'asc')
+    .execute()
+  if (pendingTips.length === 0) return []
+
+  const results: Array<{
+    pendingTipId: string
+    result: TipResult
+    senderMemberId: string
+  }> = []
+  for (const pending of pendingTips) {
+    const sender = await db
+      .selectFrom('member')
+      .select('provider_user_id')
+      .where('id', '=', pending.sender_member_id)
+      .executeTakeFirst()
+    if (!sender) continue
+
+    const result = await handleTipRequest(env, {
+      amount: pending.amount,
+      idempotencyKey: pending.idempotency_key,
+      memo: pending.memo,
+      provider: pending.provider,
+      providerChannelId: pending.provider_channel_id,
+      providerId: pending.provider_id,
+      providerThreadId: pending.provider_thread_id ?? undefined,
+      recipientProviderLabel: pending.recipient_provider_label ?? undefined,
+      recipientProviderUserId: pending.recipient_provider_user_id,
+      senderProviderUserId: sender.provider_user_id,
+      tokenAddress: pending.token_address,
+    })
+
+    const now = new Date().toISOString()
+    if (result.ok)
+      await db
+        .updateTable('pending_tip')
+        .set({ claimed_at: now, updated_at: now })
+        .where('id', '=', pending.id)
+        .execute()
+    else if (result.code !== 'recipient_unconnected' && result.code !== 'recipient_pending')
+      await db
+        .updateTable('pending_tip')
+        .set({ expired_at: now, updated_at: now })
+        .where('id', '=', pending.id)
+        .execute()
+
+    results.push({
+      pendingTipId: pending.id,
+      result,
+      senderMemberId: pending.sender_member_id,
+    })
+  }
+  return results
 }
