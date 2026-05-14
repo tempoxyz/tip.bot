@@ -275,6 +275,66 @@ export const api = new Hono<{
     try {
       const data = await Tip.getConfirmationData(c.env, c.req.param('token'))
       const metadata = Tempo.getTokenMetadataFallback(data.payload.tokenAddress)
+      const recipientProviderLabel =
+        data.payload.recipientProviderLabel ??
+        (await (async () => {
+          const installation = await Chat.getSlack().getInstallation(data.payload.providerId)
+          if (!installation) return undefined
+          const slackUserSchema = z.object({
+            id: z.string().optional(),
+            name: z.string().optional(),
+            profile: z
+              .object({
+                display_name: z.string().optional(),
+                real_name: z.string().optional(),
+              })
+              .nullable()
+              .optional(),
+          })
+
+          const userInfoUrl = new URL(`${c.env.SLACK_API_URL}/users.info`)
+          userInfoUrl.searchParams.set('user', data.payload.recipientProviderUserId)
+          const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
+            fetch(userInfoUrl, {
+              headers: { authorization: `Bearer ${installation.botToken}` },
+              method: 'GET',
+            }),
+          )
+          const info = z.parse(
+            z.object({
+              ok: z.boolean().optional(),
+              user: slackUserSchema.optional(),
+            }),
+            await response.json(),
+          )
+          const user = info.ok
+            ? info.user
+            : await (async () => {
+                const listResponse = await Chat.getSlack().withBotToken(installation.botToken, () =>
+                  fetch(`${c.env.SLACK_API_URL}/users.list`, {
+                    headers: { authorization: `Bearer ${installation.botToken}` },
+                    method: 'GET',
+                  }),
+                )
+                const list = z.parse(
+                  z.object({
+                    members: z.array(slackUserSchema).optional(),
+                    ok: z.boolean().optional(),
+                  }),
+                  await listResponse.json(),
+                )
+                if (!list.ok) return undefined
+                return list.members?.find(
+                  (member) => member.id === data.payload.recipientProviderUserId,
+                )
+              })()
+          return (
+            user?.profile?.display_name?.trim() ||
+            user?.profile?.real_name?.trim() ||
+            user?.name?.trim() ||
+            undefined
+          )
+        })().catch(() => undefined))
       return c.json({
         accessKeyAddress: data.accessKey.address,
         accessKeyExpiry:
@@ -295,7 +355,7 @@ export const api = new Hono<{
         kind: data.payload.kind,
         memo: data.payload.memo,
         ok: true as const,
-        recipientProviderLabel: data.payload.recipientProviderLabel,
+        recipientProviderLabel,
         recipientProviderUserId: data.payload.recipientProviderUserId,
         relayUrl: `https://${c.env.HOST}/api/relay/${data.payload.chainId}`,
         tokenAddress: Address.checksum(data.payload.tokenAddress),
@@ -403,6 +463,7 @@ export const api = new Hono<{
                 : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
               const text = `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} <@${result.recipientProviderUserId}> ${amount}${result.memo ? ` for ${result.memo}` : ''}.`
               const receiptText = text.replace(/\.$/, '')
+              const threadId = data.payload.providerThreadId
               const body = new URLSearchParams()
               body.set(
                 'blocks',
@@ -418,23 +479,43 @@ export const api = new Hono<{
               )
               body.set('channel', data.payload.providerChannelId.replace(/^slack:/, ''))
               body.set('text', `${receiptText} Receipt`)
+              if (threadId) body.set('thread_ts', threadId)
               body.set('unfurl_links', 'false')
               body.set('unfurl_media', 'false')
-              const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
-                fetch(`${c.env.SLACK_API_URL}/chat.postMessage`, {
-                  body,
-                  headers: { authorization: `Bearer ${installation.botToken}` },
-                  method: 'POST',
-                }),
-              )
-              const json = z.parse(
-                z.object({
-                  error: z.string().optional(),
-                  ok: z.boolean().optional(),
-                }),
-                await response.json(),
-              )
-              if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postMessage failed.')
+              try {
+                const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
+                  fetch(`${c.env.SLACK_API_URL}/chat.postMessage`, {
+                    body,
+                    headers: { authorization: `Bearer ${installation.botToken}` },
+                    method: 'POST',
+                  }),
+                )
+                const json = z.parse(
+                  z.object({
+                    error: z.string().optional(),
+                    ok: z.boolean().optional(),
+                  }),
+                  await response.json(),
+                )
+                if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postMessage failed.')
+              } finally {
+                if (threadId) {
+                  const statusBody = new URLSearchParams()
+                  statusBody.set(
+                    'channel_id',
+                    data.payload.providerChannelId.replace(/^slack:/, ''),
+                  )
+                  statusBody.set('thread_ts', threadId)
+                  statusBody.set('status', '')
+                  await fetch(`${c.env.SLACK_API_URL}/assistant.threads.setStatus`, {
+                    body: statusBody,
+                    headers: { authorization: `Bearer ${installation.botToken}` },
+                    method: 'POST',
+                  }).catch(() => {
+                    // Best effort only. Confirmed payment flow must not depend on Slack assistant UI cleanup.
+                  })
+                }
+              }
             })().catch((error) => {
               console.error('Failed to post Slack receipt after confirmation:', error)
             }),

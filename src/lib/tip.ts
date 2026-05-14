@@ -58,6 +58,7 @@ export async function handleTipRequest(
     provider: Database.Selectable.workspace['provider']
     providerChannelId: string
     providerId: string
+    providerThreadId?: string
     recipientProviderLabel?: string
     recipientProviderUserId: string
     senderProviderUserId: string
@@ -130,15 +131,31 @@ export async function handleTipRequest(
     .where('expires_at', '>', new Date().toISOString())
     .orderBy('created_at', 'desc')
     .execute()
-  const accessKey = accessKeys.find((row) =>
-    supportsTip(KeyAuthorization.fromRpc(JSON.parse(row.authorization) as never), {
-      amount,
-      memo: input.memo,
-      tokenAddress,
-    }),
-  )
+  let trackedAccessKeyLimitExceeded = false
+  let accessKey: Database.Selectable.access_key | undefined
+  for (const row of accessKeys) {
+    const authorization = KeyAuthorization.fromRpc(JSON.parse(row.authorization) as never)
+    if (!supportsTip(authorization, { amount, memo: input.memo, tokenAddress })) continue
+    if (
+      !(await hasTrackedAccessKeyLimitRemaining(db, {
+        accountId: sender.account.id,
+        amount,
+        authorization,
+        authorizationUsedAt: row.authorization_used_at,
+        chainId: workspace.chain_id,
+        tokenAddress,
+      }))
+    ) {
+      trackedAccessKeyLimitExceeded = true
+      continue
+    }
+    accessKey = row
+    break
+  }
   if (!accessKey)
-    return await createConfirmationRequired(env, input, workspace, amount, tokenAddress)
+    return await createConfirmationRequired(env, input, workspace, amount, tokenAddress, {
+      kind: trackedAccessKeyLimitExceeded ? 'onetime_payment' : undefined,
+    })
 
   return await submitTip(env, db, {
     accessKeyId: accessKey.id,
@@ -485,6 +502,7 @@ async function createConfirmationRequired(
     provider: 'slack'
     providerChannelId: string
     providerId: string
+    providerThreadId?: string
     recipientProviderLabel?: string
     recipientProviderUserId: string
     senderProviderUserId: string
@@ -492,10 +510,13 @@ async function createConfirmationRequired(
   workspace: Database.Selectable.workspace,
   amount: number,
   tokenAddress: string,
+  options: { kind?: Confirmation.Payload['kind'] } = {},
 ): Promise<TipResult> {
   const nonce = Nanoid.generate()
   const expiresAt = new Date(Date.now() + AccountLink.confirmationLinkTtlMs).toISOString()
-  const isReusable = amount <= AccountLink.reusableAccessKeyLimit
+  const isReusable = options.kind
+    ? options.kind === 'reusable_access_key'
+    : amount <= AccountLink.reusableAccessKeyLimit
   const token = await Confirmation.encrypt(env, {
     ...(isReusable
       ? {
@@ -514,6 +535,7 @@ async function createConfirmationRequired(
     provider: input.provider,
     providerChannelId: input.providerChannelId,
     providerId: input.providerId,
+    providerThreadId: input.providerThreadId,
     recipientProviderLabel: input.recipientProviderLabel,
     recipientProviderUserId: input.recipientProviderUserId,
     senderProviderUserId: input.senderProviderUserId,
@@ -932,6 +954,45 @@ function supportsTip(
       Address.isEqual(limit.token as Address.Address, input.tokenAddress as Address.Address) &&
       limit.limit >= BigInt(input.amount),
   )
+}
+
+async function hasTrackedAccessKeyLimitRemaining(
+  db: DB.Type,
+  input: {
+    accountId: string
+    amount: number
+    authorization: KeyAuthorization.KeyAuthorization
+    authorizationUsedAt: string | null
+    chainId: number
+    tokenAddress: string
+  },
+) {
+  const limits = input.authorization.limits?.filter((limit) =>
+    Address.isEqual(limit.token as Address.Address, input.tokenAddress as Address.Address),
+  )
+  if (!limits?.length) return true
+
+  for (const limit of limits) {
+    if (limit.limit < BigInt(input.amount)) continue
+
+    const periodStart = new Date(Date.now() - Number(limit.period) * 1000).toISOString()
+    const usedSince =
+      input.authorizationUsedAt && input.authorizationUsedAt > periodStart
+        ? input.authorizationUsedAt
+        : periodStart
+    const tips = await db
+      .selectFrom('tip')
+      .select('amount')
+      .where('sender_id', '=', input.accountId)
+      .where('chain_id', '=', input.chainId)
+      .where('token_address', '=', Address.checksum(input.tokenAddress))
+      .where('confirmed_at', 'is not', null)
+      .where('confirmed_at', '>=', usedSince)
+      .execute()
+    const used = tips.reduce((total, tip) => total + BigInt(tip.amount), 0n)
+    if (used + BigInt(input.amount) <= limit.limit) return true
+  }
+  return false
 }
 
 function isInsufficientFundsError(error: unknown) {

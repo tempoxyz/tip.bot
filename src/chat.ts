@@ -717,117 +717,141 @@ async function handleTipText(
   }
 
   void options.thread?.startTyping('Sending payment')
-  const result = await Tip.handleTipRequest(env, {
-    amount: parsed.amount,
-    idempotencyKey: options.idempotencyKey,
-    memo: parsed.memo,
-    provider: ctx.provider.type,
-    providerChannelId: event.channel.id,
-    providerId: ctx.provider.id,
-    recipientProviderLabel: parsed.recipientProviderLabel,
-    recipientProviderUserId: parsed.recipientProviderUserId,
-    senderProviderUserId: event.user.userId,
-    tokenAddress: tokenAddress ?? undefined,
-  }).catch(
-    (error) =>
-      ({
-        code: 'failed',
-        message: error instanceof Error ? error.message : 'Command failed.',
-        ok: false,
-      }) satisfies Tip.TipResult,
-  )
+  try {
+    const result = await Tip.handleTipRequest(env, {
+      amount: parsed.amount,
+      idempotencyKey: options.idempotencyKey,
+      memo: parsed.memo,
+      provider: ctx.provider.type,
+      providerChannelId: event.channel.id,
+      providerId: ctx.provider.id,
+      providerThreadId: options.threadTs,
+      recipientProviderLabel: parsed.recipientProviderLabel,
+      recipientProviderUserId: parsed.recipientProviderUserId,
+      senderProviderUserId: event.user.userId,
+      tokenAddress: tokenAddress ?? undefined,
+    }).catch(
+      (error) =>
+        ({
+          code: 'failed',
+          message: error instanceof Error ? error.message : 'Command failed.',
+          ok: false,
+        }) satisfies Tip.TipResult,
+    )
 
-  if (result.ok && result.status === 'sent')
-    await postSlackReceiptMessage(
-      event,
-      ctx,
-      `${event.channel.mentionUser(result.senderProviderUserId)} ${result.memo ? 'sent' : 'tipped'} ${event.channel.mentionUser(result.recipientProviderUserId)} ${result.isDefaultToken ? formatCurrencyAmount(result.amount, result.tokenCurrency) : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)}${result.memo ? ` for ${result.memo}` : ''}.`,
-      result.chainId,
-      result.transactionHash,
-      undefined,
-      result.feePayer === 'sender'
-        ? 'Fee sponsor unavailable; fee paid from your balance.'
-        : undefined,
-      options.threadTs,
-    )
-  else if (result.ok)
-    await postSlackReceiptMessage(
-      event,
-      ctx,
-      'Payment sent.',
-      result.chainId,
-      result.transactionHash,
-      event.user,
-      result.feePayer === 'sender'
-        ? 'Fee sponsor unavailable; fee paid from your balance.'
-        : undefined,
-      options.threadTs,
-    )
-  else {
-    if (result.code === 'confirmation_required' && result.confirmUrl) {
-      const confirmUrlLabel = result.confirmUrl.replace(/(\/confirm\/.{8}).+$/, '$1...')
-      await event.channel.postEphemeral(
-        event.user,
-        {
-          card: chat.Card({
-            children: [
-              chat.CardText('Tipbot needs your approval to send this payment.'),
-              chat.Actions([
-                chat.LinkButton({
-                  label: 'Confirm payment',
-                  style: 'primary',
-                  url: result.confirmUrl,
-                }),
-                chat.Button({ id: 'confirm_cancel', label: 'Cancel' }),
-              ]),
-              chat.CardText(
-                `Link expires in 10 minutes. <${result.confirmUrl}|${confirmUrlLabel}>`,
-                {
-                  style: 'muted',
-                },
-              ),
-            ],
-          }),
-          fallbackText: `Tipbot needs your approval to send this payment.\nConfirm payment: ${result.confirmUrl}\nLink expires in 10 minutes.`,
-        },
-        { fallbackToDM: false },
-      )
-      return
-    }
-    if (result.code === 'sender_unconnected' || result.code === 'missing_sender_access_key') {
-      await postConnectLink(event, ctx)
-      return
-    }
-    const message = (() => {
-      if (result.code === 'self_tip') return 'Payment not sent. Cannot send a payment to yourself.'
-      if (result.code === 'recipient_unconnected')
-        return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
-      if (result.code === 'pending') return 'Payment still sending.'
-      if (result.code === 'insufficient_funds')
-        return 'Payment not sent. Your wallet has insufficient funds. Add funds and try again.'
-      return 'Payment failed.'
-    })()
-    if (result.code === 'insufficient_funds') {
-      await postSlackInsufficientFunds(event, ctx, message, options.threadTs)
-      return
-    }
-    if (
-      'chainId' in result &&
-      result.chainId &&
-      'transactionHash' in result &&
-      result.transactionHash
-    )
+    if (result.ok && result.status === 'sent')
       await postSlackReceiptMessage(
         event,
         ctx,
-        message,
+        `${event.channel.mentionUser(result.senderProviderUserId)} ${result.memo ? 'sent' : 'tipped'} ${event.channel.mentionUser(result.recipientProviderUserId)} ${result.isDefaultToken ? formatCurrencyAmount(result.amount, result.tokenCurrency) : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)}${result.memo ? ` for ${result.memo}` : ''}.`,
+        result.chainId,
+        result.transactionHash,
+        undefined,
+        result.feePayer === 'sender'
+          ? 'Fee sponsor unavailable; fee paid from your balance.'
+          : undefined,
+        options.threadTs,
+      )
+    else if (result.ok)
+      await postSlackReceiptMessage(
+        event,
+        ctx,
+        'Payment sent.',
         result.chainId,
         result.transactionHash,
         event.user,
-        undefined,
+        result.feePayer === 'sender'
+          ? 'Fee sponsor unavailable; fee paid from your balance.'
+          : undefined,
         options.threadTs,
       )
-    else await event.channel.postEphemeral(event.user, message, { fallbackToDM: false })
+    else {
+      if (result.code === 'confirmation_required' && result.confirmUrl) {
+        const confirmUrlLabel = result.confirmUrl.replace(/(\/confirm\/.{8}).+$/, '$1...')
+        await event.channel.postEphemeral(
+          event.user,
+          {
+            card: chat.Card({
+              children: [
+                chat.CardText('Tipbot needs your approval to send this payment.'),
+                chat.Actions([
+                  chat.LinkButton({
+                    label: 'Confirm payment',
+                    style: 'primary',
+                    url: result.confirmUrl,
+                  }),
+                  chat.Button({ id: 'confirm_cancel', label: 'Cancel' }),
+                ]),
+                chat.CardText(
+                  `Link expires in 10 minutes. <${result.confirmUrl}|${confirmUrlLabel}>`,
+                  {
+                    style: 'muted',
+                  },
+                ),
+              ],
+            }),
+            fallbackText: `Tipbot needs your approval to send this payment.\nConfirm payment: ${result.confirmUrl}\nLink expires in 10 minutes.`,
+          },
+          { fallbackToDM: false },
+        )
+        return
+      }
+      if (result.code === 'sender_unconnected' || result.code === 'missing_sender_access_key') {
+        await postConnectLink(event, ctx)
+        return
+      }
+      const message = (() => {
+        if (result.code === 'self_tip')
+          return 'Payment not sent. Cannot send a payment to yourself.'
+        if (result.code === 'recipient_unconnected')
+          return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
+        if (result.code === 'pending') return 'Payment still sending.'
+        if (result.code === 'insufficient_funds')
+          return 'Payment not sent. Your wallet has insufficient funds. Add funds and try again.'
+        return 'Payment failed.'
+      })()
+      if (result.code === 'insufficient_funds') {
+        await postSlackInsufficientFunds(event, ctx, message, options.threadTs)
+        return
+      }
+      if (
+        'chainId' in result &&
+        result.chainId &&
+        'transactionHash' in result &&
+        result.transactionHash
+      )
+        await postSlackReceiptMessage(
+          event,
+          ctx,
+          message,
+          result.chainId,
+          result.transactionHash,
+          event.user,
+          undefined,
+          options.threadTs,
+        )
+      else await event.channel.postEphemeral(event.user, message, { fallbackToDM: false })
+    }
+  } finally {
+    // Clear Slack's assistant thread status ("Sending payment") after this request
+    // finishes or hands off to confirmation.
+    if (options.threadTs)
+      try {
+        const installation = await getSlack().getInstallation(ctx.provider.id)
+        if (installation) {
+          const body = new URLSearchParams()
+          body.set('channel_id', event.channel.id.replace(/^slack:/, ''))
+          body.set('thread_ts', options.threadTs)
+          body.set('status', '')
+          await fetch(`${env.SLACK_API_URL}/assistant.threads.setStatus`, {
+            body,
+            headers: { authorization: `Bearer ${installation.botToken}` },
+            method: 'POST',
+          })
+        }
+      } catch {
+        // Best effort only. Payment/error flow must not depend on Slack assistant UI cleanup.
+      }
   }
 }
 

@@ -167,6 +167,37 @@ describe('/tip @account', () => {
     await expectSlackMessageNotContaining('Receipt')
   })
 
+  test('shows confirmation action when prior tips would exceed access key limit', async () => {
+    const connected = await connectTipAccounts({ tokenAddress: Tempo.addressLookup.thetaUsd })
+    if (!connected.recipientMember) throw new Error('Expected connected recipient.')
+    await db
+      .updateTable('access_key')
+      .set({ authorization_used_at: new Date().toISOString() })
+      .where('id', '=', connected.accessKey.id)
+      .execute()
+    await factory.tip.insert({
+      amount: 1_000_000,
+      chain_id: connected.workspace.chain_id,
+      confirmed_at: new Date().toISOString(),
+      idempotency_key: `existing-${Nanoid.generate()}`,
+      recipient_id: connected.recipientAccount.id,
+      recipient_member_id: connected.recipientMember.id,
+      sender_id: connected.senderAccount.id,
+      sender_member_id: connected.senderMember.id,
+      token_address: Tempo.addressLookup.thetaUsd,
+      transaction_hash: `0x${'1'.repeat(64)}`,
+      workspace_id: connected.workspace.id,
+    })
+
+    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}> 9.50 ThetaUSD`)
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('Tipbot needs your approval to send this payment.')
+    await expectSlackMessage('/confirm/')
+    await expectSlackMessage('Link expires in 10 minutes.')
+    await expectSlackMessageNotContaining('Payment failed.')
+  })
+
   test('shows confirmation action when memo needs approval', async () => {
     await connectTipAccounts({ memoScope: false })
 
@@ -498,6 +529,26 @@ test('@Tipbot mention shows confirmation action when approval is required', asyn
   expect(response.status).toBe(200)
   await expectSlackMessage('Tipbot needs your approval to send this payment.')
   await expectSlackThreadMessageNotContaining(messageTs, 'Receipt')
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention clears assistant status after payment failure', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  const handleTipRequest = vi.spyOn(Tip, 'handleTipRequest').mockResolvedValue({
+    code: 'failed',
+    ok: false,
+  })
+  const messageTs = `1700000008.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}>`,
+  })
+
+  expect(response.status).toBe(200)
+  await expectSlackMessage('Payment failed.')
+  await expectSlackAssistantStatusCall(fetchSpy, messageTs, '')
+  handleTipRequest.mockRestore()
+  fetchSpy.mockRestore()
 }, 20_000) // 20 seconds
 
 test('@Tipbot mention ignores edited messages', async () => {
@@ -1378,7 +1429,9 @@ describe('/tip usage', () => {
 
 ////////////////////////////////////////////////////////////////////////////
 
-async function connectTipAccounts(options: { memoScope?: boolean; recipient?: boolean } = {}) {
+async function connectTipAccounts(
+  options: { memoScope?: boolean; recipient?: boolean; tokenAddress?: `0x${string}` } = {},
+) {
   const workspace = await db
     .selectFrom('workspace')
     .selectAll()
@@ -1388,22 +1441,25 @@ async function connectTipAccounts(options: { memoScope?: boolean; recipient?: bo
   const recipientRoot = Account.fromSecp256k1(Constants.tip.recipientRootPrivateKey)
   const accessKey = AccessKey.generate()
   const accessKeyExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
+  const tokenAddress = options.tokenAddress ?? Tempo.addressLookup.pathUsd
   const senderAccount = await findOrCreateAccount(senderRoot.address)
   const recipientAccount = await findOrCreateAccount(recipientRoot.address)
 
   await db.deleteFrom('access_key').where('account_id', '=', senderAccount.id).execute()
-  await factory.member.insert({
+  const senderMember = await factory.member.insert({
     account_id: senderAccount.id,
     provider_user_id: Constants.slack.adminUserId,
     workspace_id: workspace.id,
   })
-  if (options.recipient ?? true)
-    await factory.member.insert({
-      account_id: recipientAccount.id,
-      provider_user_id: Constants.slack.memberUserId,
-      workspace_id: workspace.id,
-    })
-  await factory.access_key.insert({
+  const recipientMember =
+    (options.recipient ?? true)
+      ? await factory.member.insert({
+          account_id: recipientAccount.id,
+          provider_user_id: Constants.slack.memberUserId,
+          workspace_id: workspace.id,
+        })
+      : null
+  const accessKeyRow = await factory.access_key.insert({
     account_id: senderAccount.id,
     address: accessKey.address,
     authorization: JSON.stringify(
@@ -1412,7 +1468,7 @@ async function connectTipAccounts(options: { memoScope?: boolean; recipient?: bo
             accessKeyAddress: accessKey.address,
             chainId: Tempo.chainLookup.localnet,
             expiresAt: accessKeyExpiresAt,
-            tokenAddress: Tempo.addressLookup.pathUsd,
+            tokenAddress,
           })
         : KeyAuthorization.toRpc(
             await senderRoot.signKeyAuthorization(
@@ -1424,12 +1480,12 @@ async function connectTipAccounts(options: { memoScope?: boolean; recipient?: bo
                   {
                     limit: BigInt(AccountLink.reusableAccessKeyLimit),
                     period: AccountLink.reusableAccessKeyPeriodSeconds,
-                    token: Tempo.addressLookup.pathUsd,
+                    token: tokenAddress,
                   },
                 ],
                 scopes: [
                   {
-                    address: Tempo.addressLookup.pathUsd,
+                    address: tokenAddress,
                     selector: AbiFunction.getSelector('transfer(address,uint256)'),
                   },
                 ],
@@ -1440,8 +1496,18 @@ async function connectTipAccounts(options: { memoScope?: boolean; recipient?: bo
     chain_id: Tempo.chainLookup.localnet,
     ciphertext: await AccessKey.encrypt(env, accessKey.privateKey),
     expires_at: accessKeyExpiresAt,
-    token_address: Tempo.addressLookup.pathUsd,
+    token_address: tokenAddress,
   })
+  if (!recipientMember)
+    return { accessKey: accessKeyRow, recipientAccount, senderAccount, senderMember, workspace }
+  return {
+    accessKey: accessKeyRow,
+    recipientAccount,
+    recipientMember,
+    senderAccount,
+    senderMember,
+    workspace,
+  }
 }
 
 async function findOrCreateAccount(address: string) {
@@ -1540,9 +1606,71 @@ async function expectSlackPostEphemeralCall(
     .toBe(true)
 }
 
+async function expectSlackAssistantStatusCall(
+  fetchSpy: { mock: { calls: Parameters<typeof fetch>[] } },
+  threadTs: string,
+  status: string,
+) {
+  await expect
+    .poll(
+      async () => {
+        for (const call of fetchSpy.mock.calls) {
+          const input = call[0]
+          const url =
+            typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+          const params = await slackFetchCallBodyParams(call)
+          if (
+            url.endsWith('/assistant.threads.setStatus') &&
+            params.get('channel_id') === Constants.slack.channelId &&
+            params.get('status') === status &&
+            params.get('thread_ts') === threadTs
+          )
+            return true
+        }
+        return false
+      },
+      {
+        message: fetchSpy.mock.calls
+          .map((call) => {
+            const input = call[0]
+            const url =
+              typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+            return url
+          })
+          .join('\n'),
+        timeout: 10_000, // 10 seconds
+      },
+    )
+    .toBe(true)
+}
+
+async function slackFetchCallBodyParams(call: Parameters<typeof fetch>) {
+  const initParams = slackFetchBodyParams(call[1]?.body)
+  if ([...initParams].length > 0) return initParams
+
+  const input = call[0]
+  if (input instanceof Request) {
+    try {
+      return slackFetchBodyParams(await input.clone().text())
+    } catch {
+      return initParams
+    }
+  }
+  return initParams
+}
+
 function slackFetchBodyParams(body: BodyInit | null | undefined) {
   if (body instanceof URLSearchParams) return body
-  if (typeof body === 'string') return new URLSearchParams(body)
+  if (typeof body === 'string') {
+    if (body.trim().startsWith('{')) {
+      try {
+        return new URLSearchParams(JSON.parse(body) as Record<string, string>)
+      } catch {
+        return new URLSearchParams()
+      }
+    }
+    return new URLSearchParams(body)
+  }
   return new URLSearchParams()
 }
 

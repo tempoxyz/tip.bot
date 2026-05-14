@@ -337,6 +337,43 @@ describe('/api/confirm/:token', () => {
     })
   })
 
+  test('resolves missing confirmation recipient label from Slack', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.startsWith(env.SLACK_API_URL) && url.includes('/users.info'))
+        return Promise.resolve(
+          Response.json({
+            ok: true,
+            user: {
+              id: Constants.slack.memberUserId,
+              name: Constants.slack.memberUserName,
+            },
+          }),
+        )
+      return originalFetch(input, init)
+    })
+    const confirmation = await createConfirmationToken()
+    await Chat.getChat().initialize()
+    await Chat.getSlack().setInstallation(confirmation.payload.providerId, {
+      botToken: Constants.slack.botToken,
+      botUserId: Constants.slack.botUserId,
+      teamName: Constants.slack.teamName,
+    })
+
+    const response = await client.api.confirm[':token'].$get({
+      param: { token: confirmation.token },
+    })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      recipientProviderLabel: Constants.slack.memberUserName,
+      recipientProviderUserId: Constants.slack.memberUserId,
+    })
+    fetchSpy.mockRestore()
+  })
+
   test('rejects invalid confirmation links generically', async () => {
     const response = await client.api.confirm[':token'].$get({ param: { token: 'missing' } })
 
@@ -382,6 +419,43 @@ describe('/api/confirm/:token', () => {
     expect(
       history.messages?.some((message) => message.text?.includes(confirmation.payload.memo!)),
     ).toBe(true)
+  }, 20_000) // 20 seconds
+
+  test('posts confirmed mention payment receipts in the source thread and clears status', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const parent = await slack.chat.postMessage({
+      channel: apiChannelId,
+      text: 'thread confirmation parent',
+    })
+    if (!parent.ts) throw new Error('Expected Slack parent message timestamp.')
+    const confirmation = await createConfirmationToken({
+      amount: 1,
+      memo: `thread-${Nanoid.generate()}`,
+      providerThreadId: parent.ts,
+    })
+    await Chat.getChat().initialize()
+    await Chat.getSlack().setInstallation(confirmation.payload.providerId, {
+      botToken: Constants.slack.botToken,
+      botUserId: Constants.slack.botUserId,
+      teamName: Constants.slack.teamName,
+    })
+    const signedTransaction = await signConfirmationTransaction(confirmation)
+
+    const response = await client.api.confirm[':token'].$post({
+      json: { address: confirmation.senderRoot.address, signedTransaction },
+      param: { token: confirmation.token },
+    })
+    await Promise.all(waitUntil)
+    const replies = await slack.conversations.replies({ channel: apiChannelId, ts: parent.ts })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true })
+    expect(
+      replies.messages?.some((message) => message.text?.includes(confirmation.payload.memo!)),
+      JSON.stringify(replies.messages),
+    ).toBe(true)
+    await expectSlackAssistantStatusCall(fetchSpy, apiChannelId, parent.ts, '')
+    fetchSpy.mockRestore()
   }, 20_000) // 20 seconds
 
   test('confirms one-time payments without fetching the public relay URL during submit', async () => {
@@ -667,6 +741,7 @@ async function createConfirmationToken(
     kind?: Confirmation.Payload['kind']
     memo?: string | null
     providerId?: string
+    providerThreadId?: string
   } = {},
 ) {
   const providerId = options.providerId ?? `T${Nanoid.generate()}`
@@ -709,6 +784,7 @@ async function createConfirmationToken(
     provider: 'slack',
     providerChannelId: apiChannelId,
     providerId,
+    providerThreadId: options.providerThreadId,
     recipientProviderUserId: Constants.slack.memberUserId,
     senderProviderUserId: Constants.slack.adminUserId,
     tokenAddress: Tempo.addressLookup.pathUsd,
@@ -777,6 +853,38 @@ async function expectSlackMessage(channelId: string, text: string) {
 
   expect(history.ok).toBe(true)
   expect(history.messages?.some((message) => message.text?.includes(text))).toBe(true)
+}
+
+async function expectSlackAssistantStatusCall(
+  fetchSpy: { mock: { calls: Parameters<typeof fetch>[] } },
+  channelId: string,
+  threadTs: string,
+  status: string,
+) {
+  await expect
+    .poll(
+      () =>
+        fetchSpy.mock.calls.some((call) => {
+          const input = call[0]
+          const url =
+            typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+          const params = slackFetchBodyParams(call[1]?.body)
+          return (
+            url.endsWith('/assistant.threads.setStatus') &&
+            params.get('channel_id') === channelId &&
+            params.get('status') === status &&
+            params.get('thread_ts') === threadTs
+          )
+        }),
+      { timeout: 10_000 }, // 10 seconds
+    )
+    .toBe(true)
+}
+
+function slackFetchBodyParams(body: BodyInit | null | undefined) {
+  if (body instanceof URLSearchParams) return body
+  if (typeof body === 'string') return new URLSearchParams(body)
+  return new URLSearchParams()
 }
 
 async function signKeyAuthorization(
