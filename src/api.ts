@@ -212,7 +212,7 @@ export const api = new Hono<{
             chain_id: link.chain_id,
             ciphertext: link.access_key_ciphertext,
             created_at: now,
-            expires_at: link.access_key_expires_at,
+            expires_at: verified.expiresAt,
             id: Nanoid.generate(),
             revoked_at: null,
             token_address: Address.checksum(
@@ -277,7 +277,16 @@ export const api = new Hono<{
       const metadata = Tempo.getTokenMetadataFallback(data.payload.tokenAddress)
       const recipientProviderLabel =
         data.payload.recipientProviderLabel ??
+        (await c.var.db
+          .selectFrom('member')
+          .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+          .select(['member.login', 'member.name'])
+          .where('workspace.id', '=', data.payload.workspaceId)
+          .where('member.provider_user_id', '=', data.payload.recipientProviderUserId)
+          .executeTakeFirst()
+          .then((member) => member?.name?.trim() || member?.login?.trim() || undefined)) ??
         (await (async () => {
+          await Chat.getChat().initialize()
           const installation = await Chat.getSlack().getInstallation(data.payload.providerId)
           if (!installation) return undefined
           const slackUserSchema = z.object({
@@ -292,12 +301,13 @@ export const api = new Hono<{
               .optional(),
           })
 
-          const userInfoUrl = new URL(`${c.env.SLACK_API_URL}/users.info`)
-          userInfoUrl.searchParams.set('user', data.payload.recipientProviderUserId)
+          const body = new URLSearchParams()
+          body.set('user', data.payload.recipientProviderUserId)
           const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
-            fetch(userInfoUrl, {
+            fetch(`${c.env.SLACK_API_URL}/users.info`, {
+              body,
               headers: { authorization: `Bearer ${installation.botToken}` },
-              method: 'GET',
+              method: 'POST',
             }),
           )
           const info = z.parse(

@@ -57,6 +57,46 @@ test('verifies key authorizations against Tipbot policy', async () => {
   }
 })
 
+test('accepts user-edited key authorization amount and expiry', async () => {
+  const verifyHash = vi.fn(async () => true)
+  vi.resetModules()
+  vi.doMock('viem/actions', () => ({ verifyHash }))
+
+  try {
+    const AccountLink = await import('#/lib/accountLink.ts')
+    const accessKey = AccessKey.generate()
+    const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    const requestedExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
+    const approvedExpiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString() // 365 days
+    const keyAuthorization = await AccountLink.signKeyAuthorization(root, {
+      accessKeyAddress: accessKey.address,
+      chainId: Tempo.chainLookup.testnet,
+      expiresAt: approvedExpiresAt,
+      limit: 100_000_000n, // 100 PathUSD
+      tokenAddress: Tempo.addressLookup.pathUsd,
+    })
+
+    const verified = await AccountLink.verifyKeyAuthorization({
+      accessKeyAddress: accessKey.address,
+      chainId: Tempo.chainLookup.testnet,
+      env: rpcEnv,
+      expiresAt: requestedExpiresAt,
+      keyAuthorization,
+      rootAddress: root.address,
+      tokenAddress: Tempo.addressLookup.pathUsd,
+    })
+
+    expect(verified.expiresAt).toBe(
+      new Date(Math.floor(new Date(approvedExpiresAt).getTime() / 1000) * 1000).toISOString(),
+    )
+    expect(verified.serialized).toBe(JSON.stringify(keyAuthorization))
+    expect(verifyHash).toHaveBeenCalledOnce()
+  } finally {
+    vi.doUnmock('viem/actions')
+    vi.resetModules()
+  }
+})
+
 test('rejects key authorizations with mismatched policy', async () => {
   const AccountLink = await import('#/lib/accountLink.ts')
   const accessKey = AccessKey.generate()
@@ -79,7 +119,7 @@ test('rejects key authorizations with mismatched policy', async () => {
       rootAddress: root.address,
       tokenAddress: '0x0000000000000000000000000000000000000001',
     }),
-  ).rejects.toThrow('Key authorization limits do not match Tipbot policy.')
+  ).rejects.toThrow('Key authorization limits must apply to the Tipbot token.')
 })
 
 test.each([
@@ -103,16 +143,6 @@ test.each([
     message: 'Key authorization chain does not match Tipbot policy.',
     name: 'chain',
   },
-  {
-    input: (accessKey: ReturnType<typeof AccessKey.generate>, _expiresAt: string) => ({
-      accessKeyAddress: accessKey.address,
-      chainId: Tempo.chainLookup.testnet,
-      expiresAt: new Date(Date.now() + 31 * 24 * 60 * 60 * 1000).toISOString(), // 31 days
-      tokenAddress: Tempo.addressLookup.pathUsd,
-    }),
-    message: 'Key authorization expiry does not match Tipbot policy.',
-    name: 'expiry',
-  },
 ])('rejects key authorizations with mismatched $name', async (case_) => {
   const AccountLink = await import('#/lib/accountLink.ts')
   const accessKey = AccessKey.generate()
@@ -133,6 +163,32 @@ test.each([
       ...case_.input(accessKey, expiresAt),
     }),
   ).rejects.toThrow(case_.message)
+})
+
+test('rejects expired key authorizations', async () => {
+  const AccountLink = await import('#/lib/accountLink.ts')
+  const accessKey = AccessKey.generate()
+  const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+  const requestedExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
+  const approvedExpiresAt = new Date(Date.now() - 60 * 1000).toISOString() // 1 minute ago
+  const keyAuthorization = await AccountLink.signKeyAuthorization(root, {
+    accessKeyAddress: accessKey.address,
+    chainId: Tempo.chainLookup.testnet,
+    expiresAt: approvedExpiresAt,
+    tokenAddress: Tempo.addressLookup.pathUsd,
+  })
+
+  await expect(
+    AccountLink.verifyKeyAuthorization({
+      accessKeyAddress: accessKey.address,
+      chainId: Tempo.chainLookup.testnet,
+      env: rpcEnv,
+      expiresAt: requestedExpiresAt,
+      keyAuthorization,
+      rootAddress: root.address,
+      tokenAddress: Tempo.addressLookup.pathUsd,
+    }),
+  ).rejects.toThrow('Key authorization has expired.')
 })
 
 test('rejects key authorizations with invalid signatures', async () => {

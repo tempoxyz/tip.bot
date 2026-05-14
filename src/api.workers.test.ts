@@ -185,7 +185,11 @@ describe('/api/account/link/:token', () => {
     expect(account.address).toBe(root.address)
     expect(accessKey.address).toBe(pending.accessKey.address)
     expect(accessKey.ciphertext).toBe(pending.link.access_key_ciphertext)
-    expect(accessKey.expires_at).toBe(pending.link.access_key_expires_at)
+    expect(accessKey.expires_at).toBe(
+      new Date(
+        Math.floor(new Date(pending.link.access_key_expires_at).getTime() / 1000) * 1000,
+      ).toISOString(),
+    )
     expect(link.account_id).toBe(account.id)
     expect(link.access_key_authorization).toEqual(JSON.stringify(keyAuthorization))
     expect(link.used_at).toEqual(expect.any(String))

@@ -110,31 +110,36 @@ export async function verifyKeyAuthorization(input: {
     throw new Error('Key authorization type does not match link access key.')
   if (authorization.chainId !== policy.chainId)
     throw new Error('Key authorization chain does not match Tipbot policy.')
-  if (authorization.expiry !== policy.expiry)
-    throw new Error('Key authorization expiry does not match Tipbot policy.')
+  if (!authorization.expiry) throw new Error('Key authorization expiry is required.')
+  if (authorization.expiry <= Math.floor(Date.now() / 1000))
+    throw new Error('Key authorization has expired.')
   if (
     !authorization.limits ||
-    authorization.limits.length !== policy.limits.length ||
-    !policy.limits.every((limit, index) => {
-      const actualLimit = authorization.limits?.[index]
+    authorization.limits.length < 1 ||
+    !authorization.limits.every((actualLimit) => {
       return Boolean(
-        actualLimit &&
-        actualLimit.limit === limit.limit &&
-        actualLimit.period === limit.period &&
-        Address.isEqual(actualLimit.token as Address.Address, limit.token as Address.Address),
+        actualLimit.limit > 0n &&
+        actualLimit.period &&
+        actualLimit.period > 0 &&
+        policy.limits.some((limit) =>
+          Address.isEqual(actualLimit.token as Address.Address, limit.token as Address.Address),
+        ),
       )
     })
   )
-    throw new Error('Key authorization limits do not match Tipbot policy.')
+    throw new Error('Key authorization limits must apply to the Tipbot token.')
   if (
     !authorization.scopes ||
-    authorization.scopes.length !== policy.scopes.length ||
-    !policy.scopes.every((scope, index) => {
-      const actualScope = authorization.scopes?.[index]
+    authorization.scopes.length < 1 ||
+    !authorization.scopes.every((actualScope) => {
       return Boolean(
-        actualScope &&
-        Address.isEqual(actualScope.address as Address.Address, scope.address as Address.Address) &&
-        actualScope.selector?.toLowerCase() === scope.selector.toLowerCase(),
+        policy.scopes.some(
+          (scope) =>
+            Address.isEqual(
+              actualScope.address as Address.Address,
+              scope.address as Address.Address,
+            ) && actualScope.selector?.toLowerCase() === scope.selector.toLowerCase(),
+        ),
       )
     })
   )
@@ -165,6 +170,7 @@ export async function verifyKeyAuthorization(input: {
 
   return {
     authorization,
+    expiresAt: new Date(Number(authorization.expiry) * 1000).toISOString(),
     rootAddress,
     serialized: JSON.stringify(input.keyAuthorization),
   }
