@@ -51,9 +51,9 @@ export function formatTxLink(chainId: number, transactionHash: string) {
   return `${chain.blockExplorers?.default.url ?? chain.rpcUrls.default.http[0]}/tx/${transactionHash}`
 }
 
-export function formatTokenLink(chainId: number, tokenAddress: string) {
+export function explorerLink(chainId: number, address: string) {
   const chain = getChain(chainId)
-  return `${chain.blockExplorers?.default.url ?? chain.rpcUrls.default.http[0]}/address/${tokenAddress}`
+  return `${chain.blockExplorers?.default.url ?? chain.rpcUrls.default.http[0]}/address/${address}`
 }
 
 export function isAllowedToken(chainId: number, tokenAddress: string) {

@@ -248,7 +248,7 @@ export const api = new Hono<{
                   : `slack:${link.provider_channel_id!}`,
               )
               const truncatedAddress = `${account.address.slice(0, 6)}…${account.address.slice(-4)}`
-              const explorerUrl = Tempo.formatTokenLink(link.chain_id, account.address)
+              const explorerUrl = Tempo.explorerLink(link.chain_id, account.address)
 
               await Chat.getSlack().withBotToken(installation.botToken, () =>
                 channelRef.postEphemeral(
