@@ -81,9 +81,8 @@ test('encodes transfer memos as bytes32', () => {
     '0x636f666665650000000000000000000000000000000000000000000000000000',
   )
   // Slack emoji shortcodes should be converted to unicode
-  expect(Tip.encodeTransferMemo(':wine_glass:')).toBe(
-    Tip.encodeTransferMemo('🍷'),
-  )
+  expect(Tip.encodeTransferMemo(':wine_glass:')).toBe(Tip.encodeTransferMemo('🍷'))
+  expect(Tip.encodeTransferMemo(':+1::skin-tone-4:')).toBe(Tip.encodeTransferMemo('👍🏽'))
 })
 
 test('rejects transfer memos longer than bytes32', () => {
