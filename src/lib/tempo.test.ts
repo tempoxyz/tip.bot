@@ -75,5 +75,5 @@ test('formats Tempo token symbols and transaction links', () => {
   expect(Tempo.explorerLink(Tempo.chainLookup.testnet, Tempo.addressLookup.pathUsd)).toContain(
     `/address/${Tempo.addressLookup.pathUsd}`,
   )
-  expect(Tempo.formatTxLink(Tempo.chainLookup.testnet, '0xabc')).toContain('/tx/0xabc')
+  expect(Tempo.formatTxLink(Tempo.chainLookup.testnet, '0xabc')).toContain('/receipt/0xabc')
 })

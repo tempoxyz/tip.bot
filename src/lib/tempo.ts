@@ -48,7 +48,7 @@ export function getChainName(chainId: number) {
 
 export function formatTxLink(chainId: number, transactionHash: string) {
   const chain = getChain(chainId)
-  return `${chain.blockExplorers?.default.url ?? chain.rpcUrls.default.http[0]}/tx/${transactionHash}`
+  return `${chain.blockExplorers?.default.url ?? chain.rpcUrls.default.http[0]}/receipt/${transactionHash}`
 }
 
 export function explorerLink(chainId: number, address: string) {
