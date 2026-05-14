@@ -632,6 +632,8 @@ export const api = new Hono<{
     url.searchParams.set(
       'scope',
       [
+        'app_mentions:read',
+        'assistant:write',
         'channels:history',
         'channels:read',
         'chat:write',

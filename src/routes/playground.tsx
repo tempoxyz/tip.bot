@@ -163,7 +163,9 @@ function Component() {
           ? sendEmulateCommand({
               data: { ...requestSearch, text: trimmedText.replace(/^\/tip(?:\s+|$)/, '') },
             })
-          : sendEmulateMessage({ data: { ...requestSearch, text: trimmedText } })),
+          : isTipbotMention(trimmedText)
+            ? sendEmulateMention({ data: { ...requestSearch, text: trimmedText } })
+            : sendEmulateMessage({ data: { ...requestSearch, text: trimmedText } })),
       )
       setText('')
     } catch (error) {
@@ -695,6 +697,60 @@ const sendEmulateCommand = createServerFn({ method: 'POST' })
     } satisfies EmulateWorkspaceState
   })
 
+const sendEmulateMention = createServerFn({ method: 'POST' })
+  .inputValidator((input: EmulateRequest) => withRequestDefaults(input))
+  .handler(async ({ data }) => {
+    const messageTs = `${Date.now() / 1000}`
+    const waitUntilPromises: Promise<unknown>[] = []
+    const body = JSON.stringify({
+      event: {
+        channel: data.channel,
+        channel_type: 'channel',
+        event_ts: messageTs,
+        team: data.workspace,
+        text: data.text,
+        ts: messageTs,
+        type: 'app_mention',
+        user: data.actor,
+      },
+      event_id: `Ev${Date.now()}`,
+      team_id: data.workspace,
+      type: 'event_callback',
+    })
+    const response = await api.fetch(
+      new Request(`https://${env.HOST}/api/chat/slack`, {
+        body,
+        headers: {
+          ...(await createSlackHeaders(body, env.SLACK_SIGNING_SECRET)),
+          'content-type': 'application/json',
+        },
+        method: 'POST',
+      }),
+      env,
+      {
+        passThroughOnException() {},
+        props: undefined,
+        waitUntil(promise) {
+          waitUntilPromises.push(promise)
+        },
+      },
+    )
+    await Promise.allSettled(waitUntilPromises)
+    await new Promise((resolve) => setTimeout(resolve, 100)) // 100 milliseconds
+    const [actors, app, transcript] = await Promise.all([
+      getSlackActors(),
+      getAppState(data),
+      getSlackTranscript(data),
+    ])
+    return {
+      actors,
+      app,
+      diagnostics: getDiagnostics(),
+      lastCommand: { status: response.status, triggerId: messageTs },
+      transcript,
+    } satisfies EmulateWorkspaceState
+  })
+
 const sendEmulateMessage = createServerFn({ method: 'POST' })
   .inputValidator((input: EmulateRequest) => withRequestDefaults(input))
   .handler(async ({ data }) => {
@@ -956,6 +1012,7 @@ function getShortcutCommands(actorId: string, targetActorId: string) {
     { label: 'connect', text: '/tip connect' },
     { label: 'disconnect', text: '/tip disconnect' },
     { label: 'help', text: '/tip help' },
+    { label: 'mention tip member', text: `<@${slackDefaults.botUserId}> <@${targetActorId}>` },
     { label: 'self tip', text: `/tip <@${actorId}>` },
     { label: 'status', text: '/tip status' },
     { label: 'tip member', text: `/tip <@${targetActorId}> for coffee` },
@@ -964,6 +1021,10 @@ function getShortcutCommands(actorId: string, targetActorId: string) {
 
 function isTipCommand(text: string) {
   return /^\/tip(?:\s|$)/.test(text)
+}
+
+function isTipbotMention(text: string) {
+  return new RegExp(`<@${slackDefaults.botUserId}(?:\\|[^>]+)?>`).test(text)
 }
 
 function withSearchDefaults(search: EmulateSearch): Required<EmulateSearch> {

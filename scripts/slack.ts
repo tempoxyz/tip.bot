@@ -63,6 +63,8 @@ function createManifest() {
       redirect_urls: [`${baseUrl}/api/chat/slack/oauth/callback`],
       scopes: {
         bot: [
+          'app_mentions:read',
+          'assistant:write',
           'channels:history',
           'channels:read',
           'chat:write',
@@ -76,7 +78,7 @@ function createManifest() {
     },
     settings: {
       event_subscriptions: {
-        bot_events: ['reaction_added', 'reaction_removed'],
+        bot_events: ['app_mention', 'reaction_added', 'reaction_removed'],
         request_url: `${baseUrl}/api/chat/slack`,
       },
       interactivity: {
