@@ -12,6 +12,7 @@ import { createSlackAdapter } from '@chat-adapter/slack'
 import * as chat from 'chat'
 import { env } from 'cloudflare:workers'
 import { sql } from 'kysely'
+import { Address } from 'ox'
 import { z } from 'zod'
 
 let bot: chat.Chat | null = null
@@ -419,7 +420,10 @@ const handlers = {
       ['/tip @account 0.005 USDC for coffee', 'Send custom token with memo'],
     ]
     const mentionExampleRows = [
-      ['@Tipbot @account [amount] [token] [for memo]', 'Send payment by mentioning Tipbot'],
+      [
+        '@Tipbot [tip|send|pay] @account [amount] [token] [for memo]',
+        'Send payment by mentioning Tipbot',
+      ],
       [
         `[emoji] :${workspace?.reaction_tip_emoji ?? 'money_with_wings'}:`,
         'Send default amount by reacting to a message',
@@ -1241,16 +1245,23 @@ export async function updateReactionTipAggregate(
     .innerJoin('tip', 'tip.id', 'reaction_tip.tip_id')
     .innerJoin('member as sender', 'sender.id', 'reaction_tip.sender_member_id')
     .innerJoin('member as recipient', 'recipient.id', 'reaction_tip.recipient_member_id')
+    .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
     .select([
       'reaction_tip.thread_ts',
       'recipient.provider_user_id as recipient_provider_user_id',
       'sender.provider_user_id as sender_provider_user_id',
+      'tip.amount',
+      'tip.chain_id',
+      'tip.token_address',
+      'tip.transaction_hash',
+      'workspace.default_token_address',
     ])
     .where('reaction_tip.workspace_id', '=', options.workspaceId)
     .where('reaction_tip.channel_id', '=', options.channelId)
     .where('reaction_tip.message_ts', '=', options.messageTs)
     .where('reaction_tip.reaction', '=', options.reaction)
     .where('tip.confirmed_at', 'is not', null)
+    .where('tip.transaction_hash', 'is not', null)
     .orderBy('reaction_tip.created_at', 'asc')
     .execute()
   if (rows.length === 0) return
@@ -1258,14 +1269,20 @@ export async function updateReactionTipAggregate(
   const installation = await getSlack().getInstallation(providerId)
   if (!installation) return
 
-  const text = `${(() => {
-    // Keep aggregate replies short when many people tip the same message.
-    const mentions = rows.map((row) => `<@${row.sender_provider_user_id}>`)
-    if (mentions.length === 1) return mentions[0]
-    if (mentions.length === 2) return `${mentions[0]} and ${mentions[1]}`
-    if (mentions.length === 3) return `${mentions[0]}, ${mentions[1]}, and ${mentions[2]}`
-    return `${mentions[0]}, ${mentions[1]}, and ${mentions.length - 2} others`
-  })()} tipped <@${rows[0]!.recipient_provider_user_id}>`
+  const tipLines = await Promise.all(
+    rows.map(async (row) => {
+      const token = await Tempo.getTokenMetadata(env, row.chain_id, row.token_address)
+      const amount = formatAmount(row.amount)
+      const displayAmount = Address.isEqual(
+        Address.checksum(row.token_address),
+        Address.checksum(row.default_token_address ?? Tempo.addressLookup.pathUsd),
+      )
+        ? formatCurrencyAmount(amount, token.currency)
+        : formatTipAmount(amount, token.currency, token.symbol)
+      return `• <@${row.sender_provider_user_id}> tipped ${displayAmount} · <${Tempo.formatTxLink(row.chain_id, row.transaction_hash!)}|Receipt>`
+    }),
+  )
+  const text = `<@${rows[0]!.recipient_provider_user_id}> received ${rows.length === 1 ? 'a tip' : 'tips'} on this message:\n\n${tipLines.join('\n')}`
   const existing = await db
     .selectFrom('reaction_tip_thread')
     .selectAll()
@@ -1350,8 +1367,9 @@ function parseSlackMentionTipText(value: string, botUserId: string) {
   const text = value.replace(botMentionPattern, ' ').replace(/\s+/g, ' ').trim()
   const mentions = [...text.matchAll(/<@([A-Z0-9_]+)(?:\|[^>]+)?>/g)]
   if (mentions.length !== 1) return null
-  if (!text.startsWith(mentions[0]![0])) return null
-  return text
+  const prefix = text.slice(0, mentions[0]!.index).trim().toLowerCase()
+  if (prefix && !['pay', 'send', 'tip'].includes(prefix)) return null
+  return text.slice(mentions[0]!.index).trim()
 }
 
 function isSlackIntroduceYourselfText(value: string, botUserId: string) {
@@ -1407,7 +1425,7 @@ async function postInvalidUsage(
   body.set(
     'text',
     options.mention
-      ? 'Invalid `@Tipbot` usage. Try `@Tipbot @account [amount] [token] [for memo]`.'
+      ? 'Invalid `@Tipbot` usage. Try `@Tipbot @account [amount] [token] [for memo]` or `@Tipbot tip @account`.'
       : 'Invalid `/tip` usage. Try `/tip @account` or `/tip help` for more info.',
   )
   if (options.threadTs) body.set('thread_ts', options.threadTs)
@@ -1653,7 +1671,7 @@ async function postSlackReceiptMessage(
     JSON.stringify(createReceiptBlocks(receiptText, chainId, transactionHash, context)),
   )
   body.set('channel', event.channel.id.replace(/^slack:/, ''))
-  body.set('text', `${receiptText}${context ? ` ${context}` : ''} Receipt`)
+  body.set('text', `${receiptText}${context ? ` ${context}` : ''} · Receipt`)
   if (threadTs) body.set('thread_ts', threadTs)
   if (user) body.set('user', user.userId)
   else {
@@ -1686,7 +1704,7 @@ function createReceiptBlocks(
   return [
     {
       text: {
-        text: `${text} <${Tempo.formatTxLink(chainId, transactionHash)}|Receipt>`,
+        text: `${text} · <${Tempo.formatTxLink(chainId, transactionHash)}|Receipt>`,
         type: 'mrkdwn',
       },
       type: 'section',

@@ -505,7 +505,7 @@ describe('/api/confirm/:token', () => {
     expect(
       replies.messages?.some((message) =>
         message.text?.includes(
-          `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}>`,
+          `<@${Constants.slack.memberUserId}> received a tip on this message:\n\n• <@${Constants.slack.adminUserId}> tipped $5.00 · <`,
         ),
       ),
       JSON.stringify(replies.messages),

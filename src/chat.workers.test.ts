@@ -87,7 +87,7 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 Receipt`,
+      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 · Receipt`,
     )
     await expectSlackMessageNotContaining(
       `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001. Receipt`,
@@ -113,7 +113,7 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for coffee Receipt`,
+      `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for coffee · Receipt`,
     )
     await expectSlackMessageNotContaining(
       `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for coffee. Receipt`,
@@ -134,7 +134,7 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.002 Receipt`,
+      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.002 · Receipt`,
     )
     await expectSlackMessageNotContaining(
       `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.002. Receipt`,
@@ -230,7 +230,7 @@ describe('/tip @account', () => {
 
     expect(firstResponse.status).toBe(200)
     expect(secondResponse.status).toBe(200)
-    await expectSlackMessage('Payment sent Receipt')
+    await expectSlackMessage('Payment sent · Receipt')
     expect(tips).toHaveLength(1)
   }, 20_000) // 20 seconds
 
@@ -466,7 +466,7 @@ test('@Tipbot mention sends tip in thread', async () => {
   await expectSlackAssistantStatusCall(fetchSpy, messageTs, 'is sending a tip', ['Sending tip'])
   await expectSlackThreadMessage(
     messageTs,
-    `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 Receipt`,
+    `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 · Receipt`,
   )
   expect(tip).toMatchObject({
     amount: 1000,
@@ -478,6 +478,32 @@ test('@Tipbot mention sends tip in thread', async () => {
   expect(tip.transaction_hash).toEqual(expect.any(String))
   fetchSpy.mockRestore()
 }, 20_000) // 20 seconds
+
+test.each(['pay', 'send', 'tip'])(
+  '@Tipbot mention accepts %s before recipient',
+  async (verb) => {
+    await connectTipAccounts()
+    const messageTs = `1700000010.${Nanoid.generate().slice(0, 6)}`
+
+    const response = await postSlackAppMention({
+      messageTs,
+      text: `<@${Constants.slack.botUserId}> ${verb} <@${Constants.slack.memberUserId}>`,
+    })
+    const tip = await db
+      .selectFrom('tip')
+      .select(['confirmed_at', 'transaction_hash'])
+      .executeTakeFirstOrThrow()
+
+    expect(response.status).toBe(200)
+    await expectSlackThreadMessage(
+      messageTs,
+      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 · Receipt`,
+    )
+    expect(tip.confirmed_at).toEqual(expect.any(String))
+    expect(tip.transaction_hash).toEqual(expect.any(String))
+  },
+  20_000,
+) // 20 seconds
 
 test('@Tipbot mention introduces itself', async () => {
   const messageTs = `1700000000.${Nanoid.generate().slice(0, 6)}`
@@ -522,7 +548,7 @@ test('@Tipbot mention accepts bot mention after recipient', async () => {
   expect(response.status).toBe(200)
   await expectSlackThreadMessage(
     messageTs,
-    `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for coffee Receipt`,
+    `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for coffee · Receipt`,
   )
   expect(tip.confirmed_at).toEqual(expect.any(String))
   expect(tip.transaction_hash).toEqual(expect.any(String))
@@ -545,7 +571,7 @@ test('@Tipbot mention accepts repeated bot mentions', async () => {
   expect(response.status).toBe(200)
   await expectSlackThreadMessage(
     messageTs,
-    `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.002 Receipt`,
+    `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.002 · Receipt`,
   )
   expect(tip.confirmed_at).toEqual(expect.any(String))
   expect(tip.transaction_hash).toEqual(expect.any(String))
@@ -570,7 +596,7 @@ test('@Tipbot mention rejects ambiguous mentions', async () => {
   expect(tips).toHaveLength(0)
   await expectSlackPostEphemeralCall(
     fetchSpy,
-    'Invalid `@Tipbot` usage. Try `@Tipbot @account [amount] [token] [for memo]`.',
+    'Invalid `@Tipbot` usage. Try `@Tipbot @account [amount] [token] [for memo]` or `@Tipbot tip @account`.',
   )
   await expectSlackThreadMessageNotContaining(messageTs, 'tipped')
   fetchSpy.mockRestore()
@@ -796,7 +822,7 @@ test('reaction tipping sends default tip and updates aggregate thread reply', as
   expect(tips[0]).toMatchObject({ amount: 1000, confirmed_at: expect.any(String) })
   await expectSlackThreadMessage(
     message.ts,
-    `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}>`,
+    `<@${Constants.slack.memberUserId}> received a tip on this message:\n\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
     { channelId },
   )
 })
@@ -1522,7 +1548,7 @@ describe('/tip help', () => {
     await expectSlackMessage('/tip @account 0.005 for coffee')
     await expectSlackMessage('/tip @account 0.005 USDC')
     await expectSlackMessage('/tip @account 0.005 USDC for coffee')
-    await expectSlackMessage('@Tipbot @account [amount] [token] [for memo]')
+    await expectSlackMessage('@Tipbot [tip|send|pay] @account [amount] [token] [for memo]')
     await expectSlackMessage('[emoji] :money_with_wings:')
     await expectSlackMessage('Send default amount by reacting to a message')
     await expectSlackMessageNotContaining('Payment examples')
