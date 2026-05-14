@@ -292,6 +292,11 @@ describe('/tip @account', () => {
         ? (postEphemeralCall[1].body.get('blocks') ?? '[]')
         : '[]',
     )
+    expect(
+      postEphemeralCall?.[1]?.body instanceof URLSearchParams
+        ? postEphemeralCall[1].body.has('thread_ts')
+        : true,
+    ).toBe(false)
     expect(blocks).toEqual([
       {
         text: {
@@ -322,6 +327,35 @@ describe('/tip @account', () => {
         type: 'context',
       },
     ])
+    handleTipRequest.mockRestore()
+    fetchSpy.mockRestore()
+  })
+
+  test('handles insufficient funds from thread slash command', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const handleTipRequest = vi.spyOn(Tip, 'handleTipRequest').mockResolvedValue({
+      code: 'insufficient_funds',
+      ok: false,
+    })
+    const threadTs = `1700000012.${Nanoid.generate().slice(0, 6)}`
+
+    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}>`, { threadTs })
+
+    expect(response.status).toBe(200)
+    const postEphemeralCall = fetchSpy.mock.calls.find((call) => {
+      const input = call[0]
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      const params = slackFetchBodyParams(call[1]?.body)
+      return (
+        url.endsWith('/chat.postEphemeral') &&
+        params.get('text')?.includes('Payment not sent. Your wallet has insufficient funds.')
+      )
+    })
+    expect(
+      postEphemeralCall?.[1]?.body instanceof URLSearchParams
+        ? postEphemeralCall[1].body.get('thread_ts')
+        : null,
+    ).toBe(threadTs)
     handleTipRequest.mockRestore()
     fetchSpy.mockRestore()
   })
@@ -1804,6 +1838,7 @@ async function postSlashCommand(
     channelId?: string
     command?: string
     responseUrl?: string
+    threadTs?: string
     triggerId?: string
     userId?: string
   } = {},
@@ -1966,6 +2001,7 @@ async function createSlashCommandRequestInit(
     channelId?: string
     command?: string
     responseUrl?: string
+    threadTs?: string
     triggerId?: string
     userId?: string
   } = {},
@@ -1976,6 +2012,7 @@ async function createSlashCommandRequestInit(
     ...(options.responseUrl ? { response_url: options.responseUrl } : {}),
     team_id: providerId,
     text,
+    ...(options.threadTs ? { thread_ts: options.threadTs } : {}),
     trigger_id: options.triggerId ?? `trigger-${text.replaceAll(/\W+/g, '-')}`,
     user_id: options.userId ?? Constants.slack.adminUserId,
   }).toString()

@@ -120,6 +120,10 @@ export function getChat() {
       db: DB.create(env.DB),
       provider: getProvider(event),
       text: event.text.trim(),
+      threadTs: z
+        .object({ thread_ts: z.string().min(1).optional() })
+        .passthrough()
+        .parse(event.raw).thread_ts,
     } satisfies HandlerContext
 
     const match = context.text.match(commandPattern)
@@ -629,6 +633,8 @@ const handlers = {
     }
     await handleTipText(event, ctx, {
       idempotencyKey: `command:${ctx.provider.id}:${event.triggerId}`,
+      insufficientFundsThreadTs: ctx.threadTs,
+      threadTs: ctx.threadTs,
     })
   },
 } as const satisfies Record<
@@ -645,6 +651,7 @@ type HandlerContext = {
   db: DB.Type
   provider: ProviderContext
   text: string
+  threadTs?: string
 }
 
 type ProviderContext = { id: string; type: 'slack' }
