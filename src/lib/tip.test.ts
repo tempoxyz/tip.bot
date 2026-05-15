@@ -118,6 +118,18 @@ test('parses tip mentions and memos', () => {
     recipientProviderUserId: 'UMEMBER',
     token: null,
   })
+  expect(Tip.parseTipText('<@UMEMBER> $0.001 v2 launch')).toEqual({
+    amount: 1_000,
+    memo: 'v2 launch',
+    recipientProviderUserId: 'UMEMBER',
+    token: null,
+  })
+  expect(Tip.parseTipText('<@UMEMBER> $0.001 ship-it')).toEqual({
+    amount: 1_000,
+    memo: 'ship-it',
+    recipientProviderUserId: 'UMEMBER',
+    token: null,
+  })
 })
 
 test('rejects text without tip mentions', () => {

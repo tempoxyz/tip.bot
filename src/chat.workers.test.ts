@@ -498,6 +498,13 @@ test.each([
   },
   {
     amount: 2000,
+    memo: 'v2 launch',
+    name: 'token-like memo after amount',
+    text: '0.002 v2 launch',
+    tokenAddress: undefined,
+  },
+  {
+    amount: 2000,
     memo: 'lunch',
     name: 'custom token with memo',
     text: '0.002 BetaUSD for lunch',
