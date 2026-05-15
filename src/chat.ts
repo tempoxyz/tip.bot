@@ -417,11 +417,13 @@ const handlers = {
       ['/tip @account 0.005 for coffee', 'Send custom amount with memo'],
       ['/tip @account 0.005 USDC', 'Send custom token'],
       ['/tip @account 0.005 USDC for coffee', 'Send custom token with memo'],
+      ['/tip @alice @bob @charlie 5', 'Tip multiple people the same amount'],
     ]
     const mentionExampleRows = [
       ['@Tipbot @account', 'Send default amount'],
       ['@Tipbot @account for coffee', 'Send default amount with memo'],
       ['@Tipbot @account 0.005 for coffee', 'Send custom amount with memo'],
+      ['@Tipbot @alice @bob 5 for lunch', 'Tip multiple people'],
       [
         `[emoji] :${workspace?.reaction_tip_emoji ?? 'money_with_wings'}:`,
         'Send default amount by reacting to a message',
@@ -835,7 +837,24 @@ async function handleTipText(
     .where('provider', '=', ctx.provider.type)
     .where('provider_id', '=', ctx.provider.id)
     .executeTakeFirst()
-  const parsed = Tip.parseTipText(ctx.text, {
+  // Extract all user mentions; strip extras so parseTipText sees a single-recipient string.
+  const allMentions = [...ctx.text.matchAll(/<@([A-Z0-9_]+)(?:\|([^>]+))?>/g)]
+  const extraRecipients: { label?: string; userId: string }[] = []
+  let tipText = ctx.text
+  if (allMentions.length > 1) {
+    const seen = new Set<string>()
+    seen.add(allMentions[0]![1]!)
+    for (let i = allMentions.length - 1; i >= 1; i--) {
+      const m = allMentions[i]!
+      if (!seen.has(m[1]!))
+        extraRecipients.unshift({ label: m[2]?.trim() || undefined, userId: m[1]! })
+      seen.add(m[1]!)
+      tipText = tipText.slice(0, m.index!) + tipText.slice(m.index! + m[0].length)
+    }
+    tipText = tipText.replace(/\s+/g, ' ').trim()
+  }
+
+  const parsed = Tip.parseTipText(tipText, {
     chainId: workspace?.chain_id ?? Tempo.chainLookup.mainnet,
   })
   if (!parsed) {
@@ -846,6 +865,14 @@ async function handleTipText(
     await postInvalidUsage(event, ctx, { mention: options.mention, threadTs: options.threadTs })
     return
   }
+
+  const recipients = [
+    {
+      label: parsed.recipientProviderLabel,
+      userId: parsed.recipientProviderUserId,
+    },
+    ...extraRecipients,
+  ]
 
   const tokenAddress = parsed.token
     ? Tempo.getTokenAddress(workspace?.chain_id ?? Tempo.chainLookup.mainnet, parsed.token)
@@ -861,162 +888,170 @@ async function handleTipText(
 
   if (options.threadTs)
     void setSlackAssistantThreadStatus(event, ctx, options.threadTs, 'is sending a tip', {
-      loadingMessages: ['Sending tip'],
+      loadingMessages: [recipients.length > 1 ? 'Sending tips' : 'Sending tip'],
     }).catch(() => {
       // Best effort only. Payment flow must not depend on Slack assistant UI.
     })
   try {
-    const result = await Tip.handleTipRequest(env, {
-      amount: parsed.amount,
-      idempotencyKey: options.idempotencyKey,
-      memo: parsed.memo,
-      provider: ctx.provider.type,
-      providerChannelId: event.channel.id,
-      providerId: ctx.provider.id,
-      providerThreadId: options.threadTs,
-      recipientProviderLabel: parsed.recipientProviderLabel,
-      recipientProviderUserId: parsed.recipientProviderUserId,
-      senderProviderUserId: event.user.userId,
-      tokenAddress: tokenAddress ?? undefined,
-    }).catch(
-      (error) =>
-        ({
-          code: 'failed',
-          message: error instanceof Error ? error.message : 'Command failed.',
-          ok: false,
-        }) satisfies Tip.TipResult,
-    )
+    for (const recipient of recipients) {
+      const idempotencyKey =
+        recipients.length > 1
+          ? `${options.idempotencyKey}:${recipient.userId}`
+          : options.idempotencyKey
+      const result = await Tip.handleTipRequest(env, {
+        amount: parsed.amount,
+        idempotencyKey,
+        memo: parsed.memo,
+        provider: ctx.provider.type,
+        providerChannelId: event.channel.id,
+        providerId: ctx.provider.id,
+        providerThreadId: options.threadTs,
+        recipientProviderLabel: recipient.label,
+        recipientProviderUserId: recipient.userId,
+        senderProviderUserId: event.user.userId,
+        tokenAddress: tokenAddress ?? undefined,
+      }).catch(
+        (error) =>
+          ({
+            code: 'failed',
+            message: error instanceof Error ? error.message : 'Command failed.',
+            ok: false,
+          }) satisfies Tip.TipResult,
+      )
 
-    if (result.ok && result.status === 'sent') {
-      await postSlackReceiptMessage(
-        event,
-        ctx,
-        `${event.channel.mentionUser(result.senderProviderUserId)} ${result.memo ? 'sent' : 'tipped'} ${event.channel.mentionUser(result.recipientProviderUserId)} ${result.isDefaultToken ? formatCurrencyAmount(result.amount, result.tokenCurrency) : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)}${result.memo ? ` for ${result.memo}` : ''}.`,
-        result.chainId,
-        result.transactionHash,
-        undefined,
-        result.feePayer === 'sender'
-          ? 'Fee sponsor unavailable; fee paid from your balance.'
-          : undefined,
-        options.threadTs,
-      )
-      if (result.memo && options.threadTs)
-        await postSlackMemoReply(event, ctx, result.memo, options.threadTs)
-    } else if (result.ok)
-      await postSlackReceiptMessage(
-        event,
-        ctx,
-        'Payment sent.',
-        result.chainId,
-        result.transactionHash,
-        event.user,
-        result.feePayer === 'sender'
-          ? 'Fee sponsor unavailable; fee paid from your balance.'
-          : undefined,
-        options.threadTs,
-      )
-    else {
-      if (result.code === 'confirmation_required' && result.confirmUrl) {
-        const confirmUrlLabel = result.confirmUrl.replace(/(\/confirm\/.{8}).+$/, '$1...')
-        await postPrivateReply(event, event.user, {
-          card: chat.Card({
-            children: [
-              chat.CardText('Tipbot needs your approval to send this payment.'),
-              chat.Actions([
-                chat.LinkButton({
-                  label: 'Confirm payment',
-                  style: 'primary',
-                  url: result.confirmUrl,
-                }),
-                chat.Button({ id: 'confirm_cancel', label: 'Cancel' }),
-              ]),
-              chat.CardText(
-                `Link expires in 10 minutes. <${result.confirmUrl}|${confirmUrlLabel}>`,
-                {
-                  style: 'muted',
-                },
-              ),
-            ],
-          }),
-          fallbackText: `Tipbot needs your approval to send this payment.\nConfirm payment: ${result.confirmUrl}\nLink expires in 10 minutes.`,
-        })
-        return
-      }
-      if (result.code === 'sender_unconnected' || result.code === 'missing_sender_access_key') {
-        await postConnectLink(event, ctx)
-        return
-      }
-      const message = await (async () => {
-        if (result.code === 'self_tip')
-          return 'Payment not sent. Cannot send a payment to yourself.'
-        if (result.code === 'recipient_unconnected')
-          return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
-        if (result.code === 'pending') return 'Payment still sending.'
-        if (result.code === 'insufficient_funds')
-          return 'Payment not sent. Your wallet has insufficient funds.'
-        if (result.code === 'failed' && result.message === 'Memo must be at most 32 bytes.') {
-          const suggestion = await (async () => {
-            if (!parsed.memo) return null
-            try {
-              const value = z
-                .parse(
-                  z.object({ response: z.string().default('') }),
-                  await env.AI.run('@cf/meta/llama-3.2-1b-instruct', {
-                    max_tokens: 24,
-                    messages: [
-                      {
-                        content:
-                          'Shorten this payment memo to at most 32 UTF-8 bytes. Preserve the meaning. Return only the shortened memo text, no quotes, no explanation, no punctuation unless needed.',
-                        role: 'system',
-                      },
-                      { content: parsed.memo, role: 'user' },
-                    ],
-                  }),
-                )
-                .response.replace(/[\r\n]+/g, ' ')
-                .trim()
-                .replace(/^['"]|['"]$/g, '')
-              if (!value || new TextEncoder().encode(value).length > 32) return null
-              if (/[`\r\n]|<@[A-Z0-9_]+/i.test(value)) return null
-              const memoWords = new Set(parsed.memo.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
-              const suggestionWords = value.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
-              if (!suggestionWords.length) return null
-              if (suggestionWords.some((word) => !memoWords.has(word))) return null
-              return value
-            } catch (error) {
-              console.error('Failed to generate short memo suggestion:', error)
-            }
-            return null
-          })()
-          return `Payment not sent. Memo must be at most 32 bytes; shorten the text after \`for\`.${suggestion ? ` Try: \`${suggestion}\`.` : ''}`
-        }
-        return 'Payment failed.'
-      })()
-      if (result.code === 'insufficient_funds') {
-        await postSlackInsufficientFunds(
-          event,
-          ctx,
-          options.mention ? options.insufficientFundsThreadTs : options.threadTs,
-        )
-        return
-      }
-      if (
-        'chainId' in result &&
-        result.chainId &&
-        'transactionHash' in result &&
-        result.transactionHash
-      )
+      if (result.ok && result.status === 'sent') {
         await postSlackReceiptMessage(
           event,
           ctx,
-          message,
+          `${event.channel.mentionUser(result.senderProviderUserId)} ${result.memo ? 'sent' : 'tipped'} ${event.channel.mentionUser(result.recipientProviderUserId)} ${result.isDefaultToken ? formatCurrencyAmount(result.amount, result.tokenCurrency) : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)}${result.memo ? ` for ${result.memo}` : ''}.`,
+          result.chainId,
+          result.transactionHash,
+          undefined,
+          result.feePayer === 'sender'
+            ? 'Fee sponsor unavailable; fee paid from your balance.'
+            : undefined,
+          options.threadTs,
+        )
+        if (result.memo && options.threadTs)
+          await postSlackMemoReply(event, ctx, result.memo, options.threadTs)
+      } else if (result.ok)
+        await postSlackReceiptMessage(
+          event,
+          ctx,
+          'Payment sent.',
           result.chainId,
           result.transactionHash,
           event.user,
-          undefined,
+          result.feePayer === 'sender'
+            ? 'Fee sponsor unavailable; fee paid from your balance.'
+            : undefined,
           options.threadTs,
         )
-      else await postPrivateReply(event, event.user, message)
+      else {
+        if (result.code === 'confirmation_required' && result.confirmUrl) {
+          const confirmUrlLabel = result.confirmUrl.replace(/(\/confirm\/.{8}).+$/, '$1...')
+          await postPrivateReply(event, event.user, {
+            card: chat.Card({
+              children: [
+                chat.CardText('Tipbot needs your approval to send this payment.'),
+                chat.Actions([
+                  chat.LinkButton({
+                    label: 'Confirm payment',
+                    style: 'primary',
+                    url: result.confirmUrl,
+                  }),
+                  chat.Button({ id: 'confirm_cancel', label: 'Cancel' }),
+                ]),
+                chat.CardText(
+                  `Link expires in 10 minutes. <${result.confirmUrl}|${confirmUrlLabel}>`,
+                  {
+                    style: 'muted',
+                  },
+                ),
+              ],
+            }),
+            fallbackText: `Tipbot needs your approval to send this payment.\nConfirm payment: ${result.confirmUrl}\nLink expires in 10 minutes.`,
+          })
+          return
+        }
+        if (result.code === 'sender_unconnected' || result.code === 'missing_sender_access_key') {
+          await postConnectLink(event, ctx)
+          return
+        }
+        const message = await (async () => {
+          if (result.code === 'self_tip')
+            return 'Payment not sent. Cannot send a payment to yourself.'
+          if (result.code === 'recipient_unconnected')
+            return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? recipient.userId)} needs to connect Tipbot before receiving payments.`
+          if (result.code === 'pending') return 'Payment still sending.'
+          if (result.code === 'insufficient_funds')
+            return 'Payment not sent. Your wallet has insufficient funds.'
+          if (result.code === 'failed' && result.message === 'Memo must be at most 32 bytes.') {
+            const suggestion = await (async () => {
+              if (!parsed.memo) return null
+              try {
+                const value = z
+                  .parse(
+                    z.object({ response: z.string().default('') }),
+                    await env.AI.run('@cf/meta/llama-3.2-1b-instruct', {
+                      max_tokens: 24,
+                      messages: [
+                        {
+                          content:
+                            'Shorten this payment memo to at most 32 UTF-8 bytes. Preserve the meaning. Return only the shortened memo text, no quotes, no explanation, no punctuation unless needed.',
+                          role: 'system',
+                        },
+                        { content: parsed.memo, role: 'user' },
+                      ],
+                    }),
+                  )
+                  .response.replace(/[\r\n]+/g, ' ')
+                  .trim()
+                  .replace(/^['"]|['"]$/g, '')
+                if (!value || new TextEncoder().encode(value).length > 32) return null
+                if (/[`\r\n]|<@[A-Z0-9_]+/i.test(value)) return null
+                const memoWords = new Set(
+                  parsed.memo.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [],
+                )
+                const suggestionWords = value.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
+                if (!suggestionWords.length) return null
+                if (suggestionWords.some((word) => !memoWords.has(word))) return null
+                return value
+              } catch (error) {
+                console.error('Failed to generate short memo suggestion:', error)
+              }
+              return null
+            })()
+            return `Payment not sent. Memo must be at most 32 bytes; shorten the text after \`for\`.${suggestion ? ` Try: \`${suggestion}\`.` : ''}`
+          }
+          return 'Payment failed.'
+        })()
+        if (result.code === 'insufficient_funds') {
+          await postSlackInsufficientFunds(
+            event,
+            ctx,
+            options.mention ? options.insufficientFundsThreadTs : options.threadTs,
+          )
+          return
+        }
+        if (
+          'chainId' in result &&
+          result.chainId &&
+          'transactionHash' in result &&
+          result.transactionHash
+        )
+          await postSlackReceiptMessage(
+            event,
+            ctx,
+            message,
+            result.chainId,
+            result.transactionHash,
+            event.user,
+            undefined,
+            options.threadTs,
+          )
+        else await postPrivateReply(event, event.user, message)
+      }
     }
   } finally {
     // Clear Slack's assistant thread status after this request finishes or hands off to
@@ -1651,7 +1686,7 @@ function normalizeSlackMentionText(value: string, botUserId: string) {
 
 function parseSlackMentionTipText(text: string) {
   const mentions = [...text.matchAll(/<@([A-Z0-9_]+)(?:\|[^>]+)?>/g)]
-  if (mentions.length !== 1) return null
+  if (mentions.length === 0) return null
   const prefix = text.slice(0, mentions[0]!.index).trim().toLowerCase()
   if (prefix && !['pay', 'send', 'tip'].includes(prefix)) return null
   return text.slice(mentions[0]!.index).trim()

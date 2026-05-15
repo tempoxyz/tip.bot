@@ -160,3 +160,26 @@ test('encodes transfer memos as bytes32', () => {
 test('rejects transfer memos longer than bytes32', () => {
   expect(() => Tip.encodeTransferMemo('x'.repeat(33))).toThrow('Memo must be at most 32 bytes.')
 })
+
+test('parseTipText works on text with extra mentions stripped', () => {
+  // Multi-tip is handled by stripping extra mentions in handleTipText,
+  // then calling parseTipText on the single-mention remainder.
+  expect(Tip.parseTipText('<@UALICE> 5 for lunch')).toEqual({
+    amount: 5_000_000,
+    memo: 'lunch',
+    recipientProviderUserId: 'UALICE',
+    token: null,
+  })
+  expect(Tip.parseTipText('<@UALICE> $0.005')).toEqual({
+    amount: 5_000,
+    memo: null,
+    recipientProviderUserId: 'UALICE',
+    token: null,
+  })
+  expect(Tip.parseTipText('<@UALICE> 5 USDC for lunch')).toEqual({
+    amount: 5_000_000,
+    memo: 'lunch',
+    recipientProviderUserId: 'UALICE',
+    token: 'USDC',
+  })
+})
