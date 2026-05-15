@@ -1768,11 +1768,14 @@ async function generateInvalidMentionReply(mentionText: string) {
     text,
   )
   const isThanksText = /^(thank you|thanks|ty|thx|thank u)\b/i.test(text)
+  const isHelpText = /^\/?help$/i.test(text)
   const fallback = (() => {
     if (creatureMatch && isTipText)
       return `${creatureMatch[0].toUpperCase()}? Excellent. For tips: \`@Tipbot @account for coffee\`.`
     if (creatureMatch) return `${creatureMatch[0].toUpperCase()}? Now we are talking.`
     if (isThanksText) return 'Anytime.'
+    if (isHelpText)
+      return 'I'm Tipbot. Connect with `/tip connect`, then send stablecoins with `@Tipbot @account for coffee`, `/tip @account`, or a 💸 reaction. Run `/tip help` for full commands.'
     if (isSetupText) return 'Run `/tip connect`, then try `@Tipbot tip @account`.'
     if (isTipText) return 'Almost. Try `@Tipbot @account for coffee`.'
     return 'Anytime.'
@@ -1782,11 +1785,11 @@ async function generateInvalidMentionReply(mentionText: string) {
       .parse(
         z.object({ response: z.string().default('') }),
         await env.AI.run('@cf/meta/llama-3.2-1b-instruct', {
-          max_tokens: 48,
+          max_tokens: 96,
           messages: [
             {
               content:
-                'You are Tipbot in Slack. Reply to an invalid @Tipbot mention. Keep it under 140 chars. Be short and pithy. Do not mention users. If the user mentions goblins or other creatures, get REALLY EXCITED. If the user seems to be trying to send a tip/payment, include this exact syntax: `@Tipbot @account for coffee`. Otherwise just acknowledge or deflect lightly.',
+                'You are Tipbot in Slack. Reply to an @Tipbot mention. Keep it under 200 chars. Be short and pithy. Do not mention users. If the user mentions goblins or other creatures, get REALLY EXCITED. If the user seems to be trying to send a tip/payment, include this exact syntax: `@Tipbot @account for coffee`. If the user is asking for help or usage instructions, explain: connect with `/tip connect`, send stablecoins via `@Tipbot @account for coffee`, `/tip @account`, or a 💸 reaction, and run `/tip help` for full commands. Otherwise just acknowledge or deflect lightly.',
               role: 'system',
             },
             { content: text || '(empty mention)', role: 'user' },
