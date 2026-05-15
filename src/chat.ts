@@ -1493,6 +1493,7 @@ export async function updateReactionTipAggregate(
       'tip.token_address',
       'tip.transaction_hash',
       'workspace.default_token_address',
+      'workspace.reaction_tip_emoji',
     ])
     .where('reaction_tip.workspace_id', '=', options.workspaceId)
     .where('reaction_tip.channel_id', '=', options.channelId)
@@ -1541,14 +1542,15 @@ export async function updateReactionTipAggregate(
     [] as Array<{ lines: string[]; messageTs: string; recipientProviderUserId: string }>,
   )
   const text = (() => {
+    const title = `:${rows[0]!.reaction_tip_emoji}: Reaction tips received`
     if (messageGroups.length === 1) {
       const reactedMessageUrl = new URL('slack://channel')
       reactedMessageUrl.searchParams.set('team', providerId)
       reactedMessageUrl.searchParams.set('id', options.channelId)
       reactedMessageUrl.searchParams.set('message', messageGroups[0]!.messageTs)
-      return `<@${messageGroups[0]!.recipientProviderUserId}> received ${rowTexts.length === 1 ? 'a tip' : 'tips'} on <${reactedMessageUrl}|this> message:\n\n${messageGroups[0]!.lines.join('\n')}`
+      return `${title} on this message:\n\n<@${messageGroups[0]!.recipientProviderUserId}> received ${rowTexts.length === 1 ? 'a tip' : 'tips'} on <${reactedMessageUrl}|this> message:\n${messageGroups[0]!.lines.join('\n')}`
     }
-    return `Tips received in this thread:\n\n${messageGroups
+    return `${title} in this thread:\n\n${messageGroups
       .map((group) => {
         const reactedMessageUrl = new URL('slack://channel')
         reactedMessageUrl.searchParams.set('team', providerId)

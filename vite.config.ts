@@ -165,10 +165,12 @@ export default defineConfig({
         },
         plugins: lazyPlugins(async () => {
           const { cloudflareTest } = await import('@cloudflare/vitest-pool-workers')
+          const { tanstackStart } = await import('@tanstack/react-start/plugin/vite')
           const { setupVitestOutputFilter } = await import('./config/vitest.ts')
           const envMod = await import('./test/env.ts')
           setupVitestOutputFilter()
           return [
+            tanstackStart(),
             cloudflareTest(async (config) => {
               const env = envMod.Env.parse(config.inject('env'))
               return {

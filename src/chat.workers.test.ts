@@ -1113,7 +1113,7 @@ test('reaction tipping sends default tip and updates aggregate thread reply', as
   expect(tips[0]).toMatchObject({ amount: 1000, confirmed_at: expect.any(String) })
   await expectSlackThreadMessage(
     message.ts,
-    `<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this> message:\n\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
+    `:money_with_wings: Reaction tips received on this message:\n\n<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
     { channelId },
   )
 })
@@ -1269,7 +1269,7 @@ test('reaction tipping updates one aggregate reply for multiple tipped messages 
   })
   const thread = await slack.conversations.replies({ channel: channelId, ts: parent.ts })
   const aggregates = thread.messages?.filter((message) =>
-    message.text?.includes('Tips received in this thread:'),
+    message.text?.includes(':money_with_wings: Reaction tips received in this thread:'),
   )
 
   expect(aggregates, JSON.stringify(thread.messages)).toHaveLength(1)
