@@ -342,10 +342,10 @@ const handlers = {
       .where('provider_id', '=', ctx.provider.id)
       .executeTakeFirst()
     if (!workspace) {
-      await event.channel.postEphemeral(
+      await postPrivateReply(
+        event,
         event.user,
         'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
-        { fallbackToDM: false },
       )
       return
     }
@@ -365,10 +365,10 @@ const handlers = {
       .where('provider_id', '=', ctx.provider.id)
       .executeTakeFirst()
     if (!workspace) {
-      await event.channel.postEphemeral(
+      await postPrivateReply(
+        event,
         event.user,
         'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
-        { fallbackToDM: false },
       )
       return
     }
@@ -380,9 +380,7 @@ const handlers = {
       .where('provider_user_id', '=', event.user.userId)
       .executeTakeFirst()
     if (!member?.account_id) {
-      await event.channel.postEphemeral(event.user, 'No account connected.', {
-        fallbackToDM: false,
-      })
+      await postPrivateReply(event, event.user, 'No account connected.')
       return
     }
 
@@ -392,14 +390,9 @@ const handlers = {
       .set({ account_id: null, updated_at: new Date().toISOString() })
       .where('id', '=', member.id)
       .execute()
-    await event.channel.postEphemeral(event.user, 'Disconnected', {
-      fallbackToDM: false,
-    })
+    await postPrivateReply(event, event.user, 'Disconnected')
   },
   async help(event, ctx) {
-    const installation = await getSlack().getInstallation(ctx.provider.id)
-    if (!installation) return
-
     const workspace = await ctx.db
       .selectFrom('workspace')
       .selectAll()
@@ -481,22 +474,12 @@ const handlers = {
         },
       ]),
     )
-    body.set('user', event.user.userId)
-    const response = await getSlack().withBotToken(installation.botToken, () =>
-      fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
-        body,
-        headers: { authorization: `Bearer ${installation.botToken}` },
-        method: 'POST',
-      }),
+    await postSlackPrivateReply(
+      ctx.provider.id,
+      event.channel.id.replace(/^slack:/, ''),
+      event.user.userId,
+      body,
     )
-    const json = z.parse(
-      z.object({
-        error: z.string().optional(),
-        ok: z.boolean().optional(),
-      }),
-      await response.json(),
-    )
-    if (!json.ok) throw Slack.slackApiError('chat.postEphemeral', json.error)
   },
   async leaderboard(event, ctx) {
     if (ctx.text) {
@@ -510,10 +493,10 @@ const handlers = {
       .where('provider_id', '=', ctx.provider.id)
       .executeTakeFirst()
     if (!workspace) {
-      await event.channel.postEphemeral(
+      await postPrivateReply(
+        event,
         event.user,
         'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
-        { fallbackToDM: false },
       )
       return
     }
@@ -617,10 +600,10 @@ const handlers = {
       .where('provider_id', '=', ctx.provider.id)
       .executeTakeFirst()
     if (!workspace) {
-      await event.channel.postEphemeral(
+      await postPrivateReply(
+        event,
         event.user,
         'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
-        { fallbackToDM: false },
       )
       return
     }
@@ -633,15 +616,11 @@ const handlers = {
       .where('member.provider_user_id', '=', event.user.userId)
       .executeTakeFirst()
     if (!member) {
-      await event.channel.postEphemeral(event.user, 'No account connected.', {
-        fallbackToDM: false,
-      })
+      await postPrivateReply(event, event.user, 'No account connected.')
       return
     }
 
-    await event.channel.postEphemeral(event.user, `Connected as \`${member.account_address}\``, {
-      fallbackToDM: false,
-    })
+    await postPrivateReply(event, event.user, `Connected as \`${member.account_address}\``)
   },
   async stats(event, ctx) {
     if (ctx.text) {
@@ -655,10 +634,10 @@ const handlers = {
       .where('provider_id', '=', ctx.provider.id)
       .executeTakeFirst()
     if (!workspace) {
-      await event.channel.postEphemeral(
+      await postPrivateReply(
+        event,
         event.user,
         'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
-        { fallbackToDM: false },
       )
       return
     }
@@ -671,10 +650,10 @@ const handlers = {
       .executeTakeFirst()
 
     if (!member) {
-      await event.channel.postEphemeral(
+      await postPrivateReply(
+        event,
         event.user,
         'Your tip stats\nReceived $0.00 (0 tips)\nTipped $0.00 (0 tips)\nMost tipped None\nMost tipped by None',
-        { fallbackToDM: false },
       )
       return
     }
@@ -732,7 +711,8 @@ const handlers = {
       .orderBy('member.provider_user_id', 'asc')
       .executeTakeFirst()
 
-    await event.channel.postEphemeral(
+    await postPrivateReply(
+      event,
       event.user,
       [
         'Your tip stats',
@@ -749,14 +729,11 @@ const handlers = {
             : 'None'
         }`,
       ].join('\n'),
-      { fallbackToDM: false },
     )
   },
   async default(event, ctx) {
     if (!event.triggerId) {
-      await event.channel.postEphemeral(event.user, 'Payment not sent. Try again.', {
-        fallbackToDM: false,
-      })
+      await postPrivateReply(event, event.user, 'Payment not sent. Try again.')
       return
     }
     await handleTipText(event, ctx, {
@@ -874,10 +851,10 @@ async function handleTipText(
     ? Tempo.getTokenAddress(workspace?.chain_id ?? Tempo.chainLookup.mainnet, parsed.token)
     : null
   if (parsed.token && !tokenAddress) {
-    await event.channel.postEphemeral(
+    await postPrivateReply(
+      event,
       event.user,
       'Payment not sent. This token is not supported on this network.',
-      { fallbackToDM: false },
     )
     return
   }
@@ -941,32 +918,28 @@ async function handleTipText(
     else {
       if (result.code === 'confirmation_required' && result.confirmUrl) {
         const confirmUrlLabel = result.confirmUrl.replace(/(\/confirm\/.{8}).+$/, '$1...')
-        await event.channel.postEphemeral(
-          event.user,
-          {
-            card: chat.Card({
-              children: [
-                chat.CardText('Tipbot needs your approval to send this payment.'),
-                chat.Actions([
-                  chat.LinkButton({
-                    label: 'Confirm payment',
-                    style: 'primary',
-                    url: result.confirmUrl,
-                  }),
-                  chat.Button({ id: 'confirm_cancel', label: 'Cancel' }),
-                ]),
-                chat.CardText(
-                  `Link expires in 10 minutes. <${result.confirmUrl}|${confirmUrlLabel}>`,
-                  {
-                    style: 'muted',
-                  },
-                ),
-              ],
-            }),
-            fallbackText: `Tipbot needs your approval to send this payment.\nConfirm payment: ${result.confirmUrl}\nLink expires in 10 minutes.`,
-          },
-          { fallbackToDM: false },
-        )
+        await postPrivateReply(event, event.user, {
+          card: chat.Card({
+            children: [
+              chat.CardText('Tipbot needs your approval to send this payment.'),
+              chat.Actions([
+                chat.LinkButton({
+                  label: 'Confirm payment',
+                  style: 'primary',
+                  url: result.confirmUrl,
+                }),
+                chat.Button({ id: 'confirm_cancel', label: 'Cancel' }),
+              ]),
+              chat.CardText(
+                `Link expires in 10 minutes. <${result.confirmUrl}|${confirmUrlLabel}>`,
+                {
+                  style: 'muted',
+                },
+              ),
+            ],
+          }),
+          fallbackText: `Tipbot needs your approval to send this payment.\nConfirm payment: ${result.confirmUrl}\nLink expires in 10 minutes.`,
+        })
         return
       }
       if (result.code === 'sender_unconnected' || result.code === 'missing_sender_access_key') {
@@ -1043,7 +1016,7 @@ async function handleTipText(
           undefined,
           options.threadTs,
         )
-      else await event.channel.postEphemeral(event.user, message, { fallbackToDM: false })
+      else await postPrivateReply(event, event.user, message)
     }
   } finally {
     // Clear Slack's assistant thread status after this request finishes or hands off to
@@ -1439,6 +1412,37 @@ async function postSlackEphemeral(
   if (!json.ok) throw Slack.slackApiError('chat.postEphemeral', json.error)
 }
 
+async function postSlackPrivateReply(
+  providerId: string,
+  channelId: string,
+  userId: string,
+  body: URLSearchParams,
+) {
+  const installation = await getSlack().getInstallation(providerId)
+  if (!installation) return
+
+  const method = isSlackDMChannelId(channelId) ? 'chat.postMessage' : 'chat.postEphemeral'
+  if (method === 'chat.postEphemeral') body.set('user', userId)
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/${method}`, {
+      body,
+      headers: {
+        authorization: `Bearer ${installation.botToken}`,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok) throw Slack.slackApiError(method, json.error)
+}
+
 function getProvider(event: chat.SlashCommandEvent): ProviderContext {
   const slackSlashCommandRaw = z.object({
     team_id: z.string().min(1),
@@ -1705,9 +1709,6 @@ async function postInvalidUsage(
   ctx: HandlerContext,
   options: { mention?: boolean; threadTs?: string } = {},
 ) {
-  const installation = await getSlack().getInstallation(ctx.provider.id)
-  if (!installation) throw new Error('Tibot app not installed for this workspace.')
-
   const body = new URLSearchParams()
   body.set('channel', event.channel.id.replace(/^slack:/, ''))
   body.set(
@@ -1717,22 +1718,12 @@ async function postInvalidUsage(
       : 'Invalid `/tip` usage. Try `/tip @account` or `/tip help` for more info.',
   )
   if (options.threadTs) body.set('thread_ts', options.threadTs)
-  body.set('user', event.user.userId)
-  const response = await getSlack().withBotToken(installation.botToken, () =>
-    fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
-      body,
-      headers: { authorization: `Bearer ${installation.botToken}` },
-      method: 'POST',
-    }),
+  await postSlackPrivateReply(
+    ctx.provider.id,
+    event.channel.id.replace(/^slack:/, ''),
+    event.user.userId,
+    body,
   )
-  const json = z.parse(
-    z.object({
-      error: z.string().optional(),
-      ok: z.boolean().optional(),
-    }),
-    await response.json(),
-  )
-  if (!json.ok) throw Slack.slackApiError('chat.postEphemeral', json.error)
 }
 
 async function postInvalidMentionReply(
@@ -1848,9 +1839,6 @@ async function postSlackIntroduction(event: TipEvent, ctx: HandlerContext, threa
 }
 
 async function postSlackInsufficientFunds(event: TipEvent, ctx: HandlerContext, threadTs?: string) {
-  const installation = await getSlack().getInstallation(ctx.provider.id)
-  if (!installation) throw new Error('Tibot app not installed for this workspace.')
-
   const message = 'Payment not sent. Your wallet has insufficient funds.'
   const body = new URLSearchParams()
   body.set(
@@ -1886,22 +1874,12 @@ async function postSlackInsufficientFunds(event: TipEvent, ctx: HandlerContext, 
   body.set('channel', event.channel.id.replace(/^slack:/, ''))
   body.set('text', message)
   if (threadTs) body.set('thread_ts', threadTs)
-  body.set('user', event.user.userId)
-  const response = await getSlack().withBotToken(installation.botToken, () =>
-    fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
-      body,
-      headers: { authorization: `Bearer ${installation.botToken}` },
-      method: 'POST',
-    }),
+  await postSlackPrivateReply(
+    ctx.provider.id,
+    event.channel.id.replace(/^slack:/, ''),
+    event.user.userId,
+    body,
   )
-  const json = z.parse(
-    z.object({
-      error: z.string().optional(),
-      ok: z.boolean().optional(),
-    }),
-    await response.json(),
-  )
-  if (!json.ok) throw Slack.slackApiError('chat.postEphemeral', json.error)
 }
 
 async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
@@ -1912,10 +1890,10 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
     .where('provider_id', '=', ctx.provider.id)
     .executeTakeFirst()
   if (!workspace) {
-    await event.channel.postEphemeral(
+    await postPrivateReply(
+      event,
       event.user,
       'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
-      { fallbackToDM: false },
     )
     return
   }
@@ -1965,7 +1943,7 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
           (workspace.default_token_address ?? Tempo.addressLookup.pathUsd).toLowerCase(),
     )
     if (accessKey) {
-      await event.channel.postEphemeral(event.user, 'Already connected', { fallbackToDM: false })
+      await postPrivateReply(event, event.user, 'Already connected')
       return
     }
   }
@@ -2003,22 +1981,35 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
     })
     .execute()
 
-  await event.channel.postEphemeral(
-    event.user,
-    {
-      card: chat.Card({
-        children: [
-          chat.Actions([
-            chat.LinkButton({ label: linkButtonLabel, style: 'primary', url: linkUrl }),
-            chat.Button({ id: 'connect_cancel', label: 'Cancel' }),
-          ]),
-          chat.CardText(`${linkDescription} ${linkUrl}`, { style: 'muted' }),
-        ],
-      }),
-      fallbackText: linkText,
-    },
-    { fallbackToDM: false },
-  )
+  await postPrivateReply(event, event.user, {
+    card: chat.Card({
+      children: [
+        chat.Actions([
+          chat.LinkButton({ label: linkButtonLabel, style: 'primary', url: linkUrl }),
+          chat.Button({ id: 'connect_cancel', label: 'Cancel' }),
+        ]),
+        chat.CardText(`${linkDescription} ${linkUrl}`, { style: 'muted' }),
+      ],
+    }),
+    fallbackText: linkText,
+  })
+}
+
+async function postPrivateReply(
+  event: TipEvent,
+  user: chat.Author,
+  message: Parameters<TipEvent['channel']['postEphemeral']>[1],
+) {
+  if (isSlackDMChannelId(event.channel.id)) {
+    await event.channel.post(message)
+    return
+  }
+
+  await event.channel.postEphemeral(user, message, { fallbackToDM: false })
+}
+
+function isSlackDMChannelId(channelId: string) {
+  return channelId.replace(/^slack:/, '').startsWith('D')
 }
 
 async function postSlackReceiptMessage(
@@ -2043,13 +2034,15 @@ async function postSlackReceiptMessage(
   body.set('channel', event.channel.id.replace(/^slack:/, ''))
   body.set('text', `${receiptText}${context ? ` ${context}` : ''} · Receipt`)
   if (threadTs) body.set('thread_ts', threadTs)
-  if (user) body.set('user', user.userId)
+  if (user && !isSlackDMChannelId(event.channel.id)) body.set('user', user.userId)
   else {
     body.set('unfurl_links', 'false')
     body.set('unfurl_media', 'false')
   }
+  const method =
+    user && !isSlackDMChannelId(event.channel.id) ? 'chat.postEphemeral' : 'chat.postMessage'
   const response = await getSlack().withBotToken(installation.botToken, () =>
-    fetch(`${env.SLACK_API_URL}/${user ? 'chat.postEphemeral' : 'chat.postMessage'}`, {
+    fetch(`${env.SLACK_API_URL}/${method}`, {
       body,
       headers: { authorization: `Bearer ${installation.botToken}` },
       method: 'POST',
@@ -2062,7 +2055,7 @@ async function postSlackReceiptMessage(
     }),
     await response.json(),
   )
-  if (!json.ok) throw Slack.slackApiError('chat.postMessage', json.error)
+  if (!json.ok) throw Slack.slackApiError(method, json.error)
 }
 
 async function postSlackMemoReply(
@@ -2243,9 +2236,6 @@ async function postConfigEphemeral(
   workspace: DB_gen.Selectable.workspace,
   options?: { canEdit?: boolean },
 ) {
-  const installation = await getSlack().getInstallation(ctx.provider.id)
-  if (!installation) return
-
   const body = new URLSearchParams()
   body.set('channel', event.channel.id.replace(/^slack:/, ''))
   body.set('text', configFallbackText(workspace))
@@ -2281,22 +2271,12 @@ async function postConfigEphemeral(
         : []),
     ]),
   )
-  body.set('user', event.user.userId)
-  const response = await getSlack().withBotToken(installation.botToken, () =>
-    fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
-      body,
-      headers: { authorization: `Bearer ${installation.botToken}` },
-      method: 'POST',
-    }),
+  await postSlackPrivateReply(
+    ctx.provider.id,
+    event.channel.id.replace(/^slack:/, ''),
+    event.user.userId,
+    body,
   )
-  const json = z.parse(
-    z.object({
-      error: z.string().optional(),
-      ok: z.boolean().optional(),
-    }),
-    await response.json(),
-  )
-  if (!json.ok) throw Slack.slackApiError('chat.postEphemeral', json.error)
 }
 
 function configFallbackText(

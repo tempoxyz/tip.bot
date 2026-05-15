@@ -158,6 +158,24 @@ describe('/tip @account', () => {
     await expectSlackMessageNotContaining('Receipt')
   })
 
+  test('shows confirmation action from direct message', async () => {
+    const dm = setupSlackDMPostMessageFetchSpy()
+    await connectTipAccounts()
+
+    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}> 0.002 BetaUSD`, {
+      channelId: dm.channelId,
+    })
+
+    expect(response.status).toBe(200)
+    await expectSlackPostMessageCall(
+      dm.fetchSpy,
+      dm.channelId,
+      'Tipbot needs your approval to send this payment.',
+    )
+    await expectSlackPostMessageCall(dm.fetchSpy, dm.channelId, '/confirm/')
+    dm.fetchSpy.mockRestore()
+  })
+
   test('shows confirmation action for amount above access key limit', async () => {
     await connectTipAccounts()
 
@@ -333,6 +351,32 @@ describe('/tip @account', () => {
     ])
     handleTipRequest.mockRestore()
     fetchSpy.mockRestore()
+  })
+
+  test('handles insufficient funds from direct message', async () => {
+    const dm = setupSlackDMPostMessageFetchSpy()
+    const handleTipRequest = vi.spyOn(Tip, 'handleTipRequest').mockResolvedValue({
+      code: 'insufficient_funds',
+      ok: false,
+    })
+
+    const response = await postSlashCommand(`<@${Constants.slack.memberUserId}>`, {
+      channelId: dm.channelId,
+    })
+
+    expect(response.status).toBe(200)
+    await expectSlackPostMessageCall(
+      dm.fetchSpy,
+      dm.channelId,
+      'Payment not sent. Your wallet has insufficient funds.',
+    )
+    await expectSlackPostMessageCall(
+      dm.fetchSpy,
+      dm.channelId,
+      'Add funds on https://wallet.tempo.xyz',
+    )
+    handleTipRequest.mockRestore()
+    dm.fetchSpy.mockRestore()
   })
 
   test('handles insufficient funds from thread slash command', async () => {
@@ -1765,6 +1809,25 @@ describe('/tip connect', () => {
     expect(new Date(link.access_key_expires_at).getTime()).toBeGreaterThan(Date.now())
   })
 
+  test('creates one-time account link from direct message', async () => {
+    const dm = setupSlackDMPostMessageFetchSpy()
+
+    const response = await postSlashCommand('connect', { channelId: dm.channelId })
+    const link = await db
+      .selectFrom('account_link_token')
+      .selectAll('account_link_token')
+      .innerJoin('member', 'member.id', 'account_link_token.member_id')
+      .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+      .where('member.provider_user_id', '=', Constants.slack.adminUserId)
+      .where('workspace.provider_id', '=', providerId)
+      .executeTakeFirstOrThrow()
+
+    expect(response.status).toBe(200)
+    expect(link).toEqual(expect.schemaMatching(Schema.account_link_token))
+    await expectSlackPostMessageCall(dm.fetchSpy, dm.channelId, 'Link expires in 10 minutes.')
+    dm.fetchSpy.mockRestore()
+  })
+
   test('invalidates previous unused links', async () => {
     await postSlashCommand('connect')
     await postSlashCommand('connect')
@@ -1920,6 +1983,40 @@ describe('/tip disconnect', () => {
     expect(accessKeys).toEqual([])
   })
 
+  test('disconnects a connected account from direct message', async () => {
+    const dm = setupSlackDMPostMessageFetchSpy()
+    const account = await factory.account.insert({})
+    const workspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', providerId)
+      .executeTakeFirstOrThrow()
+    const member = await factory.member.insert({
+      account_id: account.id,
+      provider_user_id: Constants.slack.adminUserId,
+      workspace_id: workspace.id,
+    })
+    const accessKey = await factory.access_key.insert({ account_id: account.id })
+
+    const response = await postSlashCommand('disconnect', { channelId: dm.channelId })
+    const updatedMember = await db
+      .selectFrom('member')
+      .selectAll()
+      .where('id', '=', member.id)
+      .executeTakeFirstOrThrow()
+    const accessKeys = await db
+      .selectFrom('access_key')
+      .selectAll()
+      .where('id', '=', accessKey.id)
+      .execute()
+
+    expect(response.status).toBe(200)
+    await expectSlackPostMessageCall(dm.fetchSpy, dm.channelId, 'Disconnected')
+    expect(updatedMember.account_id).toBe(null)
+    expect(accessKeys).toEqual([])
+    dm.fetchSpy.mockRestore()
+  })
+
   test('handles no connected account', async () => {
     const response = await postSlashCommand('disconnect')
 
@@ -1971,6 +2068,20 @@ describe('/tip help', () => {
     await expectSlackMessage('/tip leaderboard')
     await expectSlackMessage('/tip stats')
     await expectSlackMessage('/tip status')
+  })
+
+  test('shows help from direct message', async () => {
+    const dm = setupSlackDMPostMessageFetchSpy()
+
+    const response = await postSlashCommand('help', { channelId: dm.channelId })
+
+    expect(response.status).toBe(200)
+    await expectSlackPostMessageCall(
+      dm.fetchSpy,
+      dm.channelId,
+      '/tip @account [amount] [token] [for memo]',
+    )
+    dm.fetchSpy.mockRestore()
   })
 })
 
@@ -2214,6 +2325,18 @@ describe('/tip stats', () => {
     await expectSlackMessage('Most tipped None')
     await expectSlackMessage('Most tipped by None')
   })
+
+  test('shows zero stats from direct message', async () => {
+    const dm = setupSlackDMPostMessageFetchSpy()
+
+    const response = await postSlashCommand('stats', { channelId: dm.channelId })
+
+    expect(response.status).toBe(200)
+    await expectSlackPostMessageCall(dm.fetchSpy, dm.channelId, 'Your tip stats')
+    await expectSlackPostMessageCall(dm.fetchSpy, dm.channelId, 'Received $0.00 (0 tips)')
+    await expectSlackPostMessageCall(dm.fetchSpy, dm.channelId, 'Most tipped None')
+    dm.fetchSpy.mockRestore()
+  })
 })
 
 describe('/tip status', () => {
@@ -2236,6 +2359,31 @@ describe('/tip status', () => {
     await expectSlackMessage(`Connected as \`${account.address}\``)
     await expectSlackMessageNotContaining('Account ID')
     await expectSlackMessageNotContaining('Provider user ID')
+  })
+
+  test('shows current connected account from direct message', async () => {
+    const dm = setupSlackDMPostMessageFetchSpy()
+    const account = await factory.account.insert({})
+    const workspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', providerId)
+      .executeTakeFirstOrThrow()
+    await factory.member.insert({
+      account_id: account.id,
+      provider_user_id: Constants.slack.adminUserId,
+      workspace_id: workspace.id,
+    })
+
+    const response = await postSlashCommand('status', { channelId: dm.channelId })
+
+    expect(response.status).toBe(200)
+    await expectSlackPostMessageCall(
+      dm.fetchSpy,
+      dm.channelId,
+      `Connected as \`${account.address}\``,
+    )
+    dm.fetchSpy.mockRestore()
   })
 
   test('handles no connected account', async () => {
@@ -2271,6 +2419,20 @@ describe('/tip usage', () => {
     await expectSlackMessage(
       'Invalid `/tip` usage. Try `/tip @account` or `/tip help` for more info.',
     )
+  })
+
+  test('shows usage from direct message', async () => {
+    const dm = setupSlackDMPostMessageFetchSpy()
+
+    const response = await postSlashCommand('hello', { channelId: dm.channelId })
+
+    expect(response.status).toBe(200)
+    await expectSlackPostMessageCall(
+      dm.fetchSpy,
+      dm.channelId,
+      'Invalid `/tip` usage. Try `/tip @account` or `/tip help` for more info.',
+    )
+    dm.fetchSpy.mockRestore()
   })
 
   test('shows usage for unknown text', async () => {
@@ -2478,6 +2640,44 @@ async function expectSlackPostEphemeralCall(
     .toBe(true)
 }
 
+async function expectSlackPostMessageCall(
+  fetchSpy: { mock: { calls: Parameters<typeof fetch>[] } },
+  channelId: string,
+  text: string,
+) {
+  await expect
+    .poll(
+      async () => {
+        for (const call of fetchSpy.mock.calls) {
+          const input = call[0]
+          const url =
+            typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+          const params = await slackFetchCallBodyParams(call)
+          const callText = `${params.get('text') ?? ''} ${params.get('blocks') ?? ''}`
+          if (
+            url.endsWith('/chat.postMessage') &&
+            params.get('channel') === channelId &&
+            callText.includes(text)
+          )
+            return true
+        }
+        return false
+      },
+      {
+        message: fetchSpy.mock.calls
+          .map((call) => {
+            const input = call[0]
+            const url =
+              typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+            return url
+          })
+          .join('\n'),
+        timeout: 10_000, // 10 seconds
+      },
+    )
+    .toBe(true)
+}
+
 async function expectSlackAssistantStatusCall(
   fetchSpy: { mock: { calls: Parameters<typeof fetch>[] } },
   threadTs: string,
@@ -2561,6 +2761,19 @@ function slackFetchBodyParams(body: BodyInit | null | undefined) {
     return new URLSearchParams(body)
   }
   return new URLSearchParams()
+}
+
+function setupSlackDMPostMessageFetchSpy() {
+  const channelId = 'D000000001'
+  const originalFetch = globalThis.fetch
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  fetchSpy.mockImplementation((input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    if (url.endsWith('/chat.postMessage'))
+      return Promise.resolve(Response.json({ ok: true, ts: '123.456' }))
+    return originalFetch(input, init)
+  })
+  return { channelId, fetchSpy }
 }
 
 async function findSlackMessageTs(text: string) {
