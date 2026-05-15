@@ -623,19 +623,22 @@ const installEmulateWorkspace = createServerFn({ method: 'POST' })
         .set({ name: slackDefaults.teamName, updated_at: now })
         .where('id', '=', workspace.id)
         .execute()
-    else
+    else {
+      const workspaceId = crypto.randomUUID()
       await db
         .insertInto('workspace')
         .values({
           created_at: now,
           default_amount: 1000,
-          id: crypto.randomUUID(),
+          id: workspaceId,
           name: slackDefaults.teamName,
           provider: data.provider,
           provider_id: data.workspace,
           updated_at: now,
         })
         .execute()
+      await Chat.seedDefaultReactionTipConfigs(db, workspaceId, now)
+    }
     const [actors, app, transcript] = await Promise.all([
       getSlackActors(),
       getAppState(data),

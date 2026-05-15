@@ -18,6 +18,13 @@ import { z } from 'zod'
 const creaturePattern =
   /\b(creature|creatures|dragon|dragons|elf|elves|fae|fairy|goblin|goblins|gnome|gnomes|gremlin|gremlins|kobold|kobolds|monster|monsters|orc|orcs|troll|trolls)\b/i
 
+const defaultReactionTipConfigs = [
+  { amount: 1000, emoji: 'money_with_wings' }, // $0.001
+  { amount: 1_000_000, emoji: 'money_mouth_face' }, // $1
+] as const
+
+type ReactionTipConfig = Pick<DB_gen.Selectable.reaction_tip_config, 'amount' | 'emoji'>
+
 let bot: chat.Chat | null = null
 export function getChat() {
   if (bot) return bot
@@ -106,18 +113,35 @@ export function getChat() {
 
     const context = await (async () => {
       const db = DB.create(env.DB)
-      const workspace = await db
+      const reactionTipConfig = await db
         .selectFrom('workspace')
-        .selectAll()
-        .where('provider', '=', 'slack')
-        .where('provider_id', '=', reaction.team_id)
+        .innerJoin('reaction_tip_config', 'reaction_tip_config.workspace_id', 'workspace.id')
+        .select([
+          'reaction_tip_config.amount',
+          'reaction_tip_config.emoji',
+          'workspace.chain_id',
+          'workspace.created_at',
+          'workspace.default_amount',
+          'workspace.default_token_address',
+          'workspace.id',
+          'workspace.name',
+          'workspace.provider',
+          'workspace.provider_id',
+          'workspace.updated_at',
+        ])
+        .where('workspace.provider', '=', 'slack')
+        .where('workspace.provider_id', '=', reaction.team_id)
+        .where('reaction_tip_config.emoji', '=', reaction.reaction)
         .executeTakeFirst()
-      if (!workspace) return
-      if (reaction.reaction !== workspace.reaction_tip_emoji) return
+      if (!reactionTipConfig) return
       return {
         db,
         provider: { id: reaction.team_id, type: 'slack' },
-        workspace,
+        reactionTipConfig: {
+          amount: reactionTipConfig.amount,
+          emoji: reactionTipConfig.emoji,
+        },
+        workspace: reactionTipConfig,
       } satisfies ReactionHandlerContext
     })()
     if (!context) return
@@ -211,6 +235,7 @@ const actions = {
       return
     }
 
+    const reactionTipConfigs = await getReactionTipConfigs(DB.create(env.DB), workspace.id)
     const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
     const tokenOptions = workspaceTokenOptions(workspace.chain_id)
     const tokenValue =
@@ -243,9 +268,9 @@ const actions = {
             label: 'Default amount',
           }),
           chat.TextInput({
-            id: 'reaction_tip_emoji',
-            initialValue: workspace.reaction_tip_emoji,
-            label: 'Tip reaction emoji',
+            id: 'reaction_tip_configs',
+            initialValue: reactionTipConfigsInputText(reactionTipConfigs),
+            label: 'Reaction tips',
           }),
         ],
         privateMetadata: JSON.stringify({ providerId: raw.team.id }),
@@ -284,49 +309,45 @@ const modalSubmits = {
       workspaceTokenOptions().find((option) => option.value === event.values.default_token)
         ?.address ?? null
     const amount = Tip.parseAmount(event.values.default_amount ?? '')
-    const reactionTipEmoji = (() => {
-      // Store Slack emoji names without surrounding colons for reaction event matching.
-      const normalized = (event.values.reaction_tip_emoji ?? '')
-        .trim()
-        .replace(/^:+|:+$/g, '')
-        .toLowerCase()
-      if (!/^[a-z0-9_+-]+$/.test(normalized)) return null
-      return normalized
-    })()
+    const reactionTipConfigs = parseReactionTipConfigs(event.values.reaction_tip_configs ?? '')
     const errors: Record<string, string> = {}
     if (chainId === null) errors.network = 'Choose Mainnet or Testnet.'
     if (tokenAddress === null) errors.default_token = 'Choose a default token.'
     if (amount === null)
       errors.default_amount = 'Enter a positive amount with up to 6 decimal places. Example: 0.005'
-    if (!reactionTipEmoji)
-      errors.reaction_tip_emoji = 'Enter a Slack emoji name. Example: money_with_wings'
+    if (!reactionTipConfigs)
+      errors.reaction_tip_configs =
+        'Enter emoji and positive amount pairs. Example: :money_with_wings: 0.001, :money_mouth_face: 1'
     if (chainId !== null && tokenAddress !== null && !Tempo.isAllowedToken(chainId, tokenAddress))
       errors.default_token = 'This token isn’t available on the selected network.'
     if (Object.keys(errors).length > 0) return { action: 'errors' as const, errors }
-    if (amount === null || chainId === null || tokenAddress === null || !reactionTipEmoji) return
+    if (amount === null || chainId === null || tokenAddress === null || !reactionTipConfigs) return
 
     const now = new Date().toISOString()
-    await DB.create(env.DB)
+    const db = DB.create(env.DB)
+    await db
       .updateTable('workspace')
       .set({
         chain_id: chainId,
         default_amount: amount,
         default_token_address: tokenAddress,
-        reaction_tip_emoji: reactionTipEmoji,
         updated_at: now,
       })
       .where('provider', '=', 'slack')
       .where('provider_id', '=', metadata.providerId)
       .execute()
 
-    const workspace = await DB.create(env.DB)
+    const workspace = await db
       .selectFrom('workspace')
       .selectAll()
       .where('provider', '=', 'slack')
       .where('provider_id', '=', metadata.providerId)
       .executeTakeFirstOrThrow()
+    await replaceReactionTipConfigs(db, workspace.id, reactionTipConfigs, now)
     if (event.relatedMessage)
-      await event.relatedMessage.edit(configCard(workspace, { canEdit: true, updated: true }))
+      await event.relatedMessage.edit(
+        await configCard(db, workspace, { canEdit: true, updated: true }),
+      )
   },
 } as const satisfies Record<
   (typeof modalSubmitNames)[number],
@@ -418,13 +439,14 @@ const handlers = {
       ['/tip @account 0.005 USDC', 'Send custom token'],
       ['/tip @account 0.005 USDC for coffee', 'Send custom token with memo'],
     ]
+    const reactionTipConfigs = await getReactionTipConfigs(ctx.db, workspace?.id)
     const mentionExampleRows = [
       ['@Tipbot @account', 'Send default amount'],
       ['@Tipbot @account for coffee', 'Send default amount with memo'],
       ['@Tipbot @account 0.005 for coffee', 'Send custom amount with memo'],
       [
-        `[emoji] :${workspace?.reaction_tip_emoji ?? 'money_with_wings'}:`,
-        'Send default amount by reacting to a message',
+        reactionTipConfigs.map((config) => `:${config.emoji}:`).join(' / '),
+        'Send by reacting to a message',
       ],
     ]
     const body = new URLSearchParams()
@@ -788,6 +810,7 @@ type TipEvent = {
 type ReactionHandlerContext = {
   db: DB.Type
   provider: ProviderContext
+  reactionTipConfig: ReactionTipConfig
   workspace: DB_gen.Selectable.workspace
 }
 
@@ -800,6 +823,26 @@ export const reactionTipIdempotencyPrefix = 'reaction:'
 
 export function isReactionTipIdempotencyKey(value: string) {
   return value.startsWith(reactionTipIdempotencyPrefix)
+}
+
+export async function seedDefaultReactionTipConfigs(
+  db: DB.Type,
+  workspaceId: string,
+  now = new Date().toISOString(),
+) {
+  await db
+    .insertInto('reaction_tip_config')
+    .values(
+      defaultReactionTipConfigs.map((config) => ({
+        amount: config.amount,
+        created_at: now,
+        emoji: config.emoji,
+        id: Nanoid.generate(),
+        updated_at: now,
+        workspace_id: workspaceId,
+      })),
+    )
+    .execute()
 }
 
 const slackReactionEventSchema = z.object({
@@ -1052,7 +1095,7 @@ async function setSlackAssistantThreadStatus(
 }
 
 async function handleSlackReactionTip(event: SlackReactionEvent, context: ReactionHandlerContext) {
-  const { db, provider, workspace } = context
+  const { db, provider, reactionTipConfig, workspace } = context
 
   const installation = await getSlack().getInstallation(provider.id)
   if (!installation) return
@@ -1288,6 +1331,7 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
   if (!inserted) return
 
   const result = await Tip.handleTipRequest(env, {
+    amount: reactionTipConfig.amount,
     idempotencyKey,
     memo: null,
     provider: provider.type,
@@ -1486,6 +1530,7 @@ export async function updateReactionTipAggregate(
     .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
     .select([
       'reaction_tip.message_ts',
+      'reaction_tip.reaction',
       'recipient.provider_user_id as recipient_provider_user_id',
       'sender.provider_user_id as sender_provider_user_id',
       'tip.amount',
@@ -1493,7 +1538,6 @@ export async function updateReactionTipAggregate(
       'tip.token_address',
       'tip.transaction_hash',
       'workspace.default_token_address',
-      'workspace.reaction_tip_emoji',
     ])
     .where('reaction_tip.workspace_id', '=', options.workspaceId)
     .where('reaction_tip.channel_id', '=', options.channelId)
@@ -1542,7 +1586,7 @@ export async function updateReactionTipAggregate(
     [] as Array<{ lines: string[]; messageTs: string; recipientProviderUserId: string }>,
   )
   const text = (() => {
-    const title = `:${rows[0]!.reaction_tip_emoji}: Reaction tips received`
+    const title = `:${rows[0]!.reaction}: Reaction tips received`
     if (messageGroups.length === 1) {
       const reactedMessageUrl = new URL('slack://channel')
       reactedMessageUrl.searchParams.set('team', providerId)
@@ -2194,10 +2238,75 @@ async function canManageSlackWorkspaceSettings(providerId: string, providerUserI
   return Boolean(member)
 }
 
-function configCard(
+async function getReactionTipConfigs(db: DB.Type, workspaceId: string | undefined) {
+  if (!workspaceId) return [...defaultReactionTipConfigs]
+  const configs = await db
+    .selectFrom('reaction_tip_config')
+    .select(['amount', 'emoji'])
+    .where('workspace_id', '=', workspaceId)
+    .orderBy('amount', 'asc')
+    .orderBy('emoji', 'asc')
+    .execute()
+  if (configs.length > 0) return configs
+  return [...defaultReactionTipConfigs]
+}
+
+async function replaceReactionTipConfigs(
+  db: DB.Type,
+  workspaceId: string,
+  configs: ReactionTipConfig[],
+  now: string,
+) {
+  await db.deleteFrom('reaction_tip_config').where('workspace_id', '=', workspaceId).execute()
+  await db
+    .insertInto('reaction_tip_config')
+    .values(
+      configs.map((config) => ({
+        amount: config.amount,
+        created_at: now,
+        emoji: config.emoji,
+        id: Nanoid.generate(),
+        updated_at: now,
+        workspace_id: workspaceId,
+      })),
+    )
+    .execute()
+}
+
+function reactionTipConfigsInputText(configs: ReactionTipConfig[]) {
+  return configs.map((config) => `:${config.emoji}: ${formatAmount(config.amount)}`).join(', ')
+}
+
+function parseReactionTipConfigs(value: string): ReactionTipConfig[] | null {
+  const configs: ReactionTipConfig[] = []
+  for (const rawPart of value.split(/[\n,]+/)) {
+    const part = rawPart.trim()
+    if (!part) continue
+    const match = part.match(
+      /^:?([a-z0-9_+-]+):?\s*(?:(?:->|=|→)\s*)?(\$?(?:0|[1-9]\d*)(?:\.\d+)?)$/i,
+    )
+    if (!match) return null
+    const amount = Tip.parseAmount(match[2]!)
+    const emoji = match[1]!.toLowerCase()
+    if (amount === null || configs.some((config) => config.emoji === emoji)) return null
+    configs.push({ amount, emoji })
+  }
+  if (configs.length === 0) return null
+  return configs
+}
+
+function reactionTipConfigsText(configs: ReactionTipConfig[]) {
+  return configs
+    .map((config) => `:${config.emoji}: \`:${config.emoji}:\` → ${formatAmount(config.amount)}`)
+    .join('\n')
+}
+
+async function configCard(
+  db: DB.Type,
   workspace: DB_gen.Selectable.workspace,
   options?: { canEdit?: boolean; updated?: boolean },
 ) {
+  const reactionTipConfigs = await getReactionTipConfigs(db, workspace.id)
   const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
   const token = Tempo.getTokenMetadataFallback(tokenAddress)
   const networkLabel = workspace.chain_id === Tempo.chainLookup.mainnet ? 'Mainnet' : 'Testnet'
@@ -2210,7 +2319,7 @@ function configCard(
             ['Network', networkLabel],
             ['Default token', token.symbol],
             ['Default amount', formatAmount(workspace.default_amount)],
-            ['Reaction', `💸 \`:${workspace.reaction_tip_emoji}:\``],
+            ['Reaction tips', reactionTipConfigsText(reactionTipConfigs)],
           ],
         }),
         ...(options?.canEdit
@@ -2228,7 +2337,7 @@ function configCard(
         ...(options?.updated ? [chat.CardText('Workspace settings updated')] : []),
       ],
     }),
-    fallbackText: `Network ${networkLabel}\nDefault token ${token.symbol} ${Tempo.explorerLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}\nReaction 💸 \`:${workspace.reaction_tip_emoji}:\`${options?.updated ? '\nWorkspace settings updated' : ''}`,
+    fallbackText: `Network ${networkLabel}\nDefault token ${token.symbol} ${Tempo.explorerLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}\nReaction tips ${reactionTipConfigsText(reactionTipConfigs)}${options?.updated ? '\nWorkspace settings updated' : ''}`,
   }
 }
 
@@ -2238,9 +2347,10 @@ async function postConfigEphemeral(
   workspace: DB_gen.Selectable.workspace,
   options?: { canEdit?: boolean },
 ) {
+  const reactionTipConfigs = await getReactionTipConfigs(ctx.db, workspace.id)
   const body = new URLSearchParams()
   body.set('channel', event.channel.id.replace(/^slack:/, ''))
-  body.set('text', configFallbackText(workspace))
+  body.set('text', configFallbackText(workspace, reactionTipConfigs))
   body.set(
     'blocks',
     JSON.stringify([
@@ -2253,7 +2363,7 @@ async function postConfigEphemeral(
             slackTableCell('Default amount'),
             slackTableCell(formatAmount(workspace.default_amount)),
           ],
-          [slackTableCell('Reaction'), slackTableReactionCell(workspace.reaction_tip_emoji)],
+          [slackTableCell('Reaction tips'), slackTableReactionTipsCell(reactionTipConfigs)],
         ],
         type: 'table',
       },
@@ -2283,10 +2393,11 @@ async function postConfigEphemeral(
 
 function configFallbackText(
   workspace: DB_gen.Selectable.workspace,
+  reactionTipConfigs: ReactionTipConfig[],
   options?: { updated?: boolean },
 ) {
   const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
-  return `Setting Value\nNetwork ${configNetworkLabel(workspace)}\nDefault token ${configToken(workspace).symbol} ${Tempo.explorerLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}\nReaction 💸 \`:${workspace.reaction_tip_emoji}:\`${options?.updated ? '\nWorkspace settings updated' : ''}`
+  return `Setting Value\nNetwork ${configNetworkLabel(workspace)}\nDefault token ${configToken(workspace).symbol} ${Tempo.explorerLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}\nReaction tips ${reactionTipConfigsText(reactionTipConfigs)}${options?.updated ? '\nWorkspace settings updated' : ''}`
 }
 
 function configNetworkLabel(workspace: DB_gen.Selectable.workspace) {
@@ -2316,12 +2427,16 @@ function slackTableCell(text: string, style?: { code?: boolean }) {
   }
 }
 
-function slackTableReactionCell(emojiName: string) {
-  return slackTableRichCell([
-    { name: emojiName, type: 'emoji' },
-    { text: ' ', type: 'text' },
-    { style: { code: true }, text: `:${emojiName}:`, type: 'text' },
-  ])
+function slackTableReactionTipsCell(configs: ReactionTipConfig[]) {
+  return slackTableRichCell(
+    configs.flatMap((config, index) => [
+      ...(index ? [{ text: '\n', type: 'text' }] : []),
+      { name: config.emoji, type: 'emoji' },
+      { text: ' ', type: 'text' },
+      { style: { code: true }, text: `:${config.emoji}:`, type: 'text' },
+      { text: ` → ${formatAmount(config.amount)}`, type: 'text' },
+    ]),
+  )
 }
 
 function slackTableRichCell(elements: unknown[]) {

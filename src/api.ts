@@ -100,7 +100,6 @@ export const api = new Hono<{
           'workspace.default_token_address',
           'workspace.id as workspace_id',
           'workspace.provider_id',
-          'workspace.reaction_tip_emoji',
         ])
         .where(
           'account_link_token.token_hash',
@@ -258,7 +257,7 @@ export const api = new Hono<{
                       children: [
                         chat.CardText(`Connected \`${truncatedAddress}\` <${explorerUrl}|View>`),
                         chat.CardText(
-                          `Mention \`@Tipbot @user\` or use \`/tip @user\` to send a payment. React with :${link.reaction_tip_emoji}: to tip a message.`,
+                          'Mention `@Tipbot @user` or use `/tip @user` to send a payment. React with a configured tip emoji to tip a message.',
                           { style: 'muted' },
                         ),
                       ],
@@ -834,19 +833,22 @@ export const api = new Hono<{
             .set({ name: result.installation.teamName ?? null, updated_at: now })
             .where('id', '=', workspace.id)
             .execute()
-        else
+        else {
+          const workspaceId = Nanoid.generate()
           await c.var.db
             .insertInto('workspace')
             .values({
               created_at: now,
               default_amount: 1000,
-              id: Nanoid.generate(),
+              id: workspaceId,
               name: result.installation.teamName ?? null,
               provider: 'slack',
               provider_id: result.teamId,
               updated_at: now,
             })
             .execute()
+          await Chat.seedDefaultReactionTipConfigs(c.var.db, workspaceId, now)
+        }
 
         const url = new URL(c.req.url)
         return Response.redirect(

@@ -88,6 +88,27 @@ export async function handleTipRequest(
           updated_at: now,
         })
         .execute()
+      await db
+        .insertInto('reaction_tip_config')
+        .values([
+          {
+            amount: 1000,
+            created_at: now,
+            emoji: 'money_with_wings',
+            id: Nanoid.generate(),
+            updated_at: now,
+            workspace_id: id,
+          },
+          {
+            amount: 1_000_000,
+            created_at: now,
+            emoji: 'money_mouth_face',
+            id: Nanoid.generate(),
+            updated_at: now,
+            workspace_id: id,
+          },
+        ])
+        .execute()
       return await db
         .selectFrom('workspace')
         .selectAll()
