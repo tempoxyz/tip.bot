@@ -225,6 +225,9 @@ export function parseTipText(value: string, options: { chainId?: number } = {}) 
         token,
       }
     }
+    // TODO: Replace this unsupported-token heuristic if token symbols become dynamic or user-defined.
+    // It intentionally keeps single token-like words like FAKE on the unsupported-token path,
+    // while allowing phrases like "v2 launch" to fall through as memos.
     if (isTokenLike(token) && (!afterToken || memo)) {
       return {
         amount,
