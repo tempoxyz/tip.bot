@@ -184,7 +184,12 @@ export function parseAmount(value: string) {
   return amount
 }
 
-export function parseTipText(value: string) {
+function isTokenLike(value: string) {
+  if (/[._\d]/.test(value)) return true // e.g. USDC.e, usdt0
+  return /^[A-Z]{2,10}$/.test(value) // e.g. USDC, USDT, PATH
+}
+
+export function parseTipText(value: string, options: { chainId?: number } = {}) {
   const text = value.trim()
   const mention = text.match(/<@([A-Z0-9_]+)(?:\|([^>]+))?>/)
   if (!mention) return null
@@ -204,15 +209,41 @@ export function parseTipText(value: string) {
       }
 
     const [token = '', ...tokenRest] = remaining.split(/\s+/)
+    const chainId = options.chainId ?? Tempo.chainLookup.mainnet
+    const isKnownToken = Object.values(Tempo.chainLookup).some((knownChainId) =>
+      Tempo.getTokenAddress(knownChainId, token),
+    )
     const afterToken = tokenRest.join(' ').trim()
     const memo = afterToken.match(/^for\s+([\s\S]+)$/i)
-    if (afterToken && !memo) return null
+    if (Tempo.getTokenAddress(chainId, token) || isKnownToken) {
+      if (afterToken && !memo) return null
+      return {
+        amount,
+        memo: memo?.[1]?.trim() || null,
+        ...(mention[2]?.trim() ? { recipientProviderLabel: mention[2].trim() } : {}),
+        recipientProviderUserId: mention[1]!,
+        token,
+      }
+    }
+    // TODO: Replace this unsupported-token heuristic if token symbols become dynamic or user-defined.
+    // It intentionally keeps single token-like words like FAKE on the unsupported-token path,
+    // while allowing phrases like "v2 launch" to fall through as memos.
+    if (isTokenLike(token) && (!afterToken || memo)) {
+      return {
+        amount,
+        memo: memo?.[1]?.trim() || null,
+        ...(mention[2]?.trim() ? { recipientProviderLabel: mention[2].trim() } : {}),
+        recipientProviderUserId: mention[1]!,
+        token,
+      }
+    }
+
     return {
       amount,
-      memo: memo?.[1]?.trim() || null,
+      memo: remaining.replace(/^for\s+/i, '').trim() || null,
       ...(mention[2]?.trim() ? { recipientProviderLabel: mention[2].trim() } : {}),
       recipientProviderUserId: mention[1]!,
-      token,
+      token: null,
     }
   }
   return {
