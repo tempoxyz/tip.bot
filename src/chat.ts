@@ -419,11 +419,11 @@ const handlers = {
     ]
     const paymentExampleRows = [
       ['/tip @account', 'Send default amount'],
-      ['/tip @account for coffee', 'Send default amount with memo'],
+      ['/tip @account for coffee', 'Add a memo with "for"'],
       ['/tip @account 0.005', 'Send custom amount'],
-      ['/tip @account 0.005 for coffee', 'Send custom amount with memo'],
+      ['/tip @account 0.005 for coffee', 'Custom amount with memo'],
       ['/tip @account 0.005 USDC', 'Send custom token'],
-      ['/tip @account 0.005 USDC for coffee', 'Send custom token with memo'],
+      ['/tip @account 0.005 USDC for coffee', 'Custom token with memo'],
     ]
     const mentionExampleRows = [
       [
@@ -1676,8 +1676,8 @@ async function postInvalidUsage(
   body.set(
     'text',
     options.mention
-      ? 'Invalid `@Tipbot` usage. Try `@Tipbot @account [amount] [token] [for memo]` or `@Tipbot tip @account`.'
-      : 'Invalid `/tip` usage. Try `/tip @account` or `/tip help` for more info.',
+      ? 'Invalid `@Tipbot` usage. Try `@Tipbot @account [amount] [token] [for memo]` or `@Tipbot tip @account`. Use `for` to add a memo.'
+      : 'Invalid `/tip` usage. Try `/tip @account` or `/tip @account for coffee`. Run `/tip help` for more info.',
   )
   if (options.threadTs) body.set('thread_ts', options.threadTs)
   body.set('user', event.user.userId)
@@ -1744,7 +1744,7 @@ async function generateInvalidMentionReply(mentionText: string) {
     if (creatureMatch) return `${creatureMatch[0].toUpperCase()}? Now we are talking.`
     if (isThanksText) return 'Anytime.'
     if (isSetupText) return 'Run `/tip connect`, then try `@Tipbot tip @account`.'
-    if (isTipText) return 'Almost. Try `@Tipbot tip @account [amount] [token] [for memo]`.'
+    if (isTipText) return 'Almost. Try `@Tipbot tip @account [amount] [token] [for memo]`. Use `for` to add a memo.'
     return 'Anytime.'
   })()
   try {
@@ -1786,7 +1786,8 @@ async function postSlackIntroduction(event: TipEvent, ctx: HandlerContext, threa
 
   const text =
     'I’m Tipbot: sometime tipper, sometime messenger, always bot.\n' +
-    'Connect with `/tip connect`, then send stablecoins with `@Tipbot @account for coffee`, `/tip @account for coffee`, or a 💸 reaction.'
+    'Connect with `/tip connect`, then send stablecoins with `/tip @account` or `@Tipbot @account`.\n' +
+    'Add a memo by writing `for` after the recipient: `/tip @account for coffee`.'
   const body = new URLSearchParams()
   body.set('channel', event.channel.id.replace(/^slack:/, ''))
   body.set('text', text)
