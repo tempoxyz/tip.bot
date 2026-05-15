@@ -113,8 +113,11 @@ export function getChat() {
         .where('provider_id', '=', reaction.team_id)
         .executeTakeFirst()
       if (!workspace) return
-      if (reaction.reaction !== workspace.reaction_tip_emoji) return
+      const isDefaultEmoji = reaction.reaction === workspace.reaction_tip_emoji
+      const isMoneyMouth = reaction.reaction === 'money_mouth_face'
+      if (!isDefaultEmoji && !isMoneyMouth) return
       return {
+        amount: isMoneyMouth ? 1_000_000 : undefined, // $1 for money_mouth_face
         db,
         provider: { id: reaction.team_id, type: 'slack' },
         workspace,
@@ -810,6 +813,7 @@ type TipEvent = {
 }
 
 type ReactionHandlerContext = {
+  amount?: number
   db: DB.Type
   provider: ProviderContext
   workspace: DB_gen.Selectable.workspace
@@ -1278,6 +1282,7 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
   if (!inserted) return
 
   const result = await Tip.handleTipRequest(env, {
+    ...(context.amount !== undefined ? { amount: context.amount } : {}),
     idempotencyKey,
     memo: null,
     provider: provider.type,
