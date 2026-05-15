@@ -1,5 +1,6 @@
-import { expect, test } from 'vitest'
+import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
+import { expect, test } from 'vitest'
 
 test('parses positive decimal amounts', () => {
   expect(Tip.parseAmount('1')).toBe(1_000_000)
@@ -64,6 +65,34 @@ test('parses tip mentions and memos', () => {
     memo: 'lunch',
     recipientProviderUserId: 'UMEMBER',
     token: 'USDC.e',
+  })
+  expect(Tip.parseTipText('<@UMEMBER> 5 usdc for lunch')).toEqual({
+    amount: 5_000_000,
+    memo: 'lunch',
+    recipientProviderUserId: 'UMEMBER',
+    token: 'usdc',
+  })
+  expect(Tip.parseTipText('<@UMEMBER> 5 BetaUSD', { chainId: Tempo.chainLookup.localnet })).toEqual(
+    {
+      amount: 5_000_000,
+      memo: null,
+      recipientProviderUserId: 'UMEMBER',
+      token: 'BetaUSD',
+    },
+  )
+  expect(
+    Tip.parseTipText('<@UMEMBER> 5 beta for lunch', { chainId: Tempo.chainLookup.localnet }),
+  ).toEqual({
+    amount: 5_000_000,
+    memo: 'lunch',
+    recipientProviderUserId: 'UMEMBER',
+    token: 'beta',
+  })
+  expect(Tip.parseTipText('<@UMEMBER> 5 pathUSD')).toEqual({
+    amount: 5_000_000,
+    memo: null,
+    recipientProviderUserId: 'UMEMBER',
+    token: 'pathUSD',
   })
   expect(Tip.parseTipText('<@UMEMBER> $0.001 thanks for the help')).toEqual({
     amount: 1_000,

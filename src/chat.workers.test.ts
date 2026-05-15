@@ -528,7 +528,7 @@ test('@Tipbot mention introduces itself', async () => {
   )
   await expectSlackThreadMessage(
     messageTs,
-    'Connect with `/tip connect`, then send stablecoins with `@Tipbot @account for coffee`, `/tip @account for coffee`, or a 💸 reaction.',
+    'Connect with `/tip connect`, then send stablecoins with `@Tipbot @account for coffee`, `@Tipbot @account 0.005 for coffee`, `/tip @account for coffee`, or a 💸 reaction.',
   )
   expect(tips).toHaveLength(0)
 })
@@ -728,7 +728,7 @@ test('@Tipbot mention accepts repeated bot mentions', async () => {
 
 test('@Tipbot mention rejects ambiguous mentions', async () => {
   aiRunMock.mockResolvedValueOnce({
-    response: 'Almost. Try `@Tipbot tip @account [amount] [token] [for memo]`.',
+    response: 'Almost. Try `@Tipbot @account for coffee`.',
   } as never)
   const messageTs = `1700000003.${Nanoid.generate().slice(0, 6)}`
 
@@ -745,10 +745,7 @@ test('@Tipbot mention rejects ambiguous mentions', async () => {
 
   expect(response.status).toBe(200)
   expect(tips).toHaveLength(0)
-  await expectSlackThreadMessage(
-    messageTs,
-    'Almost. Try `@Tipbot tip @account [amount] [token] [for memo]`.',
-  )
+  await expectSlackThreadMessage(messageTs, 'Almost. Try `@Tipbot @account for coffee`.')
   await expectSlackThreadMessageNotContaining(messageTs, 'tipped')
 })
 
@@ -1859,7 +1856,9 @@ describe('/tip help', () => {
     await expectSlackMessage('/tip @account 0.005 for coffee')
     await expectSlackMessage('/tip @account 0.005 USDC')
     await expectSlackMessage('/tip @account 0.005 USDC for coffee')
-    await expectSlackMessage('@Tipbot [tip|send|pay] @account [amount] [token] [for memo]')
+    await expectSlackMessage('@Tipbot @account')
+    await expectSlackMessage('@Tipbot @account for coffee')
+    await expectSlackMessage('@Tipbot @account 0.005 for coffee')
     await expectSlackMessage('[emoji] :money_with_wings:')
     await expectSlackMessage('Send default amount by reacting to a message')
     await expectSlackMessageNotContaining('Payment examples')

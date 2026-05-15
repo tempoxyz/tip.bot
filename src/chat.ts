@@ -852,7 +852,15 @@ async function handleTipText(
     threadTs?: string
   },
 ) {
-  const parsed = Tip.parseTipText(ctx.text)
+  const workspace = await ctx.db
+    .selectFrom('workspace')
+    .selectAll()
+    .where('provider', '=', ctx.provider.type)
+    .where('provider_id', '=', ctx.provider.id)
+    .executeTakeFirst()
+  const parsed = Tip.parseTipText(ctx.text, {
+    chainId: workspace?.chain_id ?? Tempo.chainLookup.mainnet,
+  })
   if (!parsed) {
     if (options.mention && options.threadTs) {
       await postInvalidMentionReply(event, ctx, ctx.text, options.threadTs)
@@ -862,12 +870,6 @@ async function handleTipText(
     return
   }
 
-  const workspace = await ctx.db
-    .selectFrom('workspace')
-    .selectAll()
-    .where('provider', '=', ctx.provider.type)
-    .where('provider_id', '=', ctx.provider.id)
-    .executeTakeFirst()
   const tokenAddress = parsed.token
     ? Tempo.getTokenAddress(workspace?.chain_id ?? Tempo.chainLookup.mainnet, parsed.token)
     : null

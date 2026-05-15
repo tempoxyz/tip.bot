@@ -189,7 +189,7 @@ function isTokenLike(value: string) {
   return /^[A-Z]{2,10}$/.test(value) // e.g. USDC, USDT, PATH
 }
 
-export function parseTipText(value: string) {
+export function parseTipText(value: string, options: { chainId?: number } = {}) {
   const text = value.trim()
   const mention = text.match(/<@([A-Z0-9_]+)(?:\|([^>]+))?>/)
   if (!mention) return null
@@ -209,8 +209,8 @@ export function parseTipText(value: string) {
       }
 
     const [token = '', ...tokenRest] = remaining.split(/\s+/)
-    // token symbols contain dots, digits, or are all-uppercase short strings (e.g. USDC.e, USDT)
-    if (isTokenLike(token)) {
+    const chainId = options.chainId ?? Tempo.chainLookup.mainnet
+    if (Tempo.getTokenAddress(chainId, token) || isTokenLike(token)) {
       const afterToken = tokenRest.join(' ').trim()
       const memo = afterToken.match(/^for\s+([\s\S]+)$/i)
       if (afterToken && !memo) return null
@@ -223,7 +223,6 @@ export function parseTipText(value: string) {
       }
     }
 
-    // remaining text is not a token — treat it as memo
     return {
       amount,
       memo: remaining.replace(/^for\s+/i, '').trim() || null,
