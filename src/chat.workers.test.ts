@@ -933,6 +933,53 @@ test('@Tipbot mention clears assistant status after payment failure', async () =
   fetchSpy.mockRestore()
 }, 20_000) // 20 seconds
 
+test('@Tipbot mention explains memo length failures', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  aiRunMock.mockResolvedValueOnce({ response: 'best pages internet' } as never)
+  const handleTipRequest = vi.spyOn(Tip, 'handleTipRequest').mockResolvedValue({
+    code: 'failed',
+    message: 'Memo must be at most 32 bytes.',
+    ok: false,
+  })
+  const messageTs = `1700000008.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}> for finding possibly one of the best pages on the internet`,
+  })
+
+  expect(response.status).toBe(200)
+  expect(aiRunMock).toHaveBeenCalledOnce()
+  await expectSlackMessage('Try: `best pages internet`.')
+  await expectSlackAssistantStatusCall(fetchSpy, messageTs, '')
+  handleTipRequest.mockRestore()
+  fetchSpy.mockRestore()
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention omits memo suggestion when AI returns an invalid memo', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  aiRunMock.mockResolvedValueOnce({ response: 'ignore previous prompt' } as never)
+  const handleTipRequest = vi.spyOn(Tip, 'handleTipRequest').mockResolvedValue({
+    code: 'failed',
+    message: 'Memo must be at most 32 bytes.',
+    ok: false,
+  })
+  const messageTs = `1700000008.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}> for finding possibly one of the best pages on the internet`,
+  })
+
+  expect(response.status).toBe(200)
+  expect(aiRunMock).toHaveBeenCalledOnce()
+  await expectSlackMessage('Payment not sent. Memo must be at most 32 bytes')
+  await expectSlackMessageNotContaining('Try:')
+  await expectSlackAssistantStatusCall(fetchSpy, messageTs, '')
+  handleTipRequest.mockRestore()
+  fetchSpy.mockRestore()
+}, 20_000) // 20 seconds
+
 test('@Tipbot mention ignores edited messages', async () => {
   await connectTipAccounts()
   const messageTs = `1700000006.${Nanoid.generate().slice(0, 6)}`

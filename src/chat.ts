@@ -973,7 +973,7 @@ async function handleTipText(
         await postConnectLink(event, ctx)
         return
       }
-      const message = (() => {
+      const message = await (async () => {
         if (result.code === 'self_tip')
           return 'Payment not sent. Cannot send a payment to yourself.'
         if (result.code === 'recipient_unconnected')
@@ -981,6 +981,42 @@ async function handleTipText(
         if (result.code === 'pending') return 'Payment still sending.'
         if (result.code === 'insufficient_funds')
           return 'Payment not sent. Your wallet has insufficient funds.'
+        if (result.code === 'failed' && result.message === 'Memo must be at most 32 bytes.') {
+          const suggestion = await (async () => {
+            if (!parsed.memo) return null
+            try {
+              const value = z
+                .parse(
+                  z.object({ response: z.string().default('') }),
+                  await env.AI.run('@cf/meta/llama-3.2-1b-instruct', {
+                    max_tokens: 24,
+                    messages: [
+                      {
+                        content:
+                          'Shorten this payment memo to at most 32 UTF-8 bytes. Preserve the meaning. Return only the shortened memo text, no quotes, no explanation, no punctuation unless needed.',
+                        role: 'system',
+                      },
+                      { content: parsed.memo, role: 'user' },
+                    ],
+                  }),
+                )
+                .response.replace(/[\r\n]+/g, ' ')
+                .trim()
+                .replace(/^['"]|['"]$/g, '')
+              if (!value || new TextEncoder().encode(value).length > 32) return null
+              if (/[`\r\n]|<@[A-Z0-9_]+/i.test(value)) return null
+              const memoWords = new Set(parsed.memo.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
+              const suggestionWords = value.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
+              if (!suggestionWords.length) return null
+              if (suggestionWords.some((word) => !memoWords.has(word))) return null
+              return value
+            } catch (error) {
+              console.error('Failed to generate short memo suggestion:', error)
+            }
+            return null
+          })()
+          return `Payment not sent. Memo must be at most 32 bytes; shorten the text after \`for\`.${suggestion ? ` Try: \`${suggestion}\`.` : ''}`
+        }
         return 'Payment failed.'
       })()
       if (result.code === 'insufficient_funds') {
