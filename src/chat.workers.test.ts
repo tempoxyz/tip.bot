@@ -1861,6 +1861,7 @@ describe('/tip help', () => {
     await expectSlackMessage('/tip @account 0.005 USDC for coffee')
     await expectSlackMessage('@Tipbot @account')
     await expectSlackMessage('@Tipbot @account for coffee')
+    await expectSlackMessage('@Tipbot tip @account for coffee')
     await expectSlackMessage('@Tipbot @account 0.005 for coffee')
     await expectSlackMessage('React :money_with_wings:')
     await expectSlackMessage('Send default amount by reacting to a message')

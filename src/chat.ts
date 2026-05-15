@@ -428,6 +428,7 @@ const handlers = {
     const mentionExampleRows = [
       ['@Tipbot @account', 'Send default amount via mention'],
       ['@Tipbot @account for coffee', 'Send default amount with memo via mention'],
+      ['@Tipbot tip @account for coffee', 'Same as above (tip, send, pay all work)'],
       ['@Tipbot @account 0.005 for coffee', 'Send custom amount with memo via mention'],
       [
         `React :${workspace?.reaction_tip_emoji ?? 'money_with_wings'}:`,
