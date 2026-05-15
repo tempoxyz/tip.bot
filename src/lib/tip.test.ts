@@ -11,12 +11,18 @@ test('parses positive decimal amounts', () => {
   expect(Tip.parseAmount('123.456789')).toBe(123_456_789)
 })
 
+test('truncates extra decimals beyond 6 places', () => {
+  expect(Tip.parseAmount('1.1234567')).toBe(1_123_456)
+  expect(Tip.parseAmount('$1.12345678')).toBe(1_123_456)
+  expect(Tip.parseAmount('0.0000001')).toBe(null)
+  expect(Tip.parseAmount('$0.00000001')).toBe(null)
+})
+
 test('rejects invalid decimal amounts', () => {
   expect(Tip.parseAmount('0')).toBe(null)
   expect(Tip.parseAmount('0.000000')).toBe(null)
   expect(Tip.parseAmount('-1')).toBe(null)
   expect(Tip.parseAmount('01')).toBe(null)
-  expect(Tip.parseAmount('1.0000001')).toBe(null)
   expect(Tip.parseAmount('1.')).toBe(null)
   expect(Tip.parseAmount('abc')).toBe(null)
   expect(Tip.parseAmount('9007199255')).toBe(null)
@@ -130,6 +136,7 @@ test('parses tip mentions and memos', () => {
     recipientProviderUserId: 'UMEMBER',
     token: null,
   })
+  expect(Tip.parseTipText("<@UMEMBER> $0.00000001 let's see")).toBe(null)
 })
 
 test('rejects text without tip mentions', () => {

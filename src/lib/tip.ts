@@ -176,10 +176,11 @@ export async function handleTipRequest(
 }
 
 export function parseAmount(value: string) {
-  const match = value.match(/^\$?(0|[1-9]\d*)(?:\.(\d{1,6}))?$/)
+  const match = value.match(/^\$?(0|[1-9]\d*)(?:\.(\d+))?$/)
   if (!match) return null
 
-  const amount = Number(match[1]) * 1_000_000 + Number((match[2] ?? '').padEnd(6, '0'))
+  const decimals = (match[2] ?? '').slice(0, 6).padEnd(6, '0')
+  const amount = Number(match[1]) * 1_000_000 + Number(decimals)
   if (!Number.isSafeInteger(amount) || amount <= 0) return null
   return amount
 }
@@ -196,6 +197,7 @@ export function parseTipText(value: string, options: { chainId?: number } = {}) 
   const afterMention = text.slice((mention.index ?? 0) + mention[0].length).trim()
   const [first = '', ...rest] = afterMention.split(/\s+/)
   const amount = parseAmount(first)
+  if (amount === null && /^\$\d/.test(first)) return null
   if (amount !== null) {
     const remaining = rest.join(' ').trim()
     const memoOnly = remaining.match(/^for\s+([\s\S]+)$/i)
