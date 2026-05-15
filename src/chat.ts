@@ -408,7 +408,7 @@ const handlers = {
       .executeTakeFirst()
 
     const commandRows = [
-      ['/tip @account [amount] [token] [for memo]', 'Send payment'],
+      ['/tip @account [amount] [for memo]', 'Send payment'],
       ['/tip config', 'Manage workspace configuration'],
       ['/tip connect', 'Connect to Tipbot'],
       ['/tip disconnect', 'Disconnect from Tipbot'],
@@ -426,12 +426,11 @@ const handlers = {
       ['/tip @account 0.005 USDC for coffee', 'Send custom token with memo'],
     ]
     const mentionExampleRows = [
+      ['@Tipbot @account', 'Send default amount via mention'],
+      ['@Tipbot @account for coffee', 'Send default amount with memo via mention'],
+      ['@Tipbot @account 0.005 for coffee', 'Send custom amount with memo via mention'],
       [
-        '@Tipbot [tip|send|pay] @account [amount] [token] [for memo]',
-        'Send payment by mentioning Tipbot',
-      ],
-      [
-        `[emoji] :${workspace?.reaction_tip_emoji ?? 'money_with_wings'}:`,
+        `React :${workspace?.reaction_tip_emoji ?? 'money_with_wings'}:`,
         'Send default amount by reacting to a message',
       ],
     ]
@@ -1676,8 +1675,8 @@ async function postInvalidUsage(
   body.set(
     'text',
     options.mention
-      ? 'Invalid `@Tipbot` usage. Try `@Tipbot @account [amount] [token] [for memo]` or `@Tipbot tip @account`.'
-      : 'Invalid `/tip` usage. Try `/tip @account` or `/tip help` for more info.',
+      ? 'Invalid `@Tipbot` usage. Try `@Tipbot @account` or `@Tipbot @account for coffee`.'
+      : 'Invalid `/tip` usage. Try `/tip @account` or `/tip @account for coffee`. Run `/tip help` for more info.',
   )
   if (options.threadTs) body.set('thread_ts', options.threadTs)
   body.set('user', event.user.userId)
@@ -1740,11 +1739,11 @@ async function generateInvalidMentionReply(mentionText: string) {
   const isThanksText = /^(thank you|thanks|ty|thx|thank u)\b/i.test(text)
   const fallback = (() => {
     if (creatureMatch && isTipText)
-      return `${creatureMatch[0].toUpperCase()}? Excellent. For tips: \`@Tipbot tip @account [amount] [token] [for memo]\`.`
+      return `${creatureMatch[0].toUpperCase()}? Excellent. For tips: \`@Tipbot @account for coffee\`.`
     if (creatureMatch) return `${creatureMatch[0].toUpperCase()}? Now we are talking.`
     if (isThanksText) return 'Anytime.'
-    if (isSetupText) return 'Run `/tip connect`, then try `@Tipbot tip @account`.'
-    if (isTipText) return 'Almost. Try `@Tipbot tip @account [amount] [token] [for memo]`.'
+    if (isSetupText) return 'Run `/tip connect`, then try `@Tipbot @account`.'
+    if (isTipText) return 'Almost. Try `@Tipbot @account` or `@Tipbot @account for coffee`.'
     return 'Anytime.'
   })()
   try {
@@ -1756,7 +1755,7 @@ async function generateInvalidMentionReply(mentionText: string) {
           messages: [
             {
               content:
-                'You are Tipbot in Slack. Reply to an invalid @Tipbot mention. Keep it under 140 chars. Be short and pithy. Do not mention users. If the user mentions goblins or other creatures, get REALLY EXCITED. If the user seems to be trying to send a tip/payment, include this exact syntax: `@Tipbot tip @account [amount] [token] [for memo]`. Otherwise just acknowledge or deflect lightly.',
+                'You are Tipbot in Slack. Reply to an invalid @Tipbot mention. Keep it under 140 chars. Be short and pithy. Do not mention users. If the user mentions goblins or other creatures, get REALLY EXCITED. If the user seems to be trying to send a tip/payment, include this exact syntax: `@Tipbot @account for coffee`. Otherwise just acknowledge or deflect lightly.',
               role: 'system',
             },
             { content: text || '(empty mention)', role: 'user' },
@@ -1786,7 +1785,12 @@ async function postSlackIntroduction(event: TipEvent, ctx: HandlerContext, threa
 
   const text =
     'I’m Tipbot: sometime tipper, sometime messenger, always bot.\n' +
-    'Connect with `/tip connect`, then send stablecoins with `@Tipbot @account for coffee`, `/tip @account for coffee`, or a 💸 reaction.'
+    'Connect with `/tip connect`, then send stablecoins:\n' +
+    '• `/tip @account` — send the default amount\n' +
+    '• `/tip @account for coffee` — send with a memo\n' +
+    '• `@Tipbot @account for coffee` — same thing, as a mention\n' +
+    '• 💸 react to a message to tip its author\n' +
+    'Run `/tip help` for the full list.'
   const body = new URLSearchParams()
   body.set('channel', event.channel.id.replace(/^slack:/, ''))
   body.set('text', text)

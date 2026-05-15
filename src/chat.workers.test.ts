@@ -728,7 +728,7 @@ test('@Tipbot mention accepts repeated bot mentions', async () => {
 
 test('@Tipbot mention rejects ambiguous mentions', async () => {
   aiRunMock.mockResolvedValueOnce({
-    response: 'Almost. Try `@Tipbot tip @account [amount] [token] [for memo]`.',
+    response: 'Almost. Try `@Tipbot @account` or `@Tipbot @account for coffee`.',
   } as never)
   const messageTs = `1700000003.${Nanoid.generate().slice(0, 6)}`
 
@@ -747,7 +747,7 @@ test('@Tipbot mention rejects ambiguous mentions', async () => {
   expect(tips).toHaveLength(0)
   await expectSlackThreadMessage(
     messageTs,
-    'Almost. Try `@Tipbot tip @account [amount] [token] [for memo]`.',
+    'Almost. Try `@Tipbot @account` or `@Tipbot @account for coffee`.',
   )
   await expectSlackThreadMessageNotContaining(messageTs, 'tipped')
 })
@@ -1852,15 +1852,17 @@ describe('/tip help', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessageNotContaining('Tipbot commands')
-    await expectSlackMessage('/tip @account [amount] [token] [for memo]')
+    await expectSlackMessage('/tip @account [amount] [for memo]')
     await expectSlackMessage('/tip @account')
     await expectSlackMessage('/tip @account for coffee')
     await expectSlackMessage('/tip @account 0.005')
     await expectSlackMessage('/tip @account 0.005 for coffee')
     await expectSlackMessage('/tip @account 0.005 USDC')
     await expectSlackMessage('/tip @account 0.005 USDC for coffee')
-    await expectSlackMessage('@Tipbot [tip|send|pay] @account [amount] [token] [for memo]')
-    await expectSlackMessage('[emoji] :money_with_wings:')
+    await expectSlackMessage('@Tipbot @account')
+    await expectSlackMessage('@Tipbot @account for coffee')
+    await expectSlackMessage('@Tipbot @account 0.005 for coffee')
+    await expectSlackMessage('React :money_with_wings:')
     await expectSlackMessage('Send default amount by reacting to a message')
     await expectSlackMessageNotContaining('Payment examples')
     await expectSlackMessage('/tip config')
@@ -2168,7 +2170,7 @@ describe('/tip usage', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      'Invalid `/tip` usage. Try `/tip @account` or `/tip help` for more info.',
+      'Invalid `/tip` usage. Try `/tip @account` or `/tip @account for coffee`. Run `/tip help` for more info.',
     )
   })
 
@@ -2177,7 +2179,7 @@ describe('/tip usage', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      'Invalid `/tip` usage. Try `/tip @account` or `/tip help` for more info.',
+      'Invalid `/tip` usage. Try `/tip @account` or `/tip @account for coffee`. Run `/tip help` for more info.',
     )
   })
 
