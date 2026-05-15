@@ -94,6 +94,18 @@ test('parses tip mentions and memos', () => {
     recipientProviderUserId: 'UMEMBER',
     token: 'pathUSD',
   })
+  expect(Tip.parseTipText('<@UMEMBER> 5 BetaUSD')).toEqual({
+    amount: 5_000_000,
+    memo: null,
+    recipientProviderUserId: 'UMEMBER',
+    token: 'BetaUSD',
+  })
+  expect(Tip.parseTipText('<@UMEMBER> 5 FAKE')).toEqual({
+    amount: 5_000_000,
+    memo: null,
+    recipientProviderUserId: 'UMEMBER',
+    token: 'FAKE',
+  })
   expect(Tip.parseTipText('<@UMEMBER> $0.001 thanks for the help')).toEqual({
     amount: 1_000,
     memo: 'thanks for the help',

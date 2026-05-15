@@ -210,7 +210,10 @@ export function parseTipText(value: string, options: { chainId?: number } = {}) 
 
     const [token = '', ...tokenRest] = remaining.split(/\s+/)
     const chainId = options.chainId ?? Tempo.chainLookup.mainnet
-    if (Tempo.getTokenAddress(chainId, token) || isTokenLike(token)) {
+    const isKnownToken = Object.values(Tempo.chainLookup).some((chainId) =>
+      Tempo.getTokenAddress(chainId, token),
+    )
+    if (Tempo.getTokenAddress(chainId, token) || isKnownToken || isTokenLike(token)) {
       const afterToken = tokenRest.join(' ').trim()
       const memo = afterToken.match(/^for\s+([\s\S]+)$/i)
       if (afterToken && !memo) return null

@@ -481,6 +481,54 @@ test('@Tipbot mention sends tip in thread', async () => {
   fetchSpy.mockRestore()
 }, 20_000) // 20 seconds
 
+test.each([
+  {
+    amount: 2000,
+    memo: null,
+    name: 'custom token',
+    text: '0.002 BetaUSD',
+    tokenAddress: Tempo.addressLookup.betaUsd,
+  },
+  {
+    amount: 2000,
+    memo: 'thanks for the help',
+    name: 'memo after amount',
+    text: '0.002 thanks for the help',
+    tokenAddress: undefined,
+  },
+  {
+    amount: 2000,
+    memo: 'lunch',
+    name: 'custom token with memo',
+    text: '0.002 BetaUSD for lunch',
+    tokenAddress: Tempo.addressLookup.betaUsd,
+  },
+])('@Tipbot mention parses $name', async (input) => {
+  const handleTipRequest = vi.spyOn(Tip, 'handleTipRequest').mockResolvedValue({
+    code: 'pending',
+    ok: false,
+  })
+  const messageTs = `1700000017.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}> ${input.text}`,
+  })
+
+  expect(response.status).toBe(200)
+  expect(handleTipRequest).toHaveBeenCalledWith(
+    env,
+    expect.objectContaining({
+      amount: input.amount,
+      memo: input.memo,
+      providerThreadId: messageTs,
+      recipientProviderUserId: Constants.slack.memberUserId,
+      tokenAddress: input.tokenAddress,
+    }),
+  )
+  expect(aiRunMock).not.toHaveBeenCalled()
+})
+
 test.each(['pay', 'send', 'tip'])(
   '@Tipbot mention accepts %s before recipient',
   async (verb) => {
