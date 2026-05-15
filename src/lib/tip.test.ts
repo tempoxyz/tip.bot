@@ -65,6 +65,18 @@ test('parses tip mentions and memos', () => {
     recipientProviderUserId: 'UMEMBER',
     token: 'USDC.e',
   })
+  expect(Tip.parseTipText('<@UMEMBER> $0.001 thanks for the help')).toEqual({
+    amount: 1_000,
+    memo: 'thanks for the help',
+    recipientProviderUserId: 'UMEMBER',
+    token: null,
+  })
+  expect(Tip.parseTipText('<@UMEMBER> $0.001 great work')).toEqual({
+    amount: 1_000,
+    memo: 'great work',
+    recipientProviderUserId: 'UMEMBER',
+    token: null,
+  })
 })
 
 test('rejects text without tip mentions', () => {

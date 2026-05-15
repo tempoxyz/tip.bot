@@ -184,6 +184,11 @@ export function parseAmount(value: string) {
   return amount
 }
 
+function isTokenLike(value: string) {
+  if (/[.\-_\d]/.test(value)) return true // e.g. USDC.e, usdt0
+  return /^[A-Z]{2,10}$/.test(value) // e.g. USDC, USDT, PATH
+}
+
 export function parseTipText(value: string) {
   const text = value.trim()
   const mention = text.match(/<@([A-Z0-9_]+)(?:\|([^>]+))?>/)
@@ -204,15 +209,27 @@ export function parseTipText(value: string) {
       }
 
     const [token = '', ...tokenRest] = remaining.split(/\s+/)
-    const afterToken = tokenRest.join(' ').trim()
-    const memo = afterToken.match(/^for\s+([\s\S]+)$/i)
-    if (afterToken && !memo) return null
+    // token symbols contain dots, digits, or are all-uppercase short strings (e.g. USDC.e, USDT)
+    if (isTokenLike(token)) {
+      const afterToken = tokenRest.join(' ').trim()
+      const memo = afterToken.match(/^for\s+([\s\S]+)$/i)
+      if (afterToken && !memo) return null
+      return {
+        amount,
+        memo: memo?.[1]?.trim() || null,
+        ...(mention[2]?.trim() ? { recipientProviderLabel: mention[2].trim() } : {}),
+        recipientProviderUserId: mention[1]!,
+        token,
+      }
+    }
+
+    // remaining text is not a token — treat it as memo
     return {
       amount,
-      memo: memo?.[1]?.trim() || null,
+      memo: remaining.replace(/^for\s+/i, '').trim() || null,
       ...(mention[2]?.trim() ? { recipientProviderLabel: mention[2].trim() } : {}),
       recipientProviderUserId: mention[1]!,
-      token,
+      token: null,
     }
   }
   return {
