@@ -41,6 +41,7 @@ export default defineConfig({
           })() ?? getWranglerVar('HOST')
         const environment = (() => {
           if (host === 'tip.bot') return 'production'
+          if (/^pr\d+\.tip\.bot$/.test(host)) return 'preview'
           if (host === 'tipbot.localhost') return 'development'
           return 'development'
         })()
