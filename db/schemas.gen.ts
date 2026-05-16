@@ -66,15 +66,6 @@ export const reaction_tip = z.object({
   workspace_id: z.string(),
 })
 
-export const reaction_tip_config = z.object({
-  amount: z.number(),
-  created_at: z.string(),
-  emoji: z.string(),
-  id: z.string(),
-  updated_at: z.string(),
-  workspace_id: z.string(),
-})
-
 export const reaction_tip_thread = z.object({
   channel_id: z.string(),
   created_at: z.string(),
@@ -158,7 +149,6 @@ export const db = {
   account_link_token: account_link_token,
   member: member,
   reaction_tip: reaction_tip,
-  reaction_tip_config: reaction_tip_config,
   reaction_tip_thread: reaction_tip_thread,
   tip: tip,
   tip_batch: tip_batch,

@@ -8,7 +8,6 @@ export interface DB {
   account_link_token: account_link_token
   member: member
   reaction_tip: reaction_tip
-  reaction_tip_config: reaction_tip_config
   reaction_tip_thread: reaction_tip_thread
   tip: tip
   tip_batch: tip_batch
@@ -75,15 +74,6 @@ type reaction_tip = {
   sender_member_id: string
   thread_ts: string
   tip_id: string | null
-  updated_at: k.Generated<string>
-  workspace_id: string
-}
-
-type reaction_tip_config = {
-  amount: number
-  created_at: k.Generated<string>
-  emoji: string
-  id: string
   updated_at: k.Generated<string>
   workspace_id: string
 }
@@ -164,7 +154,6 @@ export declare namespace DB {
   type account_link_token = k.Selectable<DB['account_link_token']>
   type member = k.Selectable<DB['member']>
   type reaction_tip = k.Selectable<DB['reaction_tip']>
-  type reaction_tip_config = k.Selectable<DB['reaction_tip_config']>
   type reaction_tip_thread = k.Selectable<DB['reaction_tip_thread']>
   type tip = k.Selectable<DB['tip']>
   type tip_batch = k.Selectable<DB['tip_batch']>
@@ -176,7 +165,6 @@ export declare namespace DB {
     type account_link_token = k.Insertable<DB['account_link_token']>
     type member = k.Insertable<DB['member']>
     type reaction_tip = k.Insertable<DB['reaction_tip']>
-    type reaction_tip_config = k.Insertable<DB['reaction_tip_config']>
     type reaction_tip_thread = k.Insertable<DB['reaction_tip_thread']>
     type tip = k.Insertable<DB['tip']>
     type tip_batch = k.Insertable<DB['tip_batch']>
@@ -189,7 +177,6 @@ export declare namespace DB {
     type account_link_token = k.Selectable<DB['account_link_token']>
     type member = k.Selectable<DB['member']>
     type reaction_tip = k.Selectable<DB['reaction_tip']>
-    type reaction_tip_config = k.Selectable<DB['reaction_tip_config']>
     type reaction_tip_thread = k.Selectable<DB['reaction_tip_thread']>
     type tip = k.Selectable<DB['tip']>
     type tip_batch = k.Selectable<DB['tip_batch']>
@@ -202,7 +189,6 @@ export declare namespace DB {
     type account_link_token = k.Updateable<DB['account_link_token']>
     type member = k.Updateable<DB['member']>
     type reaction_tip = k.Updateable<DB['reaction_tip']>
-    type reaction_tip_config = k.Updateable<DB['reaction_tip_config']>
     type reaction_tip_thread = k.Updateable<DB['reaction_tip_thread']>
     type tip = k.Updateable<DB['tip']>
     type tip_batch = k.Updateable<DB['tip_batch']>
