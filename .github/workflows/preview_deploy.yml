@@ -46,8 +46,32 @@ env:
   WRANGLER_SEND_METRICS: false
 
 jobs:
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.pr.outputs.should_deploy }}
+    steps:
+      - name: Check PR state
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          PR_JSON=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '{state: .state, draft: .draft}')
+          STATE=$(echo "$PR_JSON" | jq -r '.state')
+          DRAFT=$(echo "$PR_JSON" | jq -r '.draft')
+          if [ "$STATE" = "open" ] && [ "$DRAFT" != "true" ]; then
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Skipping preview deploy; PR ${PR_NUMBER} is ${STATE}."
+          echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+
   deploy:
     name: Deploy
+    if: needs.gate.outputs.should_deploy == 'true'
+    needs: gate
     runs-on: ubuntu-latest
     environment: preview
     steps:

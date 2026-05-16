@@ -72,20 +72,17 @@ jobs:
             fi
 
             BODY=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --slurp 2>/dev/null | jq -r 'map(.[] | select(.body | contains("tipbot-preview"))) | first | .body // ""' || true)
-            META=$(node - "$BODY" <<'NODE'
-            const body = process.argv[2] || ''
-            const match = body.match(/<!-- tipbot-preview: (.*?) -->/)
-            console.log(match?.[1] ?? '{}')
-            NODE
-            )
+            META=$(node -e 'const body = process.argv[1] || ""; const match = body.match(/<!-- tipbot-preview: (.*?) -->/); console.log(match?.[1] ?? "{}")' "$BODY")
             D1_ID=$(echo "$META" | jq -r '.d1_id // empty')
             SLACK_APP_ID=$(echo "$META" | jq -r '.slack_app_id // empty')
 
             if [ -n "$SLACK_APP_ID" ]; then
-              curl -fsS -X POST https://slack.com/api/apps.manifest.delete \
+              RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.delete \
                 -H "Authorization: Bearer ${SLACK_CONFIG_TOKEN}" \
                 -H "Content-Type: application/json; charset=utf-8" \
-                -d "{\"app_id\":\"${SLACK_APP_ID}\"}" > /dev/null || true
+                -d "{\"app_id\":\"${SLACK_APP_ID}\"}" || true)
+              OK=$(echo "$RESPONSE" | jq -r '.ok // false')
+              if [ "$OK" != "true" ]; then echo "$RESPONSE" | jq '{ok,error,errors}'; fi
             fi
             curl -fsS -X DELETE \
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
@@ -96,5 +93,19 @@ jobs:
                 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
                 "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${D1_ID}" \
                 || true
+            fi
+
+            SHA=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha // empty' 2>/dev/null || true)
+            SHA_SHORT=$(echo "$SHA" | cut -c1-7)
+            UPDATED=$(date -u +"%b %-d, %Y, %-I:%M %p")
+            RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            BODY=$(printf '%s\n\n%s\n%s\n%s' \
+              "The latest Tipbot preview deployment for ${SHA_SHORT}" \
+              "| Name | Status | Preview | Updated (UTC) |" \
+              "| :--- | :----- | :------ | :------------ |" \
+              "| pr${PR_NUMBER} | [![Shut Down](https://vercel.com/static/status/canceled.svg) Shut Down](${RUN_URL}) | [pr${PR_NUMBER}.tip.bot](https://pr${PR_NUMBER}.tip.bot) | ${UPDATED} |")
+            COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --jq '.[] | select(.body | contains("tipbot-preview") or contains("Tipbot preview deployment")) | .id' | head -1)
+            if [ -n "$COMMENT_ID" ]; then
+              gh api "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}" -X PATCH -f body="$BODY"
             fi
           done
