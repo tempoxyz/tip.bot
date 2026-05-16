@@ -74,7 +74,6 @@ jobs:
 
   test-workers:
     name: Test Workers
-    if: ${{ false }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
