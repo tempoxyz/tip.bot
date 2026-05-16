@@ -163,10 +163,16 @@ jobs:
             MANIFEST=/tmp/slack-manifest-bootstrap.json
           fi
           BODY=$(jq -nc --rawfile manifest "$MANIFEST" --arg app_id "$APP_ID" 'if $app_id == "" then {manifest: $manifest} else {app_id: $app_id, manifest: $manifest} end')
-          RESPONSE=$(curl -fsS -X POST "https://slack.com/api/${METHOD}" \
-            -H "Authorization: Bearer ${SLACK_CONFIG_TOKEN}" \
-            -H "Content-Type: application/json; charset=utf-8" \
-            -d "$BODY")
+          for attempt in 1 2 3; do
+            RESPONSE=$(curl -fsS -X POST "https://slack.com/api/${METHOD}" \
+              -H "Authorization: Bearer ${SLACK_CONFIG_TOKEN}" \
+              -H "Content-Type: application/json; charset=utf-8" \
+              -d "$BODY")
+            OK=$(echo "$RESPONSE" | jq -r '.ok')
+            ERROR=$(echo "$RESPONSE" | jq -r '.error // empty')
+            if [ "$OK" = "true" ] || [ "$ERROR" != "internal_error" ] || [ "$attempt" = "3" ]; then break; fi
+            sleep 5 # 5 seconds
+          done
           OK=$(echo "$RESPONSE" | jq -r '.ok')
           if [ "$OK" != "true" ]; then
             echo "$RESPONSE" | jq '{ok,error,errors}'
@@ -304,10 +310,16 @@ jobs:
           SLACK_CONFIG_TOKEN: ${{ steps.slack_token.outputs.token }}
         run: |
           BODY=$(jq -nc --rawfile manifest /tmp/slack-manifest.json --arg app_id "${{ steps.slack.outputs.app_id }}" '{app_id: $app_id, manifest: $manifest}')
-          RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.update \
-            -H "Authorization: Bearer ${SLACK_CONFIG_TOKEN}" \
-            -H "Content-Type: application/json; charset=utf-8" \
-            -d "$BODY")
+          for attempt in 1 2 3; do
+            RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.update \
+              -H "Authorization: Bearer ${SLACK_CONFIG_TOKEN}" \
+              -H "Content-Type: application/json; charset=utf-8" \
+              -d "$BODY")
+            OK=$(echo "$RESPONSE" | jq -r '.ok')
+            ERROR=$(echo "$RESPONSE" | jq -r '.error // empty')
+            if [ "$OK" = "true" ] || [ "$ERROR" != "internal_error" ] || [ "$attempt" = "3" ]; then break; fi
+            sleep 5 # 5 seconds
+          done
           OK=$(echo "$RESPONSE" | jq -r '.ok')
           if [ "$OK" != "true" ]; then
             echo "$RESPONSE" | jq '{ok,error,errors}'
@@ -318,11 +330,17 @@ jobs:
         env:
           SLACK_CONFIG_TOKEN: ${{ steps.slack_token.outputs.token }}
         run: |
-          RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.icon.set \
-            -H "Authorization: Bearer ${SLACK_CONFIG_TOKEN}" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            --data-urlencode "app_id=${{ steps.slack.outputs.app_id }}" \
-            --data-urlencode "url=https://${PREVIEW_HOST}/tipbot-preview.png")
+          for attempt in 1 2 3; do
+            RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.icon.set \
+              -H "Authorization: Bearer ${SLACK_CONFIG_TOKEN}" \
+              -H "Content-Type: application/x-www-form-urlencoded" \
+              --data-urlencode "app_id=${{ steps.slack.outputs.app_id }}" \
+              --data-urlencode "url=https://${PREVIEW_HOST}/tipbot-preview.png")
+            OK=$(echo "$RESPONSE" | jq -r '.ok')
+            ERROR=$(echo "$RESPONSE" | jq -r '.error // empty')
+            if [ "$OK" = "true" ] || [ "$ERROR" != "internal_error" ] || [ "$attempt" = "3" ]; then break; fi
+            sleep 5 # 5 seconds
+          done
           OK=$(echo "$RESPONSE" | jq -r '.ok')
           if [ "$OK" != "true" ]; then
             echo "$RESPONSE" | jq '{ok,error,errors}'
