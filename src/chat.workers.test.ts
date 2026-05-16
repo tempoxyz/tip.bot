@@ -2339,6 +2339,86 @@ describe('/tip stats', () => {
   })
 })
 
+describe('/tip balance', () => {
+  test('shows token balances for connected account', async () => {
+    await connectTipAccounts()
+
+    const response = await postSlashCommand('balance')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('Wallet 0x')
+    await expectSlackMessage('View on explorer:')
+  }, 20_000) // 20 seconds
+
+  test('handles no connected account', async () => {
+    const response = await postSlashCommand('balance')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('No account connected. Run `/tip connect` first.')
+  })
+
+  test('handles missing workspace', async () => {
+    await db.deleteFrom('workspace').where('provider_id', '=', providerId).execute()
+
+    const response = await postSlashCommand('balance')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(
+      'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+    )
+  })
+
+  test('shows no balances message when all balances are zero', async () => {
+    const account = await factory.account.insert({})
+    const workspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', providerId)
+      .executeTakeFirstOrThrow()
+    await factory.member.insert({
+      account_id: account.id,
+      provider_user_id: Constants.slack.adminUserId,
+      workspace_id: workspace.id,
+    })
+
+    const response = await postSlashCommand('balance')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('has no balances')
+    await expectSlackMessage('View on explorer:')
+  }, 20_000) // 20 seconds
+
+  test('rejects extra text', async () => {
+    const response = await postSlashCommand('balance extra')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(
+      'Invalid `/tip` usage. Try `/tip @account` or `/tip help` for more info.',
+    )
+  })
+
+  test('shows balance from direct message', async () => {
+    const dm = setupSlackDMPostMessageFetchSpy()
+    const account = await factory.account.insert({})
+    const workspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', providerId)
+      .executeTakeFirstOrThrow()
+    await factory.member.insert({
+      account_id: account.id,
+      provider_user_id: Constants.slack.adminUserId,
+      workspace_id: workspace.id,
+    })
+
+    const response = await postSlashCommand('balance', { channelId: dm.channelId })
+
+    expect(response.status).toBe(200)
+    await expectSlackPostMessageCall(dm.fetchSpy, dm.channelId, 'Wallet')
+    dm.fetchSpy.mockRestore()
+  }, 20_000) // 20 seconds
+})
+
 describe('/tip status', () => {
   test('shows current connected account', async () => {
     const account = await factory.account.insert({})
