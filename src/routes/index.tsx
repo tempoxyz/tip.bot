@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import * as z from 'zod/mini'
+import { slackBotDisplayName, slackCommand, tipbotImagePath } from '#/lib/app.ts'
 import IconLogosSlackIcon from '~icons/logos/slack-icon.jsx'
 
 export const Route = createFileRoute('/')({
@@ -35,8 +36,8 @@ function Component() {
               Chat-native stablecoin micropayments.
             </p>
             <p className="max-w-lg text-lg leading-8 text-gray9">
-              Mention {__SLACK_BOT_DISPLAY_NAME__} in Slack to tip a teammate. The payment status
-              and receipt stay right in the conversation.
+              Mention {slackBotDisplayName} in Slack to tip a teammate. The payment status and
+              receipt stay right in the conversation.
             </p>
           </div>
           <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
@@ -58,7 +59,7 @@ function Component() {
               </a>
             )}
             <span className="text-sm font-medium text-gray8">
-              Try `{__SLACK_COMMAND__} @account for coffee`
+              Try `{slackCommand} @account for coffee`
             </span>
           </div>
         </div>
@@ -92,7 +93,7 @@ function Component() {
                     </div>
                     <p className="text-gray10">
                       <span className="rounded bg-blue2 px-1 font-medium text-blue10">
-                        @{__SLACK_BOT_DISPLAY_NAME__}
+                        @{slackBotDisplayName}
                       </span>{' '}
                       <span className="rounded bg-blue2 px-1 font-medium text-blue10">@jxom</span>{' '}
                       $5 for coffee
@@ -104,12 +105,12 @@ function Component() {
                     alt="Tipbot"
                     className="size-10 shrink-0 rounded-md object-cover"
                     height={40}
-                    src={__TIPBOT_IMAGE_PATH__}
+                    src={tipbotImagePath}
                     width={40}
                   />
                   <div className="min-w-0">
                     <div className="font-semibold text-gray10">
-                      {__SLACK_BOT_DISPLAY_NAME__}{' '}
+                      {slackBotDisplayName}{' '}
                       <span className="rounded bg-gray2 px-1 text-xs text-gray8">APP</span>
                     </div>
                     <p className="text-gray9">

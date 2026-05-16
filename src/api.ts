@@ -4,6 +4,7 @@ import * as chat from 'chat'
 import { z } from 'zod'
 import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
+import { getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as hono from '#/lib/hono.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
@@ -258,12 +259,12 @@ export const api = new Hono<{
                       children: [
                         chat.CardText(`Connected \`${truncatedAddress}\` <${explorerUrl}|View>`),
                         chat.CardText(
-                          `Mention \`@${c.env.SLACK_BOT_DISPLAY_NAME} @user\` or use \`${c.env.SLACK_COMMAND} @user\` to send a payment. React with :${link.reaction_tip_emoji}: to tip a message.`,
+                          `Mention \`@${getSlackBotDisplayName(c.env.HOST)} @user\` or use \`${getSlackCommand(c.env.HOST)} @user\` to send a payment. React with :${link.reaction_tip_emoji}: to tip a message.`,
                           { style: 'muted' },
                         ),
                       ],
                     }),
-                    fallbackText: `Connected\nWallet: ${account.address}\nUse ${c.env.SLACK_COMMAND} @user to send your first tip.`,
+                    fallbackText: `Connected\nWallet: ${account.address}\nUse ${getSlackCommand(c.env.HOST)} @user to send your first tip.`,
                   },
                   { fallbackToDM: false },
                 ),

@@ -15,9 +15,6 @@ const cloudflareEnv = z.enum(['preview', 'production'])
 
 const wranglerVars = z.object({
   HOST: z.string(),
-  SLACK_BOT_DISPLAY_NAME: z.optional(z.string()),
-  SLACK_COMMAND: z.optional(z.string()),
-  TIPBOT_IMAGE_PATH: z.optional(z.string()),
 })
 
 const wranglerJsoncCodec = z.codec(
