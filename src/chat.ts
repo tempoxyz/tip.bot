@@ -13,6 +13,8 @@ import * as chat from 'chat'
 import { env } from 'cloudflare:workers'
 import { sql } from 'kysely'
 import { Address } from 'ox'
+import { createClient, http } from 'viem'
+import { Actions } from 'viem/tempo'
 import { z } from 'zod'
 
 const creaturePattern =
@@ -334,6 +336,77 @@ const modalSubmits = {
 >
 
 const handlers = {
+  async balance(event, ctx) {
+    if (ctx.text) {
+      await postInvalidUsage(event, ctx)
+      return
+    }
+    const workspace = await ctx.db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', ctx.provider.type)
+      .where('provider_id', '=', ctx.provider.id)
+      .executeTakeFirst()
+    if (!workspace) {
+      await postPrivateReply(
+        event,
+        event.user,
+        'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+      )
+      return
+    }
+
+    const member = await ctx.db
+      .selectFrom('member')
+      .innerJoin('account', 'account.id', 'member.account_id')
+      .select('account.address as account_address')
+      .where('member.workspace_id', '=', workspace.id)
+      .where('member.provider_user_id', '=', event.user.userId)
+      .executeTakeFirst()
+    if (!member) {
+      await postPrivateReply(event, event.user, 'No account connected. Run `/tip connect` first.')
+      return
+    }
+
+    const client = createClient({
+      chain: Tempo.getChain(workspace.chain_id),
+      transport: http(Tempo.getRpcUrl(env, workspace.chain_id)),
+    })
+    const tokens = workspaceTokenOptions(workspace.chain_id)
+    const balances = await Promise.all(
+      tokens.map(async (token) => {
+        try {
+          const balance = await Actions.token.getBalance(client, {
+            account: member.account_address as Address.Address,
+            token: token.address as Address.Address,
+          })
+          return { balance, label: token.label }
+        } catch {
+          return { balance: 0n, label: token.label }
+        }
+      }),
+    )
+
+    const lines = balances
+      .filter((b) => b.balance > 0n)
+      .map((b) => `${b.label} ${formatCurrencyAmount(formatAmount(Number(b.balance)), 'USD')}`)
+    const truncatedAddress = `${member.account_address.slice(0, 6)}…${member.account_address.slice(-4)}`
+    const explorerUrl = Tempo.explorerLink(workspace.chain_id, member.account_address)
+    if (lines.length === 0) {
+      await postPrivateReply(
+        event,
+        event.user,
+        `Wallet ${truncatedAddress} has no balances.\nView on explorer: ${explorerUrl}`,
+      )
+      return
+    }
+
+    await postPrivateReply(
+      event,
+      event.user,
+      [`Wallet ${truncatedAddress}`, ...lines, `View on explorer: ${explorerUrl}`].join('\n'),
+    )
+  },
   async config(event, ctx) {
     const workspace = await ctx.db
       .selectFrom('workspace')
@@ -402,6 +475,7 @@ const handlers = {
 
     const commandRows = [
       ['/tip @account [amount] [token] [for memo]', 'Send payment'],
+      ['/tip balance', 'Show wallet balance'],
       ['/tip config', 'Manage workspace configuration'],
       ['/tip connect', 'Connect to Tipbot'],
       ['/tip disconnect', 'Disconnect from Tipbot'],
@@ -748,6 +822,7 @@ const handlers = {
 >
 
 const commandNames = [
+  'balance',
   'config',
   'connect',
   'disconnect',
