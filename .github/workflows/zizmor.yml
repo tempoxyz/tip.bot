@@ -16,7 +16,6 @@ jobs:
     permissions:
       actions: read
       contents: read
-      security-events: write
     steps:
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
@@ -25,3 +24,6 @@ jobs:
 
       - name: Run zizmor
         uses: zizmorcore/zizmor-action@b572f7b1a1c2d41efaab43d504f68d215c3cd727 # v0.5.4
+        with:
+          # TODO: Remove this once the repo is public or GitHub Advanced Security is enabled.
+          advanced-security: false
