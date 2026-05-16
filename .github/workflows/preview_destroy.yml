@@ -30,8 +30,9 @@ jobs:
         id: state
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          BODY=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" --paginate --slurp | jq -r 'map(.[] | select(.body | contains("tipbot-preview"))) | first | .body // ""')
+          BODY=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --slurp | jq -r 'map(.[] | select(.body | contains("tipbot-preview"))) | first | .body // ""')
           node - "$BODY" <<'NODE' >> "$GITHUB_OUTPUT"
           const body = process.argv[2] || ''
           const match = body.match(/<!-- tipbot-preview: (.*?) -->/)
@@ -72,12 +73,14 @@ jobs:
       - name: Delete Slack preview app
         if: steps.state.outputs.slack_app_id != ''
         env:
+          SLACK_APP_ID: ${{ steps.state.outputs.slack_app_id }}
           SLACK_CONFIG_TOKEN: ${{ steps.slack_token.outputs.token }}
         run: |
+          BODY=$(jq -nc --arg app_id "$SLACK_APP_ID" '{app_id: $app_id}')
           RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.delete \
             -H "Authorization: Bearer ${SLACK_CONFIG_TOKEN}" \
             -H "Content-Type: application/json; charset=utf-8" \
-            -d '{"app_id":"${{ steps.state.outputs.slack_app_id }}"}')
+            -d "$BODY")
           OK=$(echo "$RESPONSE" | jq -r '.ok')
           if [ "$OK" != "true" ]; then echo "$RESPONSE" | jq '{ok,error,errors}'; fi
 
@@ -96,17 +99,20 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          D1_ID: ${{ steps.state.outputs.d1_id }}
         run: |
           curl -fsS -X DELETE \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${{ steps.state.outputs.d1_id }}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${D1_ID}" \
             || true
 
       - name: Update preview comment
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          SHA_SHORT=$(echo "${{ github.event.pull_request.head.sha }}" | cut -c1-7)
+          SHA_SHORT=$(echo "$PR_HEAD_SHA" | cut -c1-7)
           UPDATED=$(date -u +"%b %-d, %Y, %-I:%M %p")
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           BODY=$(printf '%s\n\n%s\n%s\n%s' \
@@ -114,7 +120,7 @@ jobs:
             "| Name | Status | Preview | Updated (UTC) |" \
             "| :--- | :----- | :------ | :------------ |" \
             "| ${PREVIEW_APEX} | [![Shut Down](https://vercel.com/static/status/canceled.svg) Shut Down](${RUN_URL}) | [${PREVIEW_HOST}](https://${PREVIEW_HOST}) | ${UPDATED} |")
-          COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" --paginate --jq '.[] | select(.body | contains("tipbot-preview") or contains("Tipbot preview deployment")) | .id' | head -1)
+          COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --jq '.[] | select(.body | contains("tipbot-preview") or contains("Tipbot preview deployment")) | .id' | head -1)
           if [ -n "$COMMENT_ID" ]; then
             gh api "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}" -X PATCH -f body="$BODY"
           fi
