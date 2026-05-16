@@ -175,6 +175,27 @@ jobs:
           done
           OK=$(echo "$RESPONSE" | jq -r '.ok')
           if [ "$OK" != "true" ]; then
+            ERROR=$(echo "$RESPONSE" | jq -r '.error // empty')
+            if [ -n "$APP_ID" ] && [ "$ERROR" = "internal_error" ]; then
+              echo "Stored Slack app ${APP_ID} could not be updated; creating a replacement preview app."
+              APP_ID=""
+              METHOD="apps.manifest.create"
+              MANIFEST=/tmp/slack-manifest-bootstrap.json
+              BODY=$(jq -nc --rawfile manifest "$MANIFEST" '{manifest: $manifest}')
+              for attempt in 1 2 3; do
+                RESPONSE=$(curl -fsS -X POST "https://slack.com/api/${METHOD}" \
+                  -H "Authorization: Bearer ${SLACK_CONFIG_TOKEN}" \
+                  -H "Content-Type: application/json; charset=utf-8" \
+                  -d "$BODY")
+                OK=$(echo "$RESPONSE" | jq -r '.ok')
+                ERROR=$(echo "$RESPONSE" | jq -r '.error // empty')
+                if [ "$OK" = "true" ] || [ "$ERROR" != "internal_error" ] || [ "$attempt" = "3" ]; then break; fi
+                sleep 5 # 5 seconds
+              done
+            fi
+          fi
+          OK=$(echo "$RESPONSE" | jq -r '.ok')
+          if [ "$OK" != "true" ]; then
             echo "$RESPONSE" | jq '{ok,error,errors}'
             exit 1
           fi
