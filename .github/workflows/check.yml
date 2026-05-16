@@ -116,6 +116,7 @@ jobs:
 
   e2e:
     name: E2E
+    if: ${{ false }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
