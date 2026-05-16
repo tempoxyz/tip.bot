@@ -24,8 +24,8 @@ const scopeReasons = {
 } as const
 
 if (!command || !['create', 'export', 'manifest', 'update', 'validate'].includes(command)) usage()
-if (!appEnv || !['local', 'production'].includes(appEnv))
-  usage('Expected app env: local or production')
+if (!appEnv || !['local', 'preview', 'production'].includes(appEnv))
+  usage('Expected app env: local, preview, or production')
 if (!baseUrl) usage('Expected a host')
 if (['export', 'update'].includes(command) && !appId) usage('Expected Slack app ID')
 
@@ -52,8 +52,17 @@ if (command === 'manifest') {
 
 function createManifest() {
   const appName =
-    process.env.SLACK_APP_NAME ?? (appEnv === 'production' ? 'Tipbot' : 'Tipbot (dev)')
+    process.env.SLACK_APP_NAME ??
+    (appEnv === 'production' ? 'Tipbot' : appEnv === 'preview' ? 'Tipbot Preview' : 'Tipbot (dev)')
   const botDisplayName = process.env.SLACK_BOT_DISPLAY_NAME ?? 'Tipbot'
+  const slackCommand = process.env.SLACK_COMMAND ?? '/tip'
+  const eventSubscriptions =
+    process.env.SLACK_EVENT_SUBSCRIPTIONS === '0'
+      ? undefined
+      : {
+          bot_events: ['app_mention', 'reaction_added', 'reaction_removed'],
+          request_url: `${baseUrl}/api/chat/slack`,
+        }
 
   return {
     display_information: {
@@ -68,7 +77,7 @@ function createManifest() {
       },
       slash_commands: [
         {
-          command: '/tip',
+          command: slackCommand,
           description: 'Tip teammates and manage Tipbot',
           should_escape: true,
           usage_hint: '@account, connect, disconnect, help, leaderboard, status',
@@ -94,10 +103,7 @@ function createManifest() {
       },
     },
     settings: {
-      event_subscriptions: {
-        bot_events: ['app_mention', 'reaction_added', 'reaction_removed'],
-        request_url: `${baseUrl}/api/chat/slack`,
-      },
+      ...(eventSubscriptions ? { event_subscriptions: eventSubscriptions } : {}),
       interactivity: {
         is_enabled: true,
         request_url: `${baseUrl}/api/chat/slack`,
@@ -205,16 +211,18 @@ function usage(message?: string): never {
 
   console.error(`
 Usage:
-  pnpm slack:app manifest <local|production> <host>
-  pnpm slack:app export <local|production> <host> <appId>
-  pnpm slack:app validate <local|production> <host>
-  pnpm slack:app create <local|production> <host>
-  pnpm slack:app update <local|production> <host> <appId>
+  pnpm slack:app manifest <local|preview|production> <host>
+  pnpm slack:app export <local|preview|production> <host> <appId>
+  pnpm slack:app validate <local|preview|production> <host>
+  pnpm slack:app create <local|preview|production> <host>
+  pnpm slack:app update <local|preview|production> <host> <appId>
 
 Environment:
   SLACK_CONFIG_TOKEN     Slack app configuration token from https://api.slack.com/apps
   SLACK_APP_NAME         Optional manifest app name override
   SLACK_BOT_DISPLAY_NAME Optional bot mention display name override
+  SLACK_COMMAND          Optional slash command override
+  SLACK_EVENT_SUBSCRIPTIONS Set to 0 to omit event subscriptions
   SLACK_APP_ID           Optional app ID for updates
 `)
   process.exit(1)

@@ -11,7 +11,7 @@ export function getWranglerVar(name: keyof z.infer<typeof wranglerVars>) {
   return value
 }
 
-const cloudflareEnv = z.enum(['production'])
+const cloudflareEnv = z.enum(['preview', 'production'])
 
 const wranglerVars = z.object({
   HOST: z.string(),
