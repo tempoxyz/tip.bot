@@ -130,10 +130,8 @@ export function getChat() {
       db: DB.create(env.DB),
       provider: getProvider(event),
       text: event.text.trim(),
-      threadTs: z
-        .object({ thread_ts: z.string().min(1).optional() })
-        .passthrough()
-        .parse(event.raw).thread_ts,
+      threadTs: z.looseObject({ thread_ts: z.string().min(1).optional() }).parse(event.raw)
+        .thread_ts,
     } satisfies HandlerContext
 
     const match = context.text.match(commandPattern)
@@ -835,7 +833,7 @@ async function handleTipText(
     .where('provider', '=', ctx.provider.type)
     .where('provider_id', '=', ctx.provider.id)
     .executeTakeFirst()
-  const parsed = Tip.parseTipText(ctx.text, {
+  const parsed = Tip.parseTipBatchText(ctx.text, {
     chainId: workspace?.chain_id ?? Tempo.chainLookup.mainnet,
   })
   if (!parsed) {
@@ -866,19 +864,35 @@ async function handleTipText(
       // Best effort only. Payment flow must not depend on Slack assistant UI.
     })
   try {
-    const result = await Tip.handleTipRequest(env, {
-      amount: parsed.amount,
-      idempotencyKey: options.idempotencyKey,
-      memo: parsed.memo,
-      provider: ctx.provider.type,
-      providerChannelId: event.channel.id,
-      providerId: ctx.provider.id,
-      providerThreadId: options.threadTs,
-      recipientProviderLabel: parsed.recipientProviderLabel,
-      recipientProviderUserId: parsed.recipientProviderUserId,
-      senderProviderUserId: event.user.userId,
-      tokenAddress: tokenAddress ?? undefined,
-    }).catch(
+    const result = await (
+      parsed.recipients.length === 1
+        ? Tip.handleTipRequest(env, {
+            amount: parsed.amount,
+            idempotencyKey: options.idempotencyKey,
+            memo: parsed.memo,
+            provider: ctx.provider.type,
+            providerChannelId: event.channel.id,
+            providerId: ctx.provider.id,
+            providerThreadId: options.threadTs,
+            recipientProviderLabel: parsed.recipients[0]?.recipientProviderLabel,
+            recipientProviderUserId: parsed.recipients[0]!.recipientProviderUserId,
+            senderProviderUserId: event.user.userId,
+            tokenAddress: tokenAddress ?? undefined,
+          })
+        : Tip.handleTipBatchRequest(env, {
+            amount: parsed.amount,
+            idempotencyKey: options.idempotencyKey,
+            memo: parsed.memo,
+            provider: ctx.provider.type,
+            providerChannelId: event.channel.id,
+            providerId: ctx.provider.id,
+            providerThreadId: options.threadTs,
+            recipients: parsed.recipients,
+            senderProviderUserId: event.user.userId,
+            source: options.mention ? 'mention' : 'command',
+            tokenAddress: tokenAddress ?? undefined,
+          })
+    ).catch(
       (error) =>
         ({
           code: 'failed',
@@ -887,7 +901,25 @@ async function handleTipText(
         }) satisfies Tip.TipResult,
     )
 
-    if (result.ok && result.status === 'sent') {
+    if (result.ok && result.status === 'sent' && 'recipients' in result) {
+      const amount = result.isDefaultToken
+        ? formatCurrencyAmount(result.amount, result.tokenCurrency)
+        : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
+      await postSlackReceiptMessage(
+        event,
+        ctx,
+        `${event.channel.mentionUser(result.senderProviderUserId)} ${result.memo ? 'sent' : 'tipped'} ${result.recipients.length} accounts ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${result.recipients.map((recipient) => `• ${event.channel.mentionUser(recipient.recipientProviderUserId)}`).join('\n')}`,
+        result.chainId,
+        result.transactionHash,
+        undefined,
+        result.feePayer === 'sender'
+          ? 'Fee sponsor unavailable; fee paid from your balance.'
+          : undefined,
+        options.threadTs,
+      )
+      if (result.memo && options.threadTs)
+        await postSlackMemoReply(event, ctx, result.memo, options.threadTs)
+    } else if (result.ok && result.status === 'sent' && !('recipients' in result)) {
       await postSlackReceiptMessage(
         event,
         ctx,
@@ -950,7 +982,7 @@ async function handleTipText(
         if (result.code === 'self_tip')
           return 'Payment not sent. Cannot send a payment to yourself.'
         if (result.code === 'recipient_unconnected')
-          return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
+          return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipients[0]!.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
         if (result.code === 'pending') return 'Payment still sending.'
         if (result.code === 'insufficient_funds')
           return 'Payment not sent. Your wallet has insufficient funds.'
@@ -1287,14 +1319,15 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
   })()
   if (!inserted) return
 
-  const result = await Tip.handleTipRequest(env, {
+  const result = await Tip.handleTipBatchRequest(env, {
     idempotencyKey,
     memo: null,
     provider: provider.type,
     providerChannelId: event.item.channel,
     providerId: provider.id,
-    recipientProviderUserId: recipient.providerUserId,
+    recipients: [{ recipientProviderUserId: recipient.providerUserId }],
     senderProviderUserId: sender.providerUserId,
+    source: 'reaction',
   }).catch(
     (error) =>
       ({
@@ -1481,6 +1514,7 @@ export async function updateReactionTipAggregate(
   const rows = await db
     .selectFrom('reaction_tip')
     .innerJoin('tip', 'tip.id', 'reaction_tip.tip_id')
+    .innerJoin('tip_batch', 'tip_batch.id', 'tip.batch_id')
     .innerJoin('member as sender', 'sender.id', 'reaction_tip.sender_member_id')
     .innerJoin('member as recipient', 'recipient.id', 'reaction_tip.recipient_member_id')
     .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
@@ -1491,7 +1525,7 @@ export async function updateReactionTipAggregate(
       'tip.amount',
       'tip.chain_id',
       'tip.token_address',
-      'tip.transaction_hash',
+      'tip_batch.transaction_hash',
       'workspace.default_token_address',
       'workspace.reaction_tip_emoji',
     ])
@@ -1500,7 +1534,7 @@ export async function updateReactionTipAggregate(
     .where('reaction_tip.thread_ts', '=', options.threadTs)
     .where('reaction_tip.reaction', '=', options.reaction)
     .where('tip.confirmed_at', 'is not', null)
-    .where('tip.transaction_hash', 'is not', null)
+    .where('tip_batch.transaction_hash', 'is not', null)
     .orderBy('reaction_tip.created_at', 'asc')
     .execute()
   if (rows.length === 0) return
@@ -1651,7 +1685,7 @@ function normalizeSlackMentionText(value: string, botUserId: string) {
 
 function parseSlackMentionTipText(text: string) {
   const mentions = [...text.matchAll(/<@([A-Z0-9_]+)(?:\|[^>]+)?>/g)]
-  if (mentions.length !== 1) return null
+  if (mentions.length < 1) return null
   const prefix = text.slice(0, mentions[0]!.index).trim().toLowerCase()
   if (prefix && !['pay', 'send', 'tip'].includes(prefix)) return null
   return text.slice(mentions[0]!.index).trim()

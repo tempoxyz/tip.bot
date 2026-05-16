@@ -848,6 +848,7 @@ async function getAppState(search: Required<EmulateSearch>) {
     .execute()
   const recentTips = await db
     .selectFrom('tip')
+    .innerJoin('tip_batch', 'tip_batch.id', 'tip.batch_id')
     .innerJoin('member as sender', 'sender.id', 'tip.sender_member_id')
     .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
     .select([
@@ -856,7 +857,7 @@ async function getAppState(search: Required<EmulateSearch>) {
       'tip.amount',
       'tip.created_at',
       'tip.memo',
-      'tip.transaction_hash',
+      'tip_batch.transaction_hash as batch_transaction_hash',
     ])
     .where('tip.workspace_id', '=', workspace.id)
     .orderBy('tip.created_at', 'desc')
@@ -891,7 +892,7 @@ async function getAppState(search: Required<EmulateSearch>) {
           memo: tip.memo,
           recipientProviderUserId: tip.recipient_provider_user_id,
           senderProviderUserId: tip.sender_provider_user_id,
-          transactionHash: tip.transaction_hash,
+          transactionHash: tip.batch_transaction_hash,
         }) as const,
     ),
     workspace: {

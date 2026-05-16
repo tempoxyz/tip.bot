@@ -367,7 +367,9 @@ export const api = new Hono<{
             : data.payload.expiresAt,
         accessKeyLimit:
           data.payload.kind === 'reusable_access_key'
-            ? AccountLink.reusableAccessKeyLimitText
+            ? formatAmount(
+                Number(data.payload.accessKeyLimit ?? AccountLink.reusableAccessKeyLimit),
+              )
             : formatAmount(data.payload.amount),
         accessKeyLimitPeriodSeconds:
           data.payload.kind === 'reusable_access_key'
@@ -381,6 +383,12 @@ export const api = new Hono<{
         ok: true as const,
         recipientProviderLabel,
         recipientProviderUserId: data.payload.recipientProviderUserId,
+        recipients: data.payload.recipients ?? [
+          {
+            recipientProviderLabel,
+            recipientProviderUserId: data.payload.recipientProviderUserId,
+          },
+        ],
         tokenAddress: Address.checksum(data.payload.tokenAddress),
         tokenCurrency: metadata.currency,
         tokenSymbol: metadata.symbol,
@@ -484,7 +492,10 @@ export const api = new Hono<{
               const amount = result.isDefaultToken
                 ? formatCurrencyAmount(result.amount, result.tokenCurrency)
                 : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
-              const text = `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} <@${result.recipientProviderUserId}> ${amount}${result.memo ? ` for ${result.memo}` : ''}.`
+              const text =
+                'recipients' in result
+                  ? `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} ${result.recipients.length} accounts ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${result.recipients.map((recipient) => `• <@${recipient.recipientProviderUserId}>`).join('\n')}`
+                  : `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} <@${result.recipientProviderUserId}> ${amount}${result.memo ? ` for ${result.memo}` : ''}.`
               const receiptText = text.replace(/\.$/, '')
               const threadId = data.payload.providerThreadId
               const body = new URLSearchParams()
@@ -587,7 +598,7 @@ export const api = new Hono<{
           return null
         }
         const parsed = z
-          .object({
+          .looseObject({
             actions: z
               .array(
                 z.object({
@@ -597,18 +608,16 @@ export const api = new Hono<{
               )
               .optional(),
             container: z
-              .object({
+              .looseObject({
                 message_ts: z.string().optional(),
                 view_id: z.string().optional(),
               })
-              .passthrough()
               .optional(),
             team: z.object({ id: z.string().min(1) }).optional(),
             trigger_id: z.string().min(1).optional(),
             type: z.string().min(1),
             user: z.object({ id: z.string().min(1) }).optional(),
           })
-          .passthrough()
           .safeParse(payload)
         if (!parsed.success) return null
         if (parsed.data.type !== 'block_actions') return null
@@ -637,10 +646,7 @@ export const api = new Hono<{
       }
       const parsed = z
         .object({
-          event: z
-            .object({ type: z.string().min(1) })
-            .passthrough()
-            .optional(),
+          event: z.looseObject({ type: z.string().min(1) }).optional(),
           event_id: z.string().min(1).optional(),
           type: z.string().min(1).optional(),
         })

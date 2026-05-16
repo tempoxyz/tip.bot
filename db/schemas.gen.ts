@@ -66,6 +66,15 @@ export const reaction_tip = z.object({
   workspace_id: z.string(),
 })
 
+export const reaction_tip_config = z.object({
+  amount: z.number(),
+  created_at: z.string(),
+  emoji: z.string(),
+  id: z.string(),
+  updated_at: z.string(),
+  workspace_id: z.string(),
+})
+
 export const reaction_tip_thread = z.object({
   channel_id: z.string(),
   created_at: z.string(),
@@ -80,6 +89,7 @@ export const reaction_tip_thread = z.object({
 export const tip = z.object({
   access_key_id: z.string().nullable(),
   amount: z.number(),
+  batch_id: z.string().nullable(),
   chain_id: z.number(),
   confirmed_at: z.string().nullable(),
   created_at: z.string(),
@@ -94,6 +104,36 @@ export const tip = z.object({
   sender_member_id: z.string(),
   sponsorship_memo: z.string().nullable(),
   token_address: z.string(),
+  transaction_hash: z.string().nullable(),
+  transfer_log_index: z.number().nullable(),
+  updated_at: z.string(),
+  workspace_id: z.string(),
+})
+
+export const tip_batch = z.object({
+  amount_each: z.number(),
+  created_at: z.string(),
+  failure_reason: z.string().nullable(),
+  id: z.string(),
+  idempotency_key: z.string(),
+  memo: z.string().nullable(),
+  provider: z.literal('slack'),
+  provider_channel_id: z.string(),
+  provider_id: z.string(),
+  provider_thread_id: z.string().nullable(),
+  recipient_count: z.number(),
+  sender_member_id: z.string(),
+  source: z.enum(['command', 'mention', 'reaction', 'migration']),
+  status: z.enum([
+    'pending',
+    'needs_confirmation',
+    'submitting',
+    'confirmed',
+    'failed',
+    'canceled',
+  ]),
+  token_address: z.string(),
+  total_amount: z.number(),
   transaction_hash: z.string().nullable(),
   updated_at: z.string(),
   workspace_id: z.string(),
@@ -118,7 +158,9 @@ export const db = {
   account_link_token: account_link_token,
   member: member,
   reaction_tip: reaction_tip,
+  reaction_tip_config: reaction_tip_config,
   reaction_tip_thread: reaction_tip_thread,
   tip: tip,
+  tip_batch: tip_batch,
   workspace: workspace,
 }
