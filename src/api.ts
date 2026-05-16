@@ -7,6 +7,7 @@ import * as AccountLink from '#/lib/accountLink.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as hono from '#/lib/hono.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
+import * as ProviderIdentity from '#/lib/providerIdentity.ts'
 import * as Slack from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
@@ -95,10 +96,12 @@ export const api = new Hono<{
           'account_link_token.member_id',
           'account_link_token.provider_channel_id',
           'account_link_token.used_at',
+          'member.provider_identity_id as member_provider_identity_id',
           'member.provider_user_id as member_provider_user_id',
           'workspace.chain_id',
           'workspace.default_token_address',
           'workspace.id as workspace_id',
+          'workspace.provider as workspace_provider',
           'workspace.provider_id',
           'workspace.reaction_tip_emoji',
         ])
@@ -163,10 +166,16 @@ export const api = new Hono<{
 
         const duplicate = await c.var.db
           .selectFrom('member')
-          .select(['id'])
-          .where('workspace_id', '=', link.workspace_id)
-          .where('account_id', '=', account.id)
-          .where('id', '!=', link.member_id)
+          .leftJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+          .select(['member.id', 'member.provider_identity_id'])
+          .where('member.workspace_id', '=', link.workspace_id)
+          .where('member.id', '!=', link.member_id)
+          .where((eb) =>
+            eb.or([
+              eb('member.account_id', '=', account.id),
+              eb('provider_identity.account_id', '=', account.id),
+            ]),
+          )
           .executeTakeFirst()
         if (duplicate && !body.disconnectExistingAccount)
           return c.json(
@@ -177,7 +186,23 @@ export const api = new Hono<{
             },
             409,
           )
-        if (duplicate && body.disconnectExistingAccount)
+        if (duplicate && body.disconnectExistingAccount) {
+          const duplicateIdentities = await c.var.db
+            .selectFrom('member')
+            .leftJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+            .select('member.provider_identity_id')
+            .where('member.workspace_id', '=', link.workspace_id)
+            .where('member.id', '!=', link.member_id)
+            .where((eb) =>
+              eb.or([
+                eb('member.account_id', '=', account.id),
+                eb('provider_identity.account_id', '=', account.id),
+              ]),
+            )
+            .execute()
+          const duplicateIdentityIds = duplicateIdentities
+            .map((row) => row.provider_identity_id)
+            .filter((id) => id !== null)
           await c.var.db
             .updateTable('member')
             .set({ account_id: null, updated_at: now })
@@ -185,6 +210,13 @@ export const api = new Hono<{
             .where('account_id', '=', account.id)
             .where('id', '!=', link.member_id)
             .execute()
+          if (duplicateIdentityIds.length)
+            await c.var.db
+              .updateTable('provider_identity')
+              .set({ account_id: null, updated_at: now })
+              .where('id', 'in', duplicateIdentityIds)
+              .execute()
+        }
 
         await c.var.db
           .deleteFrom('access_key')
@@ -220,9 +252,18 @@ export const api = new Hono<{
             updated_at: now,
           })
           .execute()
+        const identity = await ProviderIdentity.ensureForMember(c.var.db, {
+          accountId: account.id,
+          displayName: null,
+          memberId: link.member_id,
+          provider: link.workspace_provider,
+          providerUserId: link.member_provider_user_id,
+          providerWorkspaceId: link.provider_id,
+          realName: null,
+        })
         await c.var.db
           .updateTable('member')
-          .set({ account_id: account.id, updated_at: now })
+          .set({ account_id: account.id, provider_identity_id: identity.id, updated_at: now })
           .where('id', '=', link.member_id)
           .execute()
         await c.var.db
@@ -574,6 +615,11 @@ export const api = new Hono<{
       ?.includes('application/x-www-form-urlencoded')
       ? new URLSearchParams(body)
       : null
+    c.executionCtx.waitUntil(
+      logSlackConnectDebug(c.env, body, params).catch((error) => {
+        console.error('Failed to log Slack Connect debug fields:', error)
+      }),
+    )
     const duplicateKey = (() => {
       // Dedupe Slack block action retries before they can repeat side effects like
       // opening modals, deleting messages, or posting admin-denied notices.
@@ -868,3 +914,185 @@ export const api = new Hono<{
     await c.env.DB.prepare('SELECT 1').first()
     return c.json({ ok: true })
   })
+
+async function logSlackConnectDebug(env: Env, body: string, params: URLSearchParams | null) {
+  if (env.SLACK_CONNECT_DEBUG !== '1') return
+
+  if (params?.has('command') && !params.has('payload')) {
+    await logSlackConnectCommandDebug(env, params)
+    return
+  }
+  if (params) return
+
+  let payload: unknown
+  try {
+    payload = JSON.parse(body)
+  } catch {
+    return
+  }
+  const parsed = z
+    .object({
+      authorizations: z
+        .array(
+          z
+            .object({
+              enterprise_id: z.string().nullable().optional(),
+              is_bot: z.boolean().optional(),
+              is_enterprise_install: z.boolean().optional(),
+              team_id: z.string().nullable().optional(),
+              user_id: z.string().nullable().optional(),
+            })
+            .passthrough(),
+        )
+        .optional(),
+      context_enterprise_id: z.string().nullable().optional(),
+      context_team_id: z.string().nullable().optional(),
+      event: z
+        .object({
+          channel: z.string().optional(),
+          item: z.object({ channel: z.string().optional() }).passthrough().optional(),
+          team: z.string().optional(),
+          team_id: z.string().optional(),
+          text: z.string().optional(),
+          type: z.string().optional(),
+          user: z.string().optional(),
+        })
+        .passthrough()
+        .optional(),
+      event_context: z.string().optional(),
+      event_id: z.string().optional(),
+      is_ext_shared_channel: z.boolean().optional(),
+      team_id: z.string().optional(),
+      type: z.string().optional(),
+    })
+    .passthrough()
+    .safeParse(payload)
+  if (!parsed.success || parsed.data.type !== 'event_callback') return
+  if (!parsed.data.is_ext_shared_channel) return
+
+  const mentionedUserIds = extractSlackMentionedUserIds(parsed.data.event?.text ?? '')
+  const teamId = parsed.data.team_id ?? parsed.data.context_team_id ?? parsed.data.event?.team_id
+  console.info(
+    JSON.stringify({
+      authorizations: parsed.data.authorizations?.map((authorization) => ({
+        enterprise_id: authorization.enterprise_id ?? null,
+        is_bot: authorization.is_bot ?? null,
+        is_enterprise_install: authorization.is_enterprise_install ?? null,
+        team_id: authorization.team_id ?? null,
+        user_id: authorization.user_id ?? null,
+      })),
+      context_enterprise_id: parsed.data.context_enterprise_id ?? null,
+      context_team_id: parsed.data.context_team_id ?? null,
+      event_channel_id: parsed.data.event?.channel ?? parsed.data.event?.item?.channel ?? null,
+      event_context: parsed.data.event_context ?? null,
+      event_id: parsed.data.event_id ?? null,
+      event_team_id: parsed.data.event?.team_id ?? parsed.data.event?.team ?? null,
+      event_type: parsed.data.event?.type ?? null,
+      is_ext_shared_channel: parsed.data.is_ext_shared_channel ?? null,
+      mentioned_user_ids: mentionedUserIds,
+      source: 'tipbot.slack_connect_debug',
+      team_id: parsed.data.team_id ?? null,
+      user_id: parsed.data.event?.user ?? null,
+      users_info: await getSlackConnectDebugUsersInfo(env, teamId, mentionedUserIds),
+    }),
+  )
+}
+
+async function logSlackConnectCommandDebug(env: Env, params: URLSearchParams) {
+  const teamId = params.get('team_id')
+  const channelId = params.get('channel_id')
+  if (!teamId || !channelId) return
+
+  await Chat.getChat().initialize()
+  const installation = await Chat.getSlack().getInstallation(teamId)
+  if (!installation) return
+
+  const conversation = await getSlackConnectDebugConversation(env, installation.botToken, channelId)
+  if (!conversation?.is_ext_shared) return
+  const mentionedUserIds = extractSlackMentionedUserIds(params.get('text') ?? '')
+  console.info(
+    JSON.stringify({
+      channel_id: channelId,
+      command: params.get('command'),
+      is_ext_shared_channel: true,
+      mentioned_user_ids: mentionedUserIds,
+      source: 'tipbot.slack_connect_debug',
+      team_id: teamId,
+      user_id: params.get('user_id'),
+      users_info: await getSlackConnectDebugUsersInfo(env, teamId, mentionedUserIds),
+    }),
+  )
+}
+
+async function getSlackConnectDebugConversation(env: Env, botToken: string, channelId: string) {
+  const body = new URLSearchParams()
+  body.set('channel', channelId)
+  const response = await Chat.getSlack().withBotToken(botToken, () =>
+    fetch(`${env.SLACK_API_URL}/conversations.info`, {
+      body,
+      headers: { authorization: `Bearer ${botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      channel: z.object({ is_ext_shared: z.boolean().optional() }).optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok) return null
+  return json.channel ?? null
+}
+
+async function getSlackConnectDebugUsersInfo(
+  env: Env,
+  teamId: string | undefined,
+  userIds: string[],
+) {
+  if (!teamId || userIds.length === 0) return []
+  await Chat.getChat().initialize()
+  const installation = await Chat.getSlack().getInstallation(teamId)
+  if (!installation) return []
+  return await Promise.all(
+    userIds.map(async (userId) => {
+      const body = new URLSearchParams()
+      body.set('user', userId)
+      const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
+        fetch(`${env.SLACK_API_URL}/users.info`, {
+          body,
+          headers: { authorization: `Bearer ${installation.botToken}` },
+          method: 'POST',
+        }),
+      )
+      const json = z.parse(
+        z.object({
+          error: z.string().optional(),
+          ok: z.boolean().optional(),
+          user: z
+            .object({
+              enterprise_user: z.unknown().optional(),
+              id: z.string().optional(),
+              is_stranger: z.boolean().optional(),
+              team_id: z.string().optional(),
+            })
+            .passthrough()
+            .optional(),
+        }),
+        await response.json(),
+      )
+      return {
+        error: json.ok ? null : (json.error ?? null),
+        id: json.user?.id ?? userId,
+        is_stranger: json.user?.is_stranger ?? null,
+        ok: Boolean(json.ok),
+        team_id: json.user?.team_id ?? null,
+        enterprise_user: json.user?.enterprise_user ?? null,
+      }
+    }),
+  )
+}
+
+function extractSlackMentionedUserIds(text: string) {
+  return [...new Set([...text.matchAll(/<@([A-Z0-9_]+)(?:\|[^>]+)?>/g)].map((match) => match[1]!))]
+}

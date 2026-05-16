@@ -423,7 +423,31 @@ export async function confirmTipRequest(
 }
 
 async function getConnectedMember(db: DB.Type, workspaceId: string, providerUserId: string) {
-  return await db
+  const identityMember = await db
+    .selectFrom('member')
+    .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .innerJoin('account', 'account.id', 'provider_identity.account_id')
+    .select([
+      'account.address as account_address',
+      'account.created_at as account_created_at',
+      'account.id as account_id',
+      'account.updated_at as account_updated_at',
+      'member.account_id as member_account_id',
+      'member.created_at as member_created_at',
+      'member.id as member_id',
+      'member.login',
+      'member.name',
+      'member.provider_identity_id',
+      'member.provider_user_id',
+      'member.updated_at as member_updated_at',
+      'member.workspace_id',
+    ])
+    .where('member.workspace_id', '=', workspaceId)
+    .where('member.provider_user_id', '=', providerUserId)
+    .executeTakeFirst()
+  if (identityMember) return connectedMemberFromRow(identityMember)
+
+  const member = await db
     .selectFrom('member')
     .innerJoin('account', 'account.id', 'member.account_id')
     .select([
@@ -436,6 +460,7 @@ async function getConnectedMember(db: DB.Type, workspaceId: string, providerUser
       'member.id as member_id',
       'member.login',
       'member.name',
+      'member.provider_identity_id',
       'member.provider_user_id',
       'member.updated_at as member_updated_at',
       'member.workspace_id',
@@ -443,31 +468,46 @@ async function getConnectedMember(db: DB.Type, workspaceId: string, providerUser
     .where('member.workspace_id', '=', workspaceId)
     .where('member.provider_user_id', '=', providerUserId)
     .executeTakeFirst()
-    .then((row) =>
-      row
-        ? {
-            account: {
-              address: row.account_address,
-              created_at: row.account_created_at,
-              id: row.account_id,
-              updated_at: row.account_updated_at,
-            },
-            member: {
-              account_id: row.member_account_id,
-              created_at: row.member_created_at,
-              id: row.member_id,
-              login: row.login,
-              name: row.name,
-              provider_user_id: row.provider_user_id,
-              updated_at: row.member_updated_at,
-              workspace_id: row.workspace_id,
-            },
-          }
-        : null,
-    )
+  return member ? connectedMemberFromRow(member) : null
 }
 
 type ConnectedMember = NonNullable<Awaited<ReturnType<typeof getConnectedMember>>>
+
+function connectedMemberFromRow(row: {
+  account_address: string
+  account_created_at: string
+  account_id: string
+  account_updated_at: string
+  member_account_id: string | null
+  member_created_at: string
+  member_id: string
+  login: string | null
+  name: string | null
+  provider_identity_id: string | null
+  provider_user_id: string
+  member_updated_at: string
+  workspace_id: string
+}) {
+  return {
+    account: {
+      address: row.account_address,
+      created_at: row.account_created_at,
+      id: row.account_id,
+      updated_at: row.account_updated_at,
+    },
+    member: {
+      account_id: row.member_account_id ?? row.account_id,
+      created_at: row.member_created_at,
+      id: row.member_id,
+      login: row.login,
+      name: row.name,
+      provider_identity_id: row.provider_identity_id,
+      provider_user_id: row.provider_user_id,
+      updated_at: row.member_updated_at,
+      workspace_id: row.workspace_id,
+    },
+  }
+}
 
 async function getExistingTipResult(
   env: Env,

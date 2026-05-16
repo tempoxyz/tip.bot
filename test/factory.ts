@@ -118,7 +118,23 @@ const defaultConfig: Partial<{
       created_at: now,
       login: null,
       name: null,
+      provider_identity_id: null,
       provider_user_id: `U${Nanoid.generate()}`,
+      updated_at: now,
+    }
+  },
+  provider_identity() {
+    const now = new Date().toISOString()
+    return {
+      account_id: null,
+      created_at: now,
+      display_name: null,
+      metadata: null,
+      provider: 'slack',
+      provider_global_user_id: null,
+      provider_user_id: `U${Nanoid.generate()}`,
+      provider_workspace_id: `T${Nanoid.generate()}`,
+      real_name: null,
       updated_at: now,
     }
   },

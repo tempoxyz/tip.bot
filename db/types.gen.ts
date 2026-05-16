@@ -7,6 +7,7 @@ export interface DB {
   account: account
   account_link_token: account_link_token
   member: member
+  provider_identity: provider_identity
   reaction_tip: reaction_tip
   reaction_tip_thread: reaction_tip_thread
   tip: tip
@@ -57,9 +58,24 @@ type member = {
   id: string
   login: string | null
   name: string | null
+  provider_identity_id: string | null
   provider_user_id: string
   updated_at: k.Generated<string>
   workspace_id: string
+}
+
+type provider_identity = {
+  account_id: string | null
+  created_at: k.Generated<string>
+  display_name: string | null
+  id: string
+  metadata: string | null
+  provider: 'slack'
+  provider_global_user_id: string | null
+  provider_user_id: string
+  provider_workspace_id: string | null
+  real_name: string | null
+  updated_at: k.Generated<string>
 }
 
 type reaction_tip = {
@@ -128,6 +144,7 @@ export declare namespace DB {
   type account = k.Selectable<DB['account']>
   type account_link_token = k.Selectable<DB['account_link_token']>
   type member = k.Selectable<DB['member']>
+  type provider_identity = k.Selectable<DB['provider_identity']>
   type reaction_tip = k.Selectable<DB['reaction_tip']>
   type reaction_tip_thread = k.Selectable<DB['reaction_tip_thread']>
   type tip = k.Selectable<DB['tip']>
@@ -138,6 +155,7 @@ export declare namespace DB {
     type account = k.Insertable<DB['account']>
     type account_link_token = k.Insertable<DB['account_link_token']>
     type member = k.Insertable<DB['member']>
+    type provider_identity = k.Insertable<DB['provider_identity']>
     type reaction_tip = k.Insertable<DB['reaction_tip']>
     type reaction_tip_thread = k.Insertable<DB['reaction_tip_thread']>
     type tip = k.Insertable<DB['tip']>
@@ -149,6 +167,7 @@ export declare namespace DB {
     type account = k.Selectable<DB['account']>
     type account_link_token = k.Selectable<DB['account_link_token']>
     type member = k.Selectable<DB['member']>
+    type provider_identity = k.Selectable<DB['provider_identity']>
     type reaction_tip = k.Selectable<DB['reaction_tip']>
     type reaction_tip_thread = k.Selectable<DB['reaction_tip_thread']>
     type tip = k.Selectable<DB['tip']>
@@ -160,6 +179,7 @@ export declare namespace DB {
     type account = k.Updateable<DB['account']>
     type account_link_token = k.Updateable<DB['account_link_token']>
     type member = k.Updateable<DB['member']>
+    type provider_identity = k.Updateable<DB['provider_identity']>
     type reaction_tip = k.Updateable<DB['reaction_tip']>
     type reaction_tip_thread = k.Updateable<DB['reaction_tip_thread']>
     type tip = k.Updateable<DB['tip']>

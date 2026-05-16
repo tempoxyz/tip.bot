@@ -6,5 +6,6 @@ declare namespace Cloudflare {
     FEE_PAYER_PRIVATE_KEY_TESTNET: `0x${string}`
     RPC_URL_MAINNET?: string | undefined
     RPC_URL_TESTNET?: string | undefined
+    SLACK_CONNECT_DEBUG?: string | undefined
   }
 }

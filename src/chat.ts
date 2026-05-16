@@ -4,6 +4,7 @@ import * as AccountLink from '#/lib/accountLink.ts'
 import * as AccessKey from '#/lib/accessKey.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
+import * as ProviderIdentity from '#/lib/providerIdentity.ts'
 import * as Slack from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
@@ -452,12 +453,32 @@ const handlers = {
       .where('workspace_id', '=', workspace.id)
       .where('provider_user_id', '=', event.user.userId)
       .executeTakeFirst()
-    if (!member?.account_id) {
+    if (!member) {
+      await postPrivateReply(event, event.user, 'No account connected.')
+      return
+    }
+    const identity = await ProviderIdentity.ensureForMember(ctx.db, {
+      accountId: member.account_id,
+      displayName: member.login,
+      memberId: member.id,
+      provider: workspace.provider,
+      providerUserId: member.provider_user_id,
+      providerWorkspaceId: workspace.provider_id,
+      realName: member.name,
+    })
+    const accountId = identity.account_id ?? member.account_id
+    if (!accountId) {
       await postPrivateReply(event, event.user, 'No account connected.')
       return
     }
 
-    await ctx.db.deleteFrom('access_key').where('account_id', '=', member.account_id).execute()
+    await ctx.db.deleteFrom('access_key').where('account_id', '=', accountId).execute()
+    if (identity)
+      await ctx.db
+        .updateTable('provider_identity')
+        .set({ account_id: null, updated_at: new Date().toISOString() })
+        .where('id', '=', identity.id)
+        .execute()
     await ctx.db
       .updateTable('member')
       .set({ account_id: null, updated_at: new Date().toISOString() })
@@ -684,7 +705,15 @@ const handlers = {
 
     const member = await ctx.db
       .selectFrom('member')
-      .innerJoin('account', 'account.id', 'member.account_id')
+      .leftJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+      .innerJoin('account', (join) =>
+        join.on((eb) =>
+          eb.or([
+            eb('account.id', '=', eb.ref('provider_identity.account_id')),
+            eb('account.id', '=', eb.ref('member.account_id')),
+          ]),
+        ),
+      )
       .select('account.address as account_address')
       .where('member.workspace_id', '=', workspace.id)
       .where('member.provider_user_id', '=', event.user.userId)
@@ -732,6 +761,7 @@ const handlers = {
       return
     }
 
+    // TODO: Add cross-workspace/global stats once Slack Connect payments are enabled.
     const received = await ctx.db
       .selectFrom('tip')
       .select([
@@ -1534,10 +1564,16 @@ function getProvider(event: chat.SlashCommandEvent): ProviderContext {
 async function getConnectedSlackMember(db: DB.Type, workspaceId: string, providerUserId: string) {
   const member = await db
     .selectFrom('member')
-    .select(['id', 'provider_user_id'])
+    .leftJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .select(['member.id', 'member.provider_user_id'])
     .where('workspace_id', '=', workspaceId)
-    .where('provider_user_id', '=', providerUserId)
-    .where('account_id', 'is not', null)
+    .where('member.provider_user_id', '=', providerUserId)
+    .where((eb) =>
+      eb.or([
+        eb('member.account_id', 'is not', null),
+        eb('provider_identity.account_id', 'is not', null),
+      ]),
+    )
     .executeTakeFirst()
   if (!member) return null
   return { memberId: member.id, providerUserId: member.provider_user_id }
@@ -2004,11 +2040,22 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
       .executeTakeFirstOrThrow()
   }
 
-  if (member.account_id) {
+  const identity = await ProviderIdentity.ensureForMember(ctx.db, {
+    accountId: member.account_id,
+    displayName: member.login,
+    memberId: member.id,
+    provider: workspace.provider,
+    providerUserId: member.provider_user_id,
+    providerWorkspaceId: workspace.provider_id,
+    realName: member.name,
+  })
+  const accountId = identity.account_id ?? member.account_id
+
+  if (accountId) {
     const accessKeys = await ctx.db
       .selectFrom('access_key')
       .select(['id', 'token_address'])
-      .where('account_id', '=', member.account_id)
+      .where('account_id', '=', accountId)
       .where('chain_id', '=', workspace.chain_id)
       .where('expires_at', '>', new Date().toISOString())
       .where('revoked_at', 'is', null)
@@ -2028,10 +2075,10 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
   const now = new Date()
   const token = Nanoid.generate()
   const accessKey = AccessKey.generate()
-  const linkButtonLabel = member.account_id ? 'Refresh connection' : 'Connect to Tipbot'
+  const linkButtonLabel = accountId ? 'Refresh connection' : 'Connect to Tipbot'
   const linkDescription = 'Link expires in 10 minutes.'
   const linkUrl = `https://${env.HOST}/connect/${token}`
-  const linkText = `${member.account_id ? 'Refresh Tipbot connection' : 'Connect to Tipbot'}: ${linkUrl}\n${linkDescription}`
+  const linkText = `${accountId ? 'Refresh Tipbot connection' : 'Connect to Tipbot'}: ${linkUrl}\n${linkDescription}`
   const linkExpiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString() // 10 minutes
   const accessKeyExpiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
   await ctx.db
@@ -2259,7 +2306,15 @@ async function canManageSlackWorkspaceSettings(providerId: string, providerUserI
   const member = await DB.create(env.DB)
     .selectFrom('workspace')
     .innerJoin('member', 'member.workspace_id', 'workspace.id')
-    .innerJoin('account', 'account.id', 'member.account_id')
+    .leftJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .innerJoin('account', (join) =>
+      join.on((eb) =>
+        eb.or([
+          eb('account.id', '=', eb.ref('provider_identity.account_id')),
+          eb('account.id', '=', eb.ref('member.account_id')),
+        ]),
+      ),
+    )
     .select('member.id')
     .where('workspace.provider', '=', 'slack')
     .where('workspace.provider_id', '=', providerId)
