@@ -123,7 +123,7 @@ export function getChat() {
     if (!context) return
     await handleSlackReactionTip(reaction, context)
   })
-  bot.onSlashCommand('/tip', async (event) => {
+  bot.onSlashCommand(env.SLACK_COMMAND, async (event) => {
     if (event.adapter !== getSlack()) throw new Error('Provider not implemented yet.')
 
     const context = {
@@ -401,27 +401,27 @@ const handlers = {
       .executeTakeFirst()
 
     const commandRows = [
-      ['/tip @account [amount] [token] [for memo]', 'Send payment'],
-      ['/tip config', 'Manage workspace configuration'],
-      ['/tip connect', 'Connect to Tipbot'],
-      ['/tip disconnect', 'Disconnect from Tipbot'],
-      ['/tip help', 'Show help message'],
-      ['/tip leaderboard', 'Show top tippers and recipients'],
-      ['/tip stats', 'Show your tip stats'],
-      ['/tip status', 'Check connection status'],
+      [`${env.SLACK_COMMAND} @account [amount] [token] [for memo]`, 'Send payment'],
+      [`${env.SLACK_COMMAND} config`, 'Manage workspace configuration'],
+      [`${env.SLACK_COMMAND} connect`, 'Connect to Tipbot'],
+      [`${env.SLACK_COMMAND} disconnect`, 'Disconnect from Tipbot'],
+      [`${env.SLACK_COMMAND} help`, 'Show help message'],
+      [`${env.SLACK_COMMAND} leaderboard`, 'Show top tippers and recipients'],
+      [`${env.SLACK_COMMAND} stats`, 'Show your tip stats'],
+      [`${env.SLACK_COMMAND} status`, 'Check connection status'],
     ]
     const paymentExampleRows = [
-      ['/tip @account', 'Send default amount'],
-      ['/tip @account for coffee', 'Send default amount with memo'],
-      ['/tip @account 0.005', 'Send custom amount'],
-      ['/tip @account 0.005 for coffee', 'Send custom amount with memo'],
-      ['/tip @account 0.005 USDC', 'Send custom token'],
-      ['/tip @account 0.005 USDC for coffee', 'Send custom token with memo'],
+      [`${env.SLACK_COMMAND} @account`, 'Send default amount'],
+      [`${env.SLACK_COMMAND} @account for coffee`, 'Send default amount with memo'],
+      [`${env.SLACK_COMMAND} @account 0.005`, 'Send custom amount'],
+      [`${env.SLACK_COMMAND} @account 0.005 for coffee`, 'Send custom amount with memo'],
+      [`${env.SLACK_COMMAND} @account 0.005 USDC`, 'Send custom token'],
+      [`${env.SLACK_COMMAND} @account 0.005 USDC for coffee`, 'Send custom token with memo'],
     ]
     const mentionExampleRows = [
-      ['@Tipbot @account', 'Send default amount'],
-      ['@Tipbot @account for coffee', 'Send default amount with memo'],
-      ['@Tipbot @account 0.005 for coffee', 'Send custom amount with memo'],
+      [`@${env.SLACK_BOT_DISPLAY_NAME} @account`, 'Send default amount'],
+      [`@${env.SLACK_BOT_DISPLAY_NAME} @account for coffee`, 'Send default amount with memo'],
+      [`@${env.SLACK_BOT_DISPLAY_NAME} @account 0.005 for coffee`, 'Send custom amount with memo'],
       [
         `[emoji] :${workspace?.reaction_tip_emoji ?? 'money_with_wings'}:`,
         'Send default amount by reacting to a message',
@@ -1224,7 +1224,7 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
       provider.id,
       event.item.channel,
       event.user,
-      'Payment not sent. Connect to Tipbot with `/tip connect` and try again.',
+      `Payment not sent. Connect to Tipbot with \`${env.SLACK_COMMAND} connect\` and try again.`,
     )
     return
   }
@@ -1716,8 +1716,8 @@ async function postInvalidUsage(
   body.set(
     'text',
     options.mention
-      ? 'Invalid `@Tipbot` usage. Try `@Tipbot @account for coffee` or `@Tipbot @account 0.005 for coffee`.'
-      : 'Invalid `/tip` usage. Try `/tip @account` or `/tip help` for more info.',
+      ? `Invalid \`@${env.SLACK_BOT_DISPLAY_NAME}\` usage. Try \`@${env.SLACK_BOT_DISPLAY_NAME} @account for coffee\` or \`@${env.SLACK_BOT_DISPLAY_NAME} @account 0.005 for coffee\`.`
+      : `Invalid \`${env.SLACK_COMMAND}\` usage. Try \`${env.SLACK_COMMAND} @account\` or \`${env.SLACK_COMMAND} help\` for more info.`,
   )
   if (options.threadTs) body.set('thread_ts', options.threadTs)
   await postSlackPrivateReply(
@@ -1770,11 +1770,12 @@ async function generateInvalidMentionReply(mentionText: string) {
   const isThanksText = /^(thank you|thanks|ty|thx|thank u)\b/i.test(text)
   const fallback = (() => {
     if (creatureMatch && isTipText)
-      return `${creatureMatch[0].toUpperCase()}? Excellent. For tips: \`@Tipbot @account for coffee\`.`
+      return `${creatureMatch[0].toUpperCase()}? Excellent. For tips: \`@${env.SLACK_BOT_DISPLAY_NAME} @account for coffee\`.`
     if (creatureMatch) return `${creatureMatch[0].toUpperCase()}? Now we are talking.`
     if (isThanksText) return 'Anytime.'
-    if (isSetupText) return 'Run `/tip connect`, then try `@Tipbot tip @account`.'
-    if (isTipText) return 'Almost. Try `@Tipbot @account for coffee`.'
+    if (isSetupText)
+      return `Run \`${env.SLACK_COMMAND} connect\`, then try \`@${env.SLACK_BOT_DISPLAY_NAME} tip @account\`.`
+    if (isTipText) return `Almost. Try \`@${env.SLACK_BOT_DISPLAY_NAME} @account for coffee\`.`
     return 'Anytime.'
   })()
   try {
@@ -1785,8 +1786,7 @@ async function generateInvalidMentionReply(mentionText: string) {
           max_tokens: 48,
           messages: [
             {
-              content:
-                'You are Tipbot in Slack. Reply to an invalid @Tipbot mention. Keep it under 140 chars. Be short and pithy. Do not mention users. If the user mentions goblins or other creatures, get REALLY EXCITED. If the user seems to be trying to send a tip/payment, include this exact syntax: `@Tipbot @account for coffee`. Otherwise just acknowledge or deflect lightly.',
+              content: `You are ${env.SLACK_BOT_DISPLAY_NAME} in Slack. Reply to an invalid @${env.SLACK_BOT_DISPLAY_NAME} mention. Keep it under 140 chars. Be short and pithy. Do not mention users. If the user mentions goblins or other creatures, get REALLY EXCITED. If the user seems to be trying to send a tip/payment, include this exact syntax: \`@${env.SLACK_BOT_DISPLAY_NAME} @account for coffee\`. Otherwise just acknowledge or deflect lightly.`,
               role: 'system',
             },
             { content: text || '(empty mention)', role: 'user' },
@@ -1806,7 +1806,8 @@ async function generateInvalidMentionReply(mentionText: string) {
 function isValidInvalidMentionAiReply(value: string) {
   if (!value || value.length > 200) return false
   if (/^@?tipbot[.!?]?$/i.test(value)) return false
-  if (/@Tipbot|<@[A-Z0-9_]+/i.test(value)) return false
+  if (value.includes(`@${env.SLACK_BOT_DISPLAY_NAME}`) || /@Tipbot|<@[A-Z0-9_]+/i.test(value))
+    return false
   return true
 }
 
@@ -1815,8 +1816,8 @@ async function postSlackIntroduction(event: TipEvent, ctx: HandlerContext, threa
   if (!installation) throw new Error('Tibot app not installed for this workspace.')
 
   const text =
-    'I’m Tipbot: sometime tipper, sometime messenger, always bot.\n' +
-    'Connect with `/tip connect`, then send stablecoins with `@Tipbot @account for coffee`, `@Tipbot @account 0.005 for coffee`, `/tip @account for coffee`, or a 💸 reaction.'
+    `I’m ${env.SLACK_BOT_DISPLAY_NAME}: sometime tipper, sometime messenger, always bot.\n` +
+    `Connect with \`${env.SLACK_COMMAND} connect\`, then send stablecoins with \`@${env.SLACK_BOT_DISPLAY_NAME} @account for coffee\`, \`@${env.SLACK_BOT_DISPLAY_NAME} @account 0.005 for coffee\`, \`${env.SLACK_COMMAND} @account for coffee\`, or a 💸 reaction.`
   const body = new URLSearchParams()
   body.set('channel', event.channel.id.replace(/^slack:/, ''))
   body.set('text', text)

@@ -1,0 +1,120 @@
+name: Preview Destroy
+
+on:
+  pull_request:
+    types: [closed, converted_to_draft]
+
+concurrency:
+  group: slack-preview-ci
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+env:
+  PREVIEW_APEX: pr${{ github.event.pull_request.number }}
+  PREVIEW_HOST: pr${{ github.event.pull_request.number }}.tip.bot
+  PREVIEW_NAME: tipbot-pr${{ github.event.pull_request.number }}
+  WRANGLER_SEND_METRICS: false
+
+jobs:
+  destroy:
+    name: Destroy
+    if: contains(fromJSON('["COLLABORATOR", "MEMBER", "OWNER"]'), github.event.pull_request.author_association)
+    runs-on: ubuntu-latest
+    environment: preview
+    steps:
+      - name: Read preview state
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BODY=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" --paginate --slurp | jq -r 'map(.[] | select(.body | contains("tipbot-preview"))) | first | .body // ""')
+          node - "$BODY" <<'NODE' >> "$GITHUB_OUTPUT"
+          const body = process.argv[2] || ''
+          const match = body.match(/<!-- tipbot-preview: (.*?) -->/)
+          if (!match) process.exit(0)
+          const state = JSON.parse(match[1])
+          if (state.d1_id) console.log(`d1_id=${state.d1_id}`)
+          if (state.slack_app_id) console.log(`slack_app_id=${state.slack_app_id}`)
+          NODE
+
+      - name: Setup Slack config token
+        id: slack_token
+        env:
+          GH_TOKEN: ${{ secrets.PREVIEW_GITHUB_TOKEN }}
+          SLACK_CONFIG_REFRESH_TOKEN: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
+          SLACK_CONFIG_TOKEN: ${{ secrets.SLACK_CONFIG_TOKEN }}
+        run: |
+          if [ -n "$SLACK_CONFIG_TOKEN" ]; then
+            echo "::add-mask::$SLACK_CONFIG_TOKEN"
+            echo "token=$SLACK_CONFIG_TOKEN" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh api "repos/${{ github.repository }}/environments/preview/secrets/public-key" > /dev/null
+          RESPONSE=$(curl -fsS -X POST https://slack.com/api/tooling.tokens.rotate \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "refresh_token=${SLACK_CONFIG_REFRESH_TOKEN}")
+          OK=$(echo "$RESPONSE" | jq -r '.ok')
+          if [ "$OK" != "true" ]; then
+            echo "$RESPONSE" | jq '{ok,error,errors}'
+            exit 1
+          fi
+          TOKEN=$(echo "$RESPONSE" | jq -r '.token')
+          REFRESH_TOKEN=$(echo "$RESPONSE" | jq -r '.refresh_token')
+          echo "::add-mask::$TOKEN"
+          echo "::add-mask::$REFRESH_TOKEN"
+          gh secret set SLACK_CONFIG_REFRESH_TOKEN --env preview --body "$REFRESH_TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Delete Slack preview app
+        if: steps.state.outputs.slack_app_id != ''
+        env:
+          SLACK_CONFIG_TOKEN: ${{ steps.slack_token.outputs.token }}
+        run: |
+          RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.delete \
+            -H "Authorization: Bearer ${SLACK_CONFIG_TOKEN}" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d '{"app_id":"${{ steps.state.outputs.slack_app_id }}"}')
+          OK=$(echo "$RESPONSE" | jq -r '.ok')
+          if [ "$OK" != "true" ]; then echo "$RESPONSE" | jq '{ok,error,errors}'; fi
+
+      - name: Delete preview Worker
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          curl -fsS -X DELETE \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${PREVIEW_NAME}?force=true" \
+            || true
+
+      - name: Delete preview D1
+        if: steps.state.outputs.d1_id != ''
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          curl -fsS -X DELETE \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${{ steps.state.outputs.d1_id }}" \
+            || true
+
+      - name: Update preview comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA_SHORT=$(echo "${{ github.event.pull_request.head.sha }}" | cut -c1-7)
+          UPDATED=$(date -u +"%b %-d, %Y, %-I:%M %p")
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BODY=$(printf '%s\n\n%s\n%s\n%s' \
+            "The latest Tipbot preview deployment for ${SHA_SHORT}" \
+            "| Name | Status | Preview | Updated (UTC) |" \
+            "| :--- | :----- | :------ | :------------ |" \
+            "| ${PREVIEW_APEX} | [![Shut Down](https://vercel.com/static/status/canceled.svg) Shut Down](${RUN_URL}) | [${PREVIEW_HOST}](https://${PREVIEW_HOST}) | ${UPDATED} |")
+          COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" --paginate --jq '.[] | select(.body | contains("tipbot-preview") or contains("Tipbot preview deployment")) | .id' | head -1)
+          if [ -n "$COMMENT_ID" ]; then
+            gh api "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}" -X PATCH -f body="$BODY"
+          fi

@@ -53,7 +53,10 @@ export default defineConfig({
           __ORIGIN__: process.env.PLAYWRIGHT
             ? `(typeof window !== 'undefined' ? window.location.origin : 'https://${host}')`
             : JSON.stringify(`https://${host}`),
+          __SLACK_BOT_DISPLAY_NAME__: JSON.stringify(getWranglerVar('SLACK_BOT_DISPLAY_NAME')),
           __SLACK_APP_ID__: JSON.stringify(process.env.SLACK_APP_ID ?? ''),
+          __SLACK_COMMAND__: JSON.stringify(getWranglerVar('SLACK_COMMAND')),
+          __TIPBOT_IMAGE_PATH__: JSON.stringify(getWranglerVar('TIPBOT_IMAGE_PATH')),
         }
       })()
     : {},
@@ -161,7 +164,10 @@ export default defineConfig({
           __HOST__: JSON.stringify('tip.bot'),
           __ORIGIN__: JSON.stringify('https://tip.bot'),
           __PLAYWRIGHT_ACCOUNT_PRIVATE_KEY__: 'undefined',
+          __SLACK_BOT_DISPLAY_NAME__: JSON.stringify('Tipbot'),
           __SLACK_APP_ID__: JSON.stringify(''),
+          __SLACK_COMMAND__: JSON.stringify('/tip'),
+          __TIPBOT_IMAGE_PATH__: JSON.stringify('/tipbot.png'),
         },
         plugins: lazyPlugins(async () => {
           const { cloudflareTest } = await import('@cloudflare/vitest-pool-workers')

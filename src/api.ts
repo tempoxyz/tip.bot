@@ -258,12 +258,12 @@ export const api = new Hono<{
                       children: [
                         chat.CardText(`Connected \`${truncatedAddress}\` <${explorerUrl}|View>`),
                         chat.CardText(
-                          `Mention \`@Tipbot @user\` or use \`/tip @user\` to send a payment. React with :${link.reaction_tip_emoji}: to tip a message.`,
+                          `Mention \`@${c.env.SLACK_BOT_DISPLAY_NAME} @user\` or use \`${c.env.SLACK_COMMAND} @user\` to send a payment. React with :${link.reaction_tip_emoji}: to tip a message.`,
                           { style: 'muted' },
                         ),
                       ],
                     }),
-                    fallbackText: `Connected\nWallet: ${account.address}\nUse /tip @user to send your first tip.`,
+                    fallbackText: `Connected\nWallet: ${account.address}\nUse ${c.env.SLACK_COMMAND} @user to send your first tip.`,
                   },
                   { fallbackToDM: false },
                 ),

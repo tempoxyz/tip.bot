@@ -6,6 +6,8 @@ on:
 
 permissions:
   contents: read
+  issues: write
+  pull-requests: write
 
 env:
   WRANGLER_SEND_METRICS: false
@@ -14,3 +16,13 @@ jobs:
   check:
     name: Check
     uses: ./.github/workflows/check.yml
+
+  preview:
+    name: Preview
+    if: github.event.pull_request.draft == false && contains(fromJSON('["COLLABORATOR", "MEMBER", "OWNER"]'), github.event.pull_request.author_association)
+    needs: check
+    uses: ./.github/workflows/preview_deploy.yml
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+      sha: ${{ github.event.pull_request.head.sha }}
+    secrets: inherit

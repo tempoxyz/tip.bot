@@ -5,7 +5,7 @@ import '../styles.css'
 export const Route = createRootRoute({
   head() {
     return {
-      links: [{ rel: 'icon', href: '/tipbot.png', type: 'image/png' }],
+      links: [{ rel: 'icon', href: __TIPBOT_IMAGE_PATH__, type: 'image/png' }],
       meta: [
         { charSet: 'utf-8' },
         { name: 'viewport', content: 'width=device-width, initial-scale=1' },
