@@ -16,6 +16,7 @@ import { createSlackHeaders } from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as DB from '#db/client.ts'
 import * as Schema from '#db/schemas.gen.ts'
+import type { DB as DB_gen } from '#db/types.gen.ts'
 import * as Constants from '#test/constants.ts'
 import * as Factory from '#test/factory.ts'
 
@@ -262,7 +263,7 @@ describe('/api/account/link/:token', () => {
     const pending = await createPendingAccountLink()
     const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
     const account = await factory.account.insert({ address: root.address })
-    await Factory.insertMember(db, factory, {
+    await insertMember({
       account_id: account.id,
       provider_user_id: 'UOTHER',
       workspace_id: pending.workspace.id,
@@ -281,7 +282,7 @@ describe('/api/account/link/:token', () => {
     const pending = await createPendingAccountLink()
     const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
     const account = await factory.account.insert({ address: root.address })
-    const duplicate = await Factory.insertMember(db, factory, {
+    const duplicate = await insertMember({
       account_id: account.id,
       provider_user_id: 'UOTHER',
       workspace_id: pending.workspace.id,
@@ -808,7 +809,7 @@ async function createPendingAccountLink(
         .where('id', '=', options.workspaceId)
         .executeTakeFirstOrThrow()
     : await factory.workspace.insert({ provider_id: options.providerId ?? `T${Nanoid.generate()}` })
-  const member = await Factory.insertMember(db, factory, {
+  const member = await insertMember({
     provider_user_id: options.providerUserId ?? `U${Nanoid.generate()}`,
     workspace_id: workspace.id,
   })
@@ -848,12 +849,12 @@ async function createConfirmationToken(
   })
   const senderAccount = await findOrCreateAccount(senderRoot.address)
   const recipientAccount = await findOrCreateAccount(recipientRoot.address)
-  const senderMember = await Factory.insertMember(db, factory, {
+  const senderMember = await insertMember({
     account_id: senderAccount.id,
     provider_user_id: Constants.slack.adminUserId,
     workspace_id: workspace.id,
   })
-  const recipientMember = await Factory.insertMember(db, factory, {
+  const recipientMember = await insertMember({
     account_id: recipientAccount.id,
     provider_user_id: Constants.slack.memberUserId,
     workspace_id: workspace.id,
@@ -863,7 +864,7 @@ async function createConfirmationToken(
   ]
   for (const recipientProviderUserId of recipientProviderUserIds.slice(1)) {
     const account = await factory.account.insert({})
-    await Factory.insertMember(db, factory, {
+    await insertMember({
       account_id: account.id,
       provider_user_id: recipientProviderUserId,
       workspace_id: workspace.id,
@@ -1011,4 +1012,28 @@ async function signKeyAuthorization(
       pending.workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
     ),
   })
+}
+
+async function insertMember(
+  attrs: Partial<DB_gen.Insertable.member> & Pick<DB_gen.Insertable.member, 'workspace_id'>,
+) {
+  const member = factory.member.attrs(attrs as never)
+  if (member.provider_identity_id !== null) return await factory.member.insert(member)
+
+  const workspace = await db
+    .selectFrom('workspace')
+    .select(['provider', 'provider_id'])
+    .where('id', '=', member.workspace_id)
+    .executeTakeFirstOrThrow()
+  const identity = await factory.provider_identity.insert({
+    account_id: member.account_id,
+    created_at: member.created_at,
+    display_name: member.login,
+    provider: workspace.provider,
+    provider_user_id: member.provider_user_id,
+    provider_workspace_id: workspace.provider_id,
+    real_name: member.name,
+    updated_at: member.updated_at,
+  })
+  return await factory.member.insert({ ...member, provider_identity_id: identity.id })
 }

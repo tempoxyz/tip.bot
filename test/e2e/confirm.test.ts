@@ -1,7 +1,9 @@
+import type { Kysely } from 'kysely'
 import * as Confirmation from '#/lib/confirmation.ts'
 import * as Tempo from '#/lib/tempo.ts'
+import type { DB } from '#db/types.gen.ts'
 import { Account } from 'viem/tempo'
-import { insertMember } from '../factory.ts'
+import type * as Factory from '../factory.ts'
 import { expect, test } from './fixture.ts'
 
 test('visitor opens an expired confirmation link', async ({ app, page }) => {
@@ -340,3 +342,29 @@ test('slack member confirms multi-recipient one-time payment with wallet signatu
     Tempo.formatTxLink(Tempo.chainLookup.testnet, `0x${'3'.repeat(64)}`),
   )
 })
+
+async function insertMember(
+  db: Kysely<DB>,
+  factory: ReturnType<typeof Factory.create>,
+  attrs: Partial<DB.Insertable.member> & Pick<DB.Insertable.member, 'workspace_id'>,
+) {
+  const member = factory.member.attrs(attrs as never)
+  if (member.provider_identity_id !== null) return await factory.member.insert(member)
+
+  const workspace = await db
+    .selectFrom('workspace')
+    .select(['provider', 'provider_id'])
+    .where('id', '=', member.workspace_id)
+    .executeTakeFirstOrThrow()
+  const identity = await factory.provider_identity.insert({
+    account_id: member.account_id,
+    created_at: member.created_at,
+    display_name: member.login,
+    provider: workspace.provider,
+    provider_user_id: member.provider_user_id,
+    provider_workspace_id: workspace.provider_id,
+    real_name: member.name,
+    updated_at: member.updated_at,
+  })
+  return await factory.member.insert({ ...member, provider_identity_id: identity.id })
+}
