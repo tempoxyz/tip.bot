@@ -2,7 +2,7 @@ import * as DB from '#db/client.ts'
 import type { DB as DB_gen } from '#db/types.gen.ts'
 import { getSlackCommand } from '#/lib/app.ts'
 import { formatAmount, formatCurrencyAmount } from '#/lib/format.ts'
-import { getSlack } from '#/chat.ts'
+import { getChat, getSlack } from '#/chat.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import { sql } from 'kysely'
 import { Address } from 'ox'
@@ -21,6 +21,7 @@ const tokenLookup = [
 ] as const
 
 export async function publishHome(input: { env: Env; slackUserId: string; teamId: string }) {
+  await getChat().initialize()
   const installation = await getSlack().getInstallation(input.teamId)
   if (!installation) {
     console.warn('publishHome: no installation', { teamId: input.teamId })
