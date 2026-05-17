@@ -262,7 +262,7 @@ describe('/api/account/link/:token', () => {
     const pending = await createPendingAccountLink()
     const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
     const account = await factory.account.insert({ address: root.address })
-    await factory.member.insert({
+    await Factory.insertMember(db, factory, {
       account_id: account.id,
       provider_user_id: 'UOTHER',
       workspace_id: pending.workspace.id,
@@ -281,7 +281,7 @@ describe('/api/account/link/:token', () => {
     const pending = await createPendingAccountLink()
     const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
     const account = await factory.account.insert({ address: root.address })
-    const duplicate = await factory.member.insert({
+    const duplicate = await Factory.insertMember(db, factory, {
       account_id: account.id,
       provider_user_id: 'UOTHER',
       workspace_id: pending.workspace.id,
@@ -808,7 +808,7 @@ async function createPendingAccountLink(
         .where('id', '=', options.workspaceId)
         .executeTakeFirstOrThrow()
     : await factory.workspace.insert({ provider_id: options.providerId ?? `T${Nanoid.generate()}` })
-  const member = await factory.member.insert({
+  const member = await Factory.insertMember(db, factory, {
     provider_user_id: options.providerUserId ?? `U${Nanoid.generate()}`,
     workspace_id: workspace.id,
   })
@@ -848,12 +848,12 @@ async function createConfirmationToken(
   })
   const senderAccount = await findOrCreateAccount(senderRoot.address)
   const recipientAccount = await findOrCreateAccount(recipientRoot.address)
-  const senderMember = await factory.member.insert({
+  const senderMember = await Factory.insertMember(db, factory, {
     account_id: senderAccount.id,
     provider_user_id: Constants.slack.adminUserId,
     workspace_id: workspace.id,
   })
-  const recipientMember = await factory.member.insert({
+  const recipientMember = await Factory.insertMember(db, factory, {
     account_id: recipientAccount.id,
     provider_user_id: Constants.slack.memberUserId,
     workspace_id: workspace.id,
@@ -863,7 +863,7 @@ async function createConfirmationToken(
   ]
   for (const recipientProviderUserId of recipientProviderUserIds.slice(1)) {
     const account = await factory.account.insert({})
-    await factory.member.insert({
+    await Factory.insertMember(db, factory, {
       account_id: account.id,
       provider_user_id: recipientProviderUserId,
       workspace_id: workspace.id,

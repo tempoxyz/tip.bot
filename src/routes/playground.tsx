@@ -822,10 +822,11 @@ async function getAppState(search: Required<EmulateSearch>) {
 
   const members = await db
     .selectFrom('member')
-    .leftJoin('account', 'account.id', 'member.account_id')
+    .leftJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .leftJoin('account', 'account.id', 'provider_identity.account_id')
     .select([
       'account.address as account_address',
-      'member.account_id',
+      'provider_identity.account_id',
       'member.login',
       'member.name',
       'member.provider_user_id',

@@ -151,7 +151,7 @@ describe('/tip @account', () => {
       Account.fromSecp256k1('0x2222222222222222222222222222222222222222222222222222222222222222')
         .address,
     )
-    await factory.member.insert({
+    await Factory.insertMember(db, factory, {
       account_id: secondRecipientAccount.id,
       provider_user_id: unconnectedProviderUserId,
       workspace_id: accounts.workspace.id,
@@ -214,7 +214,7 @@ describe('/tip @account', () => {
       Account.fromSecp256k1('0x2222222222222222222222222222222222222222222222222222222222222222')
         .address,
     )
-    await factory.member.insert({
+    await Factory.insertMember(db, factory, {
       account_id: secondRecipientAccount.id,
       provider_user_id: unconnectedProviderUserId,
       workspace_id: accounts.workspace.id,
@@ -256,7 +256,7 @@ describe('/tip @account', () => {
       const account = await factory.account.insert({})
       const providerUserId = `U${String(index + 10).padStart(8, '0')}`
       recipients.push(providerUserId)
-      await factory.member.insert({
+      await Factory.insertMember(db, factory, {
         account_id: account.id,
         provider_user_id: providerUserId,
         workspace_id: accounts.workspace.id,
@@ -311,7 +311,7 @@ describe('/tip @account', () => {
       Account.fromSecp256k1('0x2222222222222222222222222222222222222222222222222222222222222222')
         .address,
     )
-    await factory.member.insert({
+    await Factory.insertMember(db, factory, {
       account_id: secondRecipientAccount.id,
       provider_user_id: unconnectedProviderUserId,
       workspace_id: accounts.workspace.id,
@@ -610,12 +610,12 @@ describe('/tip @account', () => {
       .executeTakeFirstOrThrow()
     const senderAccount = await factory.account.insert({})
     const recipientAccount = await factory.account.insert({})
-    const senderMember = await factory.member.insert({
+    const senderMember = await Factory.insertMember(db, factory, {
       account_id: senderAccount.id,
       provider_user_id: Constants.slack.adminUserId,
       workspace_id: workspace.id,
     })
-    const recipientMember = await factory.member.insert({
+    const recipientMember = await Factory.insertMember(db, factory, {
       account_id: recipientAccount.id,
       provider_user_id: Constants.slack.memberUserId,
       workspace_id: workspace.id,
@@ -647,12 +647,12 @@ describe('/tip @account', () => {
       .executeTakeFirstOrThrow()
     const senderAccount = await factory.account.insert({})
     const recipientAccount = await factory.account.insert({})
-    const senderMember = await factory.member.insert({
+    const senderMember = await Factory.insertMember(db, factory, {
       account_id: senderAccount.id,
       provider_user_id: Constants.slack.adminUserId,
       workspace_id: workspace.id,
     })
-    const recipientMember = await factory.member.insert({
+    const recipientMember = await Factory.insertMember(db, factory, {
       account_id: recipientAccount.id,
       provider_user_id: Constants.slack.memberUserId,
       workspace_id: workspace.id,
@@ -730,7 +730,7 @@ test('@Tipbot mention sends Slack Connect tip to recipient home workspace member
     name: Constants.slackConnect.teamName,
     provider_id: Constants.slackConnect.teamId,
   })
-  const connectMember = await factory.member.insert({
+  const connectMember = await Factory.insertMember(db, factory, {
     account_id: connected.recipientAccount.id,
     provider_user_id: Constants.slackConnect.userId,
     workspace_id: connectWorkspace.id,
@@ -1966,7 +1966,7 @@ describe('/tip config', () => {
     const account = await factory.account.insert({
       address: '0x00Ec0495bB6d03a32D75C460CA2f2a9E53654348',
     })
-    await factory.member.insert({
+    await Factory.insertMember(db, factory, {
       account_id: account.id,
       provider_user_id: Constants.slack.memberUserId,
       workspace_id: workspace.id,
@@ -2200,7 +2200,7 @@ describe('/tip connect', () => {
       .selectAll()
       .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
-    const member = await factory.member.insert({
+    const member = await Factory.insertMember(db, factory, {
       provider_user_id: Constants.slack.adminUserId,
       workspace_id: workspace.id,
     })
@@ -2231,7 +2231,7 @@ describe('/tip connect', () => {
       .selectAll()
       .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
-    await factory.member.insert({
+    await Factory.insertMember(db, factory, {
       account_id: account.id,
       provider_user_id: Constants.slack.adminUserId,
       workspace_id: workspace.id,
@@ -2252,7 +2252,7 @@ describe('/tip connect', () => {
       .selectAll()
       .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
-    await factory.member.insert({
+    await Factory.insertMember(db, factory, {
       account_id: account.id,
       provider_user_id: Constants.slack.adminUserId,
       workspace_id: workspace.id,
@@ -2284,7 +2284,7 @@ describe('/tip disconnect', () => {
       .selectAll()
       .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
-    const member = await factory.member.insert({
+    const member = await Factory.insertMember(db, factory, {
       account_id: account.id,
       provider_user_id: Constants.slack.adminUserId,
       workspace_id: workspace.id,
@@ -2317,7 +2317,7 @@ describe('/tip disconnect', () => {
       .selectAll()
       .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
-    const member = await factory.member.insert({
+    const member = await Factory.insertMember(db, factory, {
       account_id: account.id,
       provider_user_id: Constants.slack.adminUserId,
       workspace_id: workspace.id,
@@ -2422,22 +2422,22 @@ describe('/tip leaderboard', () => {
     const adminAccount = await factory.account.insert({})
     const memberAccount = await factory.account.insert({})
     const thirdAccount = await factory.account.insert({})
-    const adminMember = await factory.member.insert({
+    const adminMember = await Factory.insertMember(db, factory, {
       account_id: adminAccount.id,
       provider_user_id: Constants.slack.adminUserId,
       workspace_id: workspace.id,
     })
-    const memberMember = await factory.member.insert({
+    const memberMember = await Factory.insertMember(db, factory, {
       account_id: memberAccount.id,
       provider_user_id: Constants.slack.memberUserId,
       workspace_id: workspace.id,
     })
-    const thirdMember = await factory.member.insert({
+    const thirdMember = await Factory.insertMember(db, factory, {
       account_id: thirdAccount.id,
       provider_user_id: 'U000000003',
       workspace_id: workspace.id,
     })
-    const otherMember = await factory.member.insert({
+    const otherMember = await Factory.insertMember(db, factory, {
       account_id: thirdAccount.id,
       provider_user_id: 'U000000004',
       workspace_id: otherWorkspace.id,
@@ -2534,22 +2534,22 @@ describe('/tip stats', () => {
     const adminAccount = await factory.account.insert({})
     const memberAccount = await factory.account.insert({})
     const thirdAccount = await factory.account.insert({})
-    const adminMember = await factory.member.insert({
+    const adminMember = await Factory.insertMember(db, factory, {
       account_id: adminAccount.id,
       provider_user_id: Constants.slack.adminUserId,
       workspace_id: workspace.id,
     })
-    const memberMember = await factory.member.insert({
+    const memberMember = await Factory.insertMember(db, factory, {
       account_id: memberAccount.id,
       provider_user_id: Constants.slack.memberUserId,
       workspace_id: workspace.id,
     })
-    const thirdMember = await factory.member.insert({
+    const thirdMember = await Factory.insertMember(db, factory, {
       account_id: thirdAccount.id,
       provider_user_id: 'U000000003',
       workspace_id: workspace.id,
     })
-    const otherMember = await factory.member.insert({
+    const otherMember = await Factory.insertMember(db, factory, {
       account_id: thirdAccount.id,
       provider_user_id: 'U000000004',
       workspace_id: otherWorkspace.id,
@@ -2701,7 +2701,7 @@ describe('/tip balance', () => {
       .selectAll()
       .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
-    await factory.member.insert({
+    await Factory.insertMember(db, factory, {
       account_id: account.id,
       provider_user_id: Constants.slack.adminUserId,
       workspace_id: workspace.id,
@@ -2731,7 +2731,7 @@ describe('/tip balance', () => {
       .selectAll()
       .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
-    await factory.member.insert({
+    await Factory.insertMember(db, factory, {
       account_id: account.id,
       provider_user_id: Constants.slack.adminUserId,
       workspace_id: workspace.id,
@@ -2753,7 +2753,7 @@ describe('/tip status', () => {
       .selectAll()
       .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
-    await factory.member.insert({
+    await Factory.insertMember(db, factory, {
       account_id: account.id,
       provider_user_id: Constants.slack.adminUserId,
       workspace_id: workspace.id,
@@ -2775,7 +2775,7 @@ describe('/tip status', () => {
       .selectAll()
       .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
-    await factory.member.insert({
+    await Factory.insertMember(db, factory, {
       account_id: account.id,
       provider_user_id: Constants.slack.adminUserId,
       workspace_id: workspace.id,
@@ -2886,14 +2886,14 @@ async function connectTipAccounts(
   const recipientAccount = await findOrCreateAccount(recipientRoot.address)
 
   await db.deleteFrom('access_key').where('account_id', '=', senderAccount.id).execute()
-  const senderMember = await factory.member.insert({
+  const senderMember = await Factory.insertMember(db, factory, {
     account_id: senderAccount.id,
     provider_user_id: Constants.slack.adminUserId,
     workspace_id: workspace.id,
   })
   const recipientMember =
     (options.recipient ?? true)
-      ? await factory.member.insert({
+      ? await Factory.insertMember(db, factory, {
           account_id: recipientAccount.id,
           provider_user_id: Constants.slack.memberUserId,
           workspace_id: workspace.id,

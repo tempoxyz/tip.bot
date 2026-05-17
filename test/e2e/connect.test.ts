@@ -6,6 +6,7 @@ import { createSlackHeaders } from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import { Account } from 'viem/tempo'
 import * as Constants from '../constants.ts'
+import { insertMember } from '../factory.ts'
 import { expect, test } from './fixture.ts'
 
 test('visitor opens an expired connection link', async ({ app, page }) => {
@@ -16,10 +17,10 @@ test('visitor opens an expired connection link', async ({ app, page }) => {
   await expect(page.getByRole('button', { name: 'Connect' })).toBeHidden()
 })
 
-test('slack member opens valid connection link', async ({ app, factory, page }) => {
+test('slack member opens valid connection link', async ({ app, db, factory, page }) => {
   const token = crypto.randomUUID()
   const workspace = await factory.workspace.insert({ provider_id: `T${crypto.randomUUID()}` })
-  const member = await factory.member.insert({
+  const member = await insertMember(db, factory, {
     provider_user_id: `U${crypto.randomUUID()}`,
     workspace_id: workspace.id,
   })
@@ -58,7 +59,8 @@ test('slack member connects wallet from slack', async ({ app, db, page, request 
   const link = await db
     .selectFrom('account_link_token')
     .innerJoin('member', 'member.id', 'account_link_token.member_id')
-    .innerJoin('account', 'account.id', 'member.account_id')
+    .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .innerJoin('account', 'account.id', 'provider_identity.account_id')
     .select([
       'account.address as account_address',
       'account.id as account_id',
@@ -66,15 +68,15 @@ test('slack member connects wallet from slack', async ({ app, db, page, request 
       'account_link_token.access_key_authorization',
       'account_link_token.account_id as link_account_id',
       'account_link_token.used_at',
-      'member.account_id as member_account_id',
+      'provider_identity.account_id as identity_account_id',
     ])
     .where('account_link_token.token_hash', '=', await AccountLink.hashToken(app.env, token))
     .executeTakeFirstOrThrow()
 
   expect(link.account_address).toBe(root.address)
   expect(link.access_key_authorization).toEqual(expect.any(String))
+  expect(link.identity_account_id).toBe(link.account_id)
   expect(link.link_account_id).toBe(link.account_id)
-  expect(link.member_account_id).toBe(link.account_id)
   expect(link.used_at).toEqual(expect.any(String))
 
   await page.goto(app.url({ params: { token }, to: '/connect/$token' }))
@@ -100,7 +102,7 @@ test('slack member connects another link while wallet is already connected', asy
     chain_id: Tempo.chainLookup.localnet,
     provider_id: `T${crypto.randomUUID()}`,
   })
-  const member = await factory.member.insert({
+  const member = await insertMember(db, factory, {
     provider_user_id: `U${crypto.randomUUID()}`,
     workspace_id: workspace.id,
   })
@@ -175,7 +177,7 @@ test('slack member can disconnect an existing member and connect wallet', async 
     chain_id: Tempo.chainLookup.localnet,
     provider_id: `T${crypto.randomUUID()}`,
   })
-  const currentMember = await factory.member.insert({
+  const currentMember = await insertMember(db, factory, {
     provider_user_id: `U${crypto.randomUUID()}`,
     workspace_id: workspace.id,
   })
@@ -185,7 +187,7 @@ test('slack member can disconnect an existing member and connect wallet', async 
     .where('address', '=', root.address)
     .executeTakeFirst()
   const account = existingAccount ?? (await factory.account.insert({ address: root.address }))
-  const duplicateMember = await factory.member.insert({
+  const duplicateMember = await insertMember(db, factory, {
     account_id: account.id,
     provider_user_id: `U${crypto.randomUUID()}`,
     workspace_id: workspace.id,

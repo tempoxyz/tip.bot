@@ -55,6 +55,32 @@ export function create(db: Kysely<DB>): FactoryInstance {
   })
 }
 
+export async function insertMember(
+  db: Kysely<DB>,
+  factory: FactoryInstance,
+  attrs: Partial<Insertable<DB['member']>> & Pick<Insertable<DB['member']>, 'workspace_id'>,
+) {
+  const member = factory.member.attrs(attrs as never)
+  if (member.provider_identity_id !== null) return await factory.member.insert(member)
+
+  const workspace = await db
+    .selectFrom('workspace')
+    .select(['provider', 'provider_id'])
+    .where('id', '=', member.workspace_id)
+    .executeTakeFirstOrThrow()
+  const identity = await factory.provider_identity.insert({
+    account_id: member.account_id,
+    created_at: member.created_at,
+    display_name: member.login,
+    provider: workspace.provider,
+    provider_user_id: member.provider_user_id,
+    provider_workspace_id: workspace.provider_id,
+    real_name: member.name,
+    updated_at: member.updated_at,
+  })
+  return await factory.member.insert({ ...member, provider_identity_id: identity.id })
+}
+
 async function checkpoint(db: Kysely<DB>) {
   try {
     // Force WAL checkpoint so miniflare/D1 can see the changes
