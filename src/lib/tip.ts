@@ -67,9 +67,10 @@ export type TipBatchResult =
     }
   | Extract<TipResult, { ok: false }>
 
-type TipRecipientInput = {
+export type TipRecipientInput = {
   recipientProviderLabel?: string
   recipientProviderUserId: string
+  recipientProviderWorkspaceId?: string
 }
 
 export async function handleTipRequest(
@@ -84,6 +85,7 @@ export async function handleTipRequest(
     providerThreadId?: string
     recipientProviderLabel?: string
     recipientProviderUserId: string
+    recipientProviderWorkspaceId?: string
     senderProviderUserId: string
     tokenAddress?: string
   },
@@ -117,7 +119,10 @@ export async function handleTipRequest(
         .where('id', '=', id)
         .executeTakeFirstOrThrow()
     })())
-  if (input.senderProviderUserId === input.recipientProviderUserId)
+  if (
+    input.senderProviderUserId === input.recipientProviderUserId &&
+    (!input.recipientProviderWorkspaceId || input.recipientProviderWorkspaceId === input.providerId)
+  )
     return { code: 'self_tip', ok: false }
 
   const amount = input.amount ?? workspace.default_amount
@@ -136,7 +141,11 @@ export async function handleTipRequest(
 
   const sender = await getConnectedMember(db, workspace.id, input.senderProviderUserId)
   if (!sender) return { code: 'sender_unconnected', ok: false }
-  const recipient = await getConnectedMember(db, workspace.id, input.recipientProviderUserId)
+  const recipient = await getConnectedRecipient(db, workspace, input.provider, {
+    recipientProviderUserId: input.recipientProviderUserId,
+    recipientProviderWorkspaceId: input.recipientProviderWorkspaceId,
+  })
+  if (recipient?.account.id === sender.account.id) return { code: 'self_tip', ok: false }
   if (!recipient)
     return {
       code: 'recipient_unconnected',
@@ -249,7 +258,12 @@ export async function handleTipBatchRequest(
   if (input.recipients.length > 20)
     return { code: 'failed', message: 'Multi-tip supports up to 20 recipients.', ok: false }
   if (
-    recipients.some((recipient) => recipient.recipientProviderUserId === input.senderProviderUserId)
+    recipients.some(
+      (recipient) =>
+        recipient.recipientProviderUserId === input.senderProviderUserId &&
+        (!recipient.recipientProviderWorkspaceId ||
+          recipient.recipientProviderWorkspaceId === input.providerId),
+    )
   )
     return { code: 'self_tip', ok: false }
 
@@ -274,7 +288,8 @@ export async function handleTipBatchRequest(
   if (!sender) return { code: 'sender_unconnected', ok: false }
   const connectedRecipients = [] as ConnectedMember[]
   for (const recipient of recipients) {
-    const connected = await getConnectedMember(db, workspace.id, recipient.recipientProviderUserId)
+    const connected = await getConnectedRecipient(db, workspace, input.provider, recipient)
+    if (connected?.account.id === sender.account.id) return { code: 'self_tip', ok: false }
     if (!connected)
       return {
         code: 'recipient_unconnected',
@@ -327,6 +342,7 @@ export async function handleTipBatchRequest(
         providerThreadId: input.providerThreadId,
         recipientProviderLabel: recipients[0]?.recipientProviderLabel,
         recipientProviderUserId: recipients[0]!.recipientProviderUserId,
+        recipientProviderWorkspaceId: recipients[0]?.recipientProviderWorkspaceId,
         recipients,
         senderProviderUserId: input.senderProviderUserId,
       },
@@ -525,11 +541,12 @@ export async function getConfirmationTransactionRequest(env: Env, token: string)
     {
       recipientProviderLabel: payload.recipientProviderLabel,
       recipientProviderUserId: payload.recipientProviderUserId,
+      recipientProviderWorkspaceId: payload.recipientProviderWorkspaceId,
     },
   ]
   const connectedRecipients = [] as ConnectedMember[]
   for (const recipient of recipients) {
-    const connected = await getConnectedMember(db, workspace.id, recipient.recipientProviderUserId)
+    const connected = await getConnectedRecipient(db, workspace, payload.provider, recipient)
     if (!connected) throw new Error('Recipient needs to connect Tipbot before receiving payments.')
     connectedRecipients.push(connected)
   }
@@ -562,11 +579,12 @@ export async function confirmTipRequest(
     {
       recipientProviderLabel: payload.recipientProviderLabel,
       recipientProviderUserId: payload.recipientProviderUserId,
+      recipientProviderWorkspaceId: payload.recipientProviderWorkspaceId,
     },
   ]
   const connectedRecipients = [] as ConnectedMember[]
   for (const recipient of recipients) {
-    const connected = await getConnectedMember(db, workspace.id, recipient.recipientProviderUserId)
+    const connected = await getConnectedRecipient(db, workspace, payload.provider, recipient)
     if (!connected) throw new Error('Recipient needs to connect Tipbot before receiving payments.')
     connectedRecipients.push(connected)
   }
@@ -743,6 +761,25 @@ async function getConnectedMember(db: DB.Type, workspaceId: string, providerUser
     .where('member.provider_user_id', '=', providerUserId)
     .executeTakeFirst()
   return member ? connectedMemberFromRow(member) : null
+}
+
+async function getConnectedRecipient(
+  db: DB.Type,
+  workspace: Database.Selectable.workspace,
+  provider: Database.Selectable.workspace['provider'],
+  recipient: TipRecipientInput,
+) {
+  if (!recipient.recipientProviderWorkspaceId)
+    return await getConnectedMember(db, workspace.id, recipient.recipientProviderUserId)
+
+  const recipientWorkspace = await db
+    .selectFrom('workspace')
+    .select(['id'])
+    .where('provider', '=', provider)
+    .where('provider_id', '=', recipient.recipientProviderWorkspaceId)
+    .executeTakeFirst()
+  if (!recipientWorkspace) return null
+  return await getConnectedMember(db, recipientWorkspace.id, recipient.recipientProviderUserId)
 }
 
 type ConnectedMember = NonNullable<Awaited<ReturnType<typeof getConnectedMember>>>
@@ -925,6 +962,7 @@ async function createConfirmationRequired(
     providerThreadId?: string
     recipientProviderLabel?: string
     recipientProviderUserId: string
+    recipientProviderWorkspaceId?: string
     recipients?: TipRecipientInput[]
     senderProviderUserId: string
   },
@@ -960,6 +998,7 @@ async function createConfirmationRequired(
     providerThreadId: input.providerThreadId,
     recipientProviderLabel: input.recipientProviderLabel,
     recipientProviderUserId: input.recipientProviderUserId,
+    recipientProviderWorkspaceId: input.recipientProviderWorkspaceId,
     senderProviderUserId: input.senderProviderUserId,
     tokenAddress,
     ...(options.accessKeyLimit ? { accessKeyLimit: options.accessKeyLimit.toString() } : {}),

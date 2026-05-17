@@ -968,6 +968,109 @@ async function handleTipText(
     )
     return
   }
+  const recipients = await (async (): Promise<
+    { ok: true; value: Tip.TipRecipientInput[] } | { message: string; ok: false }
+  > => {
+    if (ctx.provider.type !== 'slack') return { ok: true, value: parsed.recipients }
+    const installation = await getSlack().getInstallation(ctx.provider.id)
+    if (!installation) return { ok: true, value: parsed.recipients }
+
+    const body = new URLSearchParams()
+    body.set('channel', event.channel.id.replace(/^slack:/, ''))
+    const response = await getSlack().withBotToken(installation.botToken, () =>
+      fetch(`${env.SLACK_API_URL}/conversations.info`, {
+        body,
+        headers: { authorization: `Bearer ${installation.botToken}` },
+        method: 'POST',
+      }),
+    )
+    const conversation = z.parse(
+      z.object({
+        channel: z
+          .object({
+            context_team_id: z.string().optional(),
+            is_ext_shared: z.boolean().optional(),
+            shared_team_ids: z.array(z.string()).optional(),
+          })
+          .optional(),
+        ok: z.boolean().optional(),
+      }),
+      await response.json(),
+    )
+    if (!conversation.ok || !conversation.channel?.is_ext_shared)
+      return { ok: true, value: parsed.recipients }
+
+    const tokenTeamIds = new Set(
+      [
+        ctx.provider.id,
+        conversation.channel.context_team_id,
+        ...(conversation.channel.shared_team_ids ?? []),
+      ].filter((teamId) => teamId !== undefined),
+    )
+    const value = [] as Tip.TipRecipientInput[]
+    for (const recipient of parsed.recipients) {
+      const candidates = [] as Array<{ providerUserId: string; providerWorkspaceId: string }>
+      for (const tokenTeamId of tokenTeamIds) {
+        const tokenInstallation = await getSlack().getInstallation(tokenTeamId)
+        if (!tokenInstallation) continue
+        const userBody = new URLSearchParams()
+        userBody.set('user', recipient.recipientProviderUserId)
+        const userResponse = await getSlack().withBotToken(tokenInstallation.botToken, () =>
+          fetch(`${env.SLACK_API_URL}/users.info`, {
+            body: userBody,
+            headers: { authorization: `Bearer ${tokenInstallation.botToken}` },
+            method: 'POST',
+          }),
+        )
+        const info = z.parse(
+          z.object({
+            ok: z.boolean().optional(),
+            user: z
+              .object({
+                id: z.string().optional(),
+                team_id: z.string().optional(),
+              })
+              .optional(),
+          }),
+          await userResponse.json(),
+        )
+        if (!info.ok || !info.user?.id || !info.user.team_id) continue
+        candidates.push({
+          providerUserId: info.user.id,
+          providerWorkspaceId: info.user.team_id,
+        })
+      }
+
+      const seen = new Set<string>()
+      const matches = [] as Array<{ providerUserId: string; providerWorkspaceId: string }>
+      for (const candidate of candidates) {
+        const key = `${candidate.providerWorkspaceId}:${candidate.providerUserId}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        const candidateWorkspace = await ctx.db
+          .selectFrom('workspace')
+          .select('id')
+          .where('provider', '=', 'slack')
+          .where('provider_id', '=', candidate.providerWorkspaceId)
+          .executeTakeFirst()
+        if (candidateWorkspace) matches.push(candidate)
+      }
+      if (matches.length !== 1)
+        return {
+          message:
+            matches.length === 0
+              ? `Payment not sent. <@${recipient.recipientProviderUserId}> needs to install or connect Tipbot in their Slack workspace before receiving Slack Connect payments.`
+              : `Payment not sent. <@${recipient.recipientProviderUserId}> could not be resolved safely across Slack workspaces.`,
+          ok: false,
+        }
+      value.push({ ...recipient, recipientProviderWorkspaceId: matches[0]!.providerWorkspaceId })
+    }
+    return { ok: true, value }
+  })()
+  if (!recipients.ok) {
+    await postPrivateReply(event, event.user, recipients.message)
+    return
+  }
 
   if (options.threadTs)
     void setSlackAssistantThreadStatus(event, ctx, options.threadTs, 'is sending a tip', {
@@ -986,8 +1089,9 @@ async function handleTipText(
             providerChannelId: event.channel.id,
             providerId: ctx.provider.id,
             providerThreadId: options.threadTs,
-            recipientProviderLabel: parsed.recipients[0]?.recipientProviderLabel,
-            recipientProviderUserId: parsed.recipients[0]!.recipientProviderUserId,
+            recipientProviderLabel: recipients.value[0]?.recipientProviderLabel,
+            recipientProviderUserId: recipients.value[0]!.recipientProviderUserId,
+            recipientProviderWorkspaceId: recipients.value[0]?.recipientProviderWorkspaceId,
             senderProviderUserId: event.user.userId,
             tokenAddress: tokenAddress ?? undefined,
           })
@@ -999,7 +1103,7 @@ async function handleTipText(
             providerChannelId: event.channel.id,
             providerId: ctx.provider.id,
             providerThreadId: options.threadTs,
-            recipients: parsed.recipients,
+            recipients: recipients.value,
             senderProviderUserId: event.user.userId,
             source: options.mention ? 'mention' : 'command',
             tokenAddress: tokenAddress ?? undefined,
@@ -1094,7 +1198,7 @@ async function handleTipText(
         if (result.code === 'self_tip')
           return 'Payment not sent. Cannot send a payment to yourself.'
         if (result.code === 'recipient_unconnected')
-          return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipients[0]!.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
+          return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? recipients.value[0]!.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
         if (result.code === 'pending') return 'Payment still sending.'
         if (result.code === 'insufficient_funds')
           return 'Payment not sent. Your wallet has insufficient funds.'
