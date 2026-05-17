@@ -707,12 +707,23 @@ export const api = new Hono<{
         return { slackUserId: parsed.data.event.user, teamId: parsed.data.team_id }
       })()
       if (homeOpened) {
+        console.log('app_home_opened', {
+          slackUserId: homeOpened.slackUserId,
+          teamId: homeOpened.teamId,
+        })
         c.executionCtx.waitUntil(
           Home.publishHome({
             env: c.env,
             slackUserId: homeOpened.slackUserId,
             teamId: homeOpened.teamId,
-          }).catch(() => {}),
+          }).catch((error) => {
+            console.error('publishHome failed', {
+              error: error instanceof Error ? error.message : String(error),
+              slackUserId: homeOpened.slackUserId,
+              stack: error instanceof Error ? error.stack : undefined,
+              teamId: homeOpened.teamId,
+            })
+          }),
         )
         return new Response('', { status: 200 })
       }

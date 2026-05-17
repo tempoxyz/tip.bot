@@ -22,7 +22,10 @@ const tokenLookup = [
 
 export async function publishHome(input: { env: Env; slackUserId: string; teamId: string }) {
   const installation = await getSlack().getInstallation(input.teamId)
-  if (!installation) return
+  if (!installation) {
+    console.warn('publishHome: no installation', { teamId: input.teamId })
+    return
+  }
 
   const view = await buildHomeView({
     env: input.env,
@@ -32,6 +35,10 @@ export async function publishHome(input: { env: Env; slackUserId: string; teamId
   await getSlack().withBotToken(installation.botToken, () =>
     getSlack().publishHomeView(input.slackUserId, view),
   )
+  console.log('publishHome: published', {
+    slackUserId: input.slackUserId,
+    teamId: input.teamId,
+  })
 }
 
 export async function buildHomeView(input: {
