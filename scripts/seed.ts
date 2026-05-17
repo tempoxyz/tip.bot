@@ -3,6 +3,7 @@ import * as DB from '#db/client.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import { sql } from 'kysely'
 import JSONC from 'tiny-jsonc'
+import { z } from 'zod'
 
 const command = process.argv[2]
 
@@ -16,6 +17,29 @@ const stateSeededAt = process.env.STATE_SEEDED_AT
 
 const productionDb = createRemoteDb(getProductionDbId())
 const previewDb = createRemoteDb(previewDbId)
+
+const d1RowSchema = z.record(z.string(), z.union([z.boolean(), z.null(), z.number(), z.string()]))
+const d1ResultSchema = z
+  .object({
+    error: z.string().optional(),
+    meta: z
+      .object({
+        changes: z.number().optional(),
+        last_row_id: z.number().nullable().optional(),
+      })
+      .passthrough()
+      .optional(),
+    results: z.array(d1RowSchema).optional(),
+  })
+  .passthrough()
+const d1ResponseSchema = z
+  .object({
+    errors: z.unknown().optional(),
+    messages: z.unknown().optional(),
+    result: z.union([d1ResultSchema, z.array(d1ResultSchema)]).optional(),
+    success: z.boolean().optional(),
+  })
+  .passthrough()
 
 try {
   const sourceWorkspace = await productionDb
@@ -179,22 +203,7 @@ async function queryD1(databaseId: string, statement: string, params: unknown[])
       method: 'POST',
     },
   )
-  const json = (await response.json()) as {
-    errors?: unknown
-    messages?: unknown
-    result?:
-      | {
-          error?: string
-          meta?: { changes?: number; last_row_id?: number | null }
-          results?: Record<string, string | number | null>[]
-        }[]
-      | {
-          error?: string
-          meta?: { changes?: number; last_row_id?: number | null }
-          results?: Record<string, string | number | null>[]
-        }
-    success?: boolean
-  }
+  const json = d1ResponseSchema.parse(await response.json())
   if (!response.ok || !json.success)
     throw new Error(
       JSON.stringify({ errors: json.errors, messages: json.messages, status: response.status }),
