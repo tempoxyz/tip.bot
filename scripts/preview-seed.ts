@@ -248,7 +248,7 @@ function requiredEnv(name: string) {
 function usage(): never {
   console.error(`
 Usage:
-  node --experimental-strip-types scripts/seed.ts preview-workspace
+  node --experimental-strip-types scripts/preview-seed.ts preview-workspace
 
 Environment:
   CLOUDFLARE_ACCOUNT_ID

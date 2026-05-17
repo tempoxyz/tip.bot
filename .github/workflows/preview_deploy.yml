@@ -438,7 +438,7 @@ jobs:
             echo "Preview workspace seeding disabled."
             exit 0
           fi
-          node --experimental-strip-types scripts/seed.ts preview-workspace
+          node --experimental-strip-types scripts/preview-seed.ts preview-workspace
 
       - name: Comment deploy status
         if: always()
