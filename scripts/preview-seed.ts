@@ -5,58 +5,61 @@ import { sql } from 'kysely'
 import JSONC from 'tiny-jsonc'
 import { z } from 'zod'
 
-const command = process.argv[2]
+const env = z.parse(
+  z.object({
+    CLOUDFLARE_ACCOUNT_ID: z.string().min(1),
+    CLOUDFLARE_API_TOKEN: z.string().min(1),
+    PREVIEW_D1_ID: z.string().min(1),
+    PREVIEW_SEED_SLACK_TEAM_ID: z.string().min(1),
+    STATE_SEEDED_AT: z.string().optional(),
+  }),
+  process.env,
+)
 
-if (command !== 'preview-workspace') usage()
-
-const accountId = requiredEnv('CLOUDFLARE_ACCOUNT_ID')
-const apiToken = requiredEnv('CLOUDFLARE_API_TOKEN')
-const previewDbId = requiredEnv('PREVIEW_D1_ID')
-const seedTeamId = requiredEnv('PREVIEW_SEED_SLACK_TEAM_ID')
-const stateSeededAt = process.env.STATE_SEEDED_AT
-
-const productionDb = createRemoteDb(getProductionDbId())
-const previewDb = createRemoteDb(previewDbId)
-
-const d1RowSchema = z.record(z.string(), z.union([z.boolean(), z.null(), z.number(), z.string()]))
-const d1ResultSchema = z
-  .object({
-    error: z.string().optional(),
-    meta: z
-      .object({
-        changes: z.number().optional(),
-        last_row_id: z.number().nullable().optional(),
+const config = z.parse(
+  z.looseObject({
+    env: z
+      .looseObject({
+        production: z
+          .looseObject({
+            d1_databases: z.array(
+              z.looseObject({
+                binding: z.string().optional(),
+                database_id: z.string().optional(),
+              }),
+            ),
+          })
+          .optional(),
       })
-      .passthrough()
       .optional(),
-    results: z.array(d1RowSchema).optional(),
-  })
-  .passthrough()
-const d1ResponseSchema = z
-  .object({
-    errors: z.unknown().optional(),
-    messages: z.unknown().optional(),
-    result: z.union([d1ResultSchema, z.array(d1ResultSchema)]).optional(),
-    success: z.boolean().optional(),
-  })
-  .passthrough()
+  }),
+  JSONC.parse(fs.readFileSync('wrangler.jsonc', 'utf8')),
+)
+const productionDbId = config.env?.production?.d1_databases?.find(
+  (database) => database.binding === 'DB',
+)?.database_id
+if (!productionDbId) throw new Error('Could not find production DB id in wrangler.jsonc.')
+
+const productionDb = createRemoteDb(productionDbId)
+const previewDb = createRemoteDb(env.PREVIEW_D1_ID)
 
 try {
   const sourceWorkspace = await productionDb
     .selectFrom('workspace')
     .selectAll()
     .where('provider', '=', 'slack')
-    .where('provider_id', '=', seedTeamId)
+    .where('provider_id', '=', env.PREVIEW_SEED_SLACK_TEAM_ID)
     .executeTakeFirst()
-  if (!sourceWorkspace) throw new Error(`No production Slack workspace found for ${seedTeamId}.`)
+  if (!sourceWorkspace)
+    throw new Error(`No production Slack workspace found for ${env.PREVIEW_SEED_SLACK_TEAM_ID}.`)
 
   const previewWorkspace = await previewDb
     .selectFrom('workspace')
     .select('id')
     .where('provider', '=', 'slack')
-    .where('provider_id', '=', seedTeamId)
+    .where('provider_id', '=', env.PREVIEW_SEED_SLACK_TEAM_ID)
     .executeTakeFirst()
-  if (stateSeededAt && previewWorkspace) {
+  if (env.STATE_SEEDED_AT && previewWorkspace) {
     const linked = await previewDb
       .selectFrom('member')
       .select((eb) => eb.fn.countAll<number>().as('count'))
@@ -65,7 +68,7 @@ try {
       .executeTakeFirstOrThrow()
     const linkedCount = Number(linked.count)
     if (linkedCount > 0) {
-      output('seeded_at', stateSeededAt)
+      output('seeded_at', env.STATE_SEEDED_AT)
       console.log(`Preview workspace already seeded with ${linkedCount} linked members.`)
       process.exit(0)
     }
@@ -101,7 +104,7 @@ try {
     .selectFrom('workspace')
     .select('id')
     .where('provider', '=', 'slack')
-    .where('provider_id', '=', seedTeamId)
+    .where('provider_id', '=', env.PREVIEW_SEED_SLACK_TEAM_ID)
     .executeTakeFirstOrThrow()
 
   const members = await productionDb
@@ -175,7 +178,9 @@ try {
 
   const seededAt = new Date().toISOString()
   output('seeded_at', seededAt)
-  console.log(`Seeded preview workspace ${seedTeamId} with ${members.length} linked members.`)
+  console.log(
+    `Seeded preview workspace ${env.PREVIEW_SEED_SLACK_TEAM_ID} with ${members.length} linked members.`,
+  )
 } finally {
   await productionDb.destroy()
   await previewDb.destroy()
@@ -185,77 +190,65 @@ function createRemoteDb(databaseId: string) {
   return DB.create({
     prepare: (statement) => ({
       bind: (...params) => ({
-        all: async () => await queryD1(databaseId, statement, params),
+        async all() {
+          const response = await fetch(
+            `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/d1/database/${databaseId}/query`,
+            {
+              body: JSON.stringify({ params, sql: statement }),
+              headers: {
+                Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
+                'Content-Type': 'application/json',
+              },
+              method: 'POST',
+            },
+          )
+          const d1ResultSchema = z.looseObject({
+            error: z.string().optional(),
+            meta: z
+              .looseObject({
+                changes: z.number().optional(),
+                last_row_id: z.number().nullable().optional(),
+              })
+              .optional(),
+            results: z
+              .array(z.record(z.string(), z.union([z.boolean(), z.null(), z.number(), z.string()])))
+              .optional(),
+          })
+          const json = z.parse(
+            z.looseObject({
+              errors: z.unknown().optional(),
+              messages: z.unknown().optional(),
+              result: z.union([d1ResultSchema, z.array(d1ResultSchema)]).optional(),
+              success: z.boolean().optional(),
+            }),
+            await response.json(),
+          )
+          if (!response.ok || !json.success)
+            throw new Error(
+              JSON.stringify({
+                errors: json.errors,
+                messages: json.messages,
+                status: response.status,
+              }),
+            )
+
+          const result = Array.isArray(json.result) ? json.result[0] : json.result
+          return {
+            error: result?.error,
+            meta: {
+              changes: result?.meta?.changes ?? 0,
+              last_row_id: result?.meta?.last_row_id,
+            },
+            results: result?.results ?? [],
+            success: true,
+          }
+        },
       }),
     }),
   } as D1Database)
 }
 
-async function queryD1(databaseId: string, statement: string, params: unknown[]) {
-  const response = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`,
-    {
-      body: JSON.stringify({ params, sql: statement }),
-      headers: {
-        Authorization: `Bearer ${apiToken}`,
-        'Content-Type': 'application/json',
-      },
-      method: 'POST',
-    },
-  )
-  const json = d1ResponseSchema.parse(await response.json())
-  if (!response.ok || !json.success)
-    throw new Error(
-      JSON.stringify({ errors: json.errors, messages: json.messages, status: response.status }),
-    )
-
-  const result = Array.isArray(json.result) ? json.result[0] : json.result
-  return {
-    error: result?.error,
-    meta: {
-      changes: result?.meta?.changes ?? 0,
-      last_row_id: result?.meta?.last_row_id,
-    },
-    results: result?.results ?? [],
-    success: true,
-  }
-}
-
-function getProductionDbId() {
-  const config = JSONC.parse(fs.readFileSync('wrangler.jsonc', 'utf8')) as {
-    env?: { production?: { d1_databases?: { binding?: string; database_id?: string }[] } }
-  }
-  const databaseId = config.env?.production?.d1_databases?.find(
-    (database) => database.binding === 'DB',
-  )?.database_id
-  if (databaseId) return databaseId
-
-  throw new Error('Could not find production DB id in wrangler.jsonc.')
-}
-
 function output(name: string, value: string) {
   if (!process.env.GITHUB_OUTPUT) return
   fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`)
-}
-
-function requiredEnv(name: string) {
-  const value = process.env[name]
-  if (value) return value
-
-  throw new Error(`Missing ${name}`)
-}
-
-function usage(): never {
-  console.error(`
-Usage:
-  node --experimental-strip-types scripts/preview-seed.ts preview-workspace
-
-Environment:
-  CLOUDFLARE_ACCOUNT_ID
-  CLOUDFLARE_API_TOKEN
-  PREVIEW_D1_ID
-  PREVIEW_SEED_SLACK_TEAM_ID
-  STATE_SEEDED_AT Optional previous seed marker
-`)
-  process.exit(1)
 }
