@@ -1,6 +1,6 @@
-import crypto from 'node:crypto'
 import fs from 'node:fs'
 import * as DB from '#db/client.ts'
+import * as Nanoid from '#/lib/nanoid.ts'
 import { sql } from 'kysely'
 import JSONC from 'tiny-jsonc'
 
@@ -54,7 +54,7 @@ try {
       created_at: sourceWorkspace.created_at,
       default_amount: sourceWorkspace.default_amount,
       default_token_address: sourceWorkspace.default_token_address,
-      id: previewWorkspace?.id ?? id(),
+      id: previewWorkspace?.id ?? Nanoid.generate(),
       name: sourceWorkspace.name,
       provider: sourceWorkspace.provider,
       provider_id: sourceWorkspace.provider_id,
@@ -113,7 +113,7 @@ try {
         .select('id')
         .where('id', '=', accountId)
         .executeTakeFirst()
-      if (conflictingAccount) accountId = id()
+      if (conflictingAccount) accountId = Nanoid.generate()
       await previewDb
         .insertInto('account')
         .values({
@@ -131,7 +131,7 @@ try {
       .values({
         account_id: account.id,
         created_at: member.member_created_at,
-        id: id(),
+        id: Nanoid.generate(),
         login: member.login,
         name: member.name,
         provider_user_id: member.provider_user_id,
@@ -222,11 +222,6 @@ function getProductionDbId() {
   if (databaseId) return databaseId
 
   throw new Error('Could not find production DB id in wrangler.jsonc.')
-}
-
-function id() {
-  const alphabet = '0123456789abcdefghijklmnopqrstuvwxyz'
-  return Array.from({ length: 12 }, () => alphabet[crypto.randomInt(alphabet.length)]).join('')
 }
 
 function output(name: string, value: string) {
