@@ -66,7 +66,11 @@ export async function buildHomeView(input: {
   if (!member?.account_address) return notConnectedView(workspace, input.slackUserId)
 
   const [balances, received, sent, mostTipped, mostTippedBy, recent] = await Promise.all([
-    fetchBalances({ accountAddress: member.account_address, env: input.env, workspace }),
+    fetchBalances({
+      accountAddress: member.account_address,
+      env: input.env,
+      workspace,
+    }),
     db
       .selectFrom('tip')
       .select([
@@ -186,33 +190,44 @@ function connectedView(input: {
   workspace: DB_gen.workspace
 }) {
   const explorerUrl = Tempo.explorerLink(input.workspace.chain_id, input.accountAddress)
-  const truncatedAddress = `${input.accountAddress.slice(0, 6)}…${input.accountAddress.slice(-4)}`
-  const networkLabel =
-    input.workspace.chain_id === Tempo.chainLookup.mainnet ? 'Mainnet' : 'Testnet'
+  const tempoAppUrl = 'https://app.tempo.xyz/'
 
-  const balanceLines = input.balances.map((b) => {
-    const formatted = formatCurrencyAmount(formatAmount(Number(b.balance)), 'USD')
-    return `*${b.label}* ${formatted}`
-  })
-  const balancesText =
-    balanceLines.length > 0
-      ? balanceLines.join('  ·  ')
-      : 'No balances yet. Run `/tip connect` to add funds.'
+  const balanceFields = [...input.balances]
+    .sort((a, b) => {
+      if (a.balance === b.balance) return a.label.localeCompare(b.label)
+      return a.balance > b.balance ? -1 : 1
+    })
+    .map((b) => ({
+      text: `*${b.label}*\n${formatCurrencyAmount(formatAmount(Number(b.balance)), 'USD')}`,
+      type: 'mrkdwn',
+    }))
 
-  const statsText = [
-    `*Received* ${formatCurrencyAmount(formatAmount(Number(input.received.amount)), 'USD')} (${pluralizeTips(Number(input.received.tip_count))})`,
-    `*Tipped* ${formatCurrencyAmount(formatAmount(Number(input.sent.amount)), 'USD')} (${pluralizeTips(Number(input.sent.tip_count))})`,
-    `*Most tipped* ${
-      input.mostTipped
-        ? `<@${input.mostTipped.provider_user_id}> ${formatCurrencyAmount(formatAmount(Number(input.mostTipped.amount)), 'USD')} (${pluralizeTips(Number(input.mostTipped.tip_count))})`
-        : 'None'
-    }`,
-    `*Most tipped by* ${
-      input.mostTippedBy
-        ? `<@${input.mostTippedBy.provider_user_id}> ${formatCurrencyAmount(formatAmount(Number(input.mostTippedBy.amount)), 'USD')} (${pluralizeTips(Number(input.mostTippedBy.tip_count))})`
-        : 'None'
-    }`,
-  ].join('\n')
+  const statsFields = [
+    {
+      text: `*Received*\n${formatCurrencyAmount(formatAmount(Number(input.received.amount)), 'USD')} · ${pluralizeTips(Number(input.received.tip_count))}`,
+      type: 'mrkdwn',
+    },
+    {
+      text: `*Most tipped by*\n${
+        input.mostTippedBy
+          ? `<@${input.mostTippedBy.provider_user_id}> · ${formatCurrencyAmount(formatAmount(Number(input.mostTippedBy.amount)), 'USD')}`
+          : 'None yet'
+      }`,
+      type: 'mrkdwn',
+    },
+    {
+      text: `*Tipped*\n${formatCurrencyAmount(formatAmount(Number(input.sent.amount)), 'USD')} · ${pluralizeTips(Number(input.sent.tip_count))}`,
+      type: 'mrkdwn',
+    },
+    {
+      text: `*Most tipped*\n${
+        input.mostTipped
+          ? `<@${input.mostTipped.provider_user_id}> · ${formatCurrencyAmount(formatAmount(Number(input.mostTipped.amount)), 'USD')}`
+          : 'None yet'
+      }`,
+      type: 'mrkdwn',
+    },
+  ]
 
   const recentLines = input.recent.map((row) => {
     const token = Tempo.getTokenMetadataFallback(row.token_address)
@@ -232,50 +247,92 @@ function connectedView(input: {
   const recentText = recentLines.length > 0 ? recentLines.join('\n') : 'No tips yet.'
 
   const slashCommand = getSlackCommand(input.env.HOST)
-  const helpLines = [
-    `\`${slashCommand} @account [amount] [token] [for memo]\` send a tip`,
-    `\`${slashCommand} leaderboard\` workspace leaderboard`,
-    `\`${slashCommand} stats\` your tip stats`,
-    `React with :${input.workspace.reaction_tip_emoji}: to tip a message`,
+  const quickReferenceFields = [
+    {
+      text: `*Send a tip*\n\`${slashCommand} @account [amount] [token] [for memo]\``,
+      type: 'mrkdwn',
+    },
+    {
+      text: `*Workspace leaderboard*\n\`${slashCommand} leaderboard\``,
+      type: 'mrkdwn',
+    },
+    {
+      text: `*Your stats*\n\`${slashCommand} stats\``,
+      type: 'mrkdwn',
+    },
+    {
+      text: `*Help*\n\`${slashCommand} help\``,
+      type: 'mrkdwn',
+    },
+    {
+      text: `*Tip a message*\nReact with :${input.workspace.reaction_tip_emoji}:`,
+      type: 'mrkdwn',
+    },
   ]
 
   return {
     blocks: [
       {
-        text: { emoji: true, text: 'Tipbot', type: 'plain_text' },
-        type: 'header',
-      },
-      {
         text: {
-          text: `Hi <@${input.slackUserId}> · *${networkLabel}* · <${explorerUrl}|${truncatedAddress}>`,
+          text: `Hi <@${input.slackUserId}>!\n\n*Connected wallet:* <${explorerUrl}|${input.accountAddress}>`,
           type: 'mrkdwn',
         },
         type: 'section',
       },
+      {
+        elements: [
+          {
+            style: 'primary',
+            text: { emoji: true, text: 'Open wallet', type: 'plain_text' },
+            type: 'button',
+            url: tempoAppUrl,
+          },
+        ],
+        type: 'actions',
+      },
       { type: 'divider' },
       {
-        text: { emoji: true, text: 'Balances', type: 'plain_text' },
+        text: { emoji: true, text: '💰 BALANCES', type: 'plain_text' },
         type: 'header',
       },
-      { text: { text: balancesText, type: 'mrkdwn' }, type: 'section' },
+      ...(balanceFields.length > 0
+        ? fieldRows(balanceFields).map((fields) => ({ fields, type: 'section' }))
+        : [
+            {
+              text: {
+                text: `No balances yet. Run \`${slashCommand} connect\` to add funds.`,
+                type: 'mrkdwn',
+              },
+              type: 'section',
+            },
+          ]),
       { type: 'divider' },
       {
-        text: { emoji: true, text: 'Your stats', type: 'plain_text' },
+        text: { emoji: true, text: '📊 STATS', type: 'plain_text' },
         type: 'header',
       },
-      { text: { text: statsText, type: 'mrkdwn' }, type: 'section' },
+      ...fieldRows(statsFields).map((fields) => ({ fields, type: 'section' })),
       { type: 'divider' },
       {
-        text: { emoji: true, text: 'Recent activity', type: 'plain_text' },
+        text: { emoji: true, text: '🕒 RECENT ACTIVITY', type: 'plain_text' },
         type: 'header',
       },
       { text: { text: recentText, type: 'mrkdwn' }, type: 'section' },
       { type: 'divider' },
       {
-        text: { emoji: true, text: 'Quick reference', type: 'plain_text' },
+        text: { emoji: true, text: '📚 QUICK REFERENCE', type: 'plain_text' },
         type: 'header',
       },
-      { text: { text: helpLines.join('\n'), type: 'mrkdwn' }, type: 'section' },
+      {
+        text: {
+          text: 'Common commands and shortcuts.',
+          type: 'mrkdwn',
+        },
+        type: 'section',
+      },
+      { fields: quickReferenceFields.slice(0, 2), type: 'section' },
+      { fields: quickReferenceFields.slice(2, 4), type: 'section' },
+      { fields: quickReferenceFields.slice(4), type: 'section' },
       {
         elements: [
           {
@@ -380,6 +437,13 @@ async function fetchBalances(input: {
 
 function pluralizeTips(count: number) {
   return `${count} ${count === 1 ? 'tip' : 'tips'}`
+}
+
+function fieldRows<T>(fields: T[]) {
+  const rowSize = 2
+  const rows: T[][] = []
+  for (let i = 0; i < fields.length; i += rowSize) rows.push(fields.slice(i, i + rowSize))
+  return rows
 }
 
 function escapeMrkdwn(value: string) {
