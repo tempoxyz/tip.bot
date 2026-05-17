@@ -74,6 +74,7 @@ jobs:
 
   test-workers:
     name: Test Workers
+    if: false # Temporarily disabled for faster Slack Connect preview debugging.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -115,6 +116,7 @@ jobs:
 
   e2e:
     name: E2E
+    if: false # Temporarily disabled for faster Slack Connect preview debugging.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

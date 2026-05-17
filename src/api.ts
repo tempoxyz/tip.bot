@@ -984,6 +984,8 @@ async function logSlackConnectDebug(env: Env, body: string, params: URLSearchPar
   if (!parsed.data.is_ext_shared_channel) return
 
   const mentionedUserIds = extractSlackMentionedUserIds(parsed.data.event?.text ?? '')
+  const channelId = parsed.data.event?.channel ?? parsed.data.event?.item?.channel
+  const eventTeamId = parsed.data.event?.team_id ?? parsed.data.event?.team
   const teamId = parsed.data.team_id ?? parsed.data.context_team_id ?? parsed.data.event?.team_id
   console.info(
     JSON.stringify({
@@ -994,6 +996,11 @@ async function logSlackConnectDebug(env: Env, body: string, params: URLSearchPar
         team_id: authorization.team_id ?? null,
         user_id: authorization.user_id ?? null,
       })),
+      channel_info_by_token: await getSlackConnectDebugChannelInfoByTokenTeam(
+        env,
+        [teamId, eventTeamId],
+        channelId,
+      ),
       context_enterprise_id: parsed.data.context_enterprise_id ?? null,
       context_team_id: parsed.data.context_team_id ?? null,
       event_channel_id: parsed.data.event?.channel ?? parsed.data.event?.item?.channel ?? null,
@@ -1007,6 +1014,11 @@ async function logSlackConnectDebug(env: Env, body: string, params: URLSearchPar
       team_id: parsed.data.team_id ?? null,
       user_id: parsed.data.event?.user ?? null,
       users_info: await getSlackConnectDebugUsersInfo(env, teamId, mentionedUserIds),
+      users_info_by_token: await getSlackConnectDebugUsersInfoByTokenTeam(
+        env,
+        [teamId, eventTeamId],
+        mentionedUserIds,
+      ),
     }),
   )
 }
@@ -1026,6 +1038,7 @@ async function logSlackConnectCommandDebug(env: Env, params: URLSearchParams) {
   console.info(
     JSON.stringify({
       channel_id: channelId,
+      channel_info: sanitizeSlackConnectDebugConversation(conversation),
       command: params.get('command'),
       is_ext_shared_channel: true,
       mentioned_user_ids: mentionedUserIds,
@@ -1049,13 +1062,67 @@ async function getSlackConnectDebugConversation(env: Env, botToken: string, chan
   )
   const json = z.parse(
     z.object({
-      channel: z.object({ is_ext_shared: z.boolean().optional() }).optional(),
+      channel: z
+        .object({
+          context_team_id: z.string().optional(),
+          conversation_host_id: z.string().optional(),
+          id: z.string().optional(),
+          is_ext_shared: z.boolean().optional(),
+          is_org_shared: z.boolean().optional(),
+          is_pending_ext_shared: z.boolean().optional(),
+          is_shared: z.boolean().optional(),
+          pending_connected_team_ids: z.array(z.string()).optional(),
+          pending_shared: z.array(z.string()).optional(),
+          shared_team_ids: z.array(z.string()).optional(),
+        })
+        .passthrough()
+        .optional(),
       ok: z.boolean().optional(),
     }),
     await response.json(),
   )
   if (!json.ok) return null
   return json.channel ?? null
+}
+
+async function getSlackConnectDebugChannelInfoByTokenTeam(
+  env: Env,
+  teamIds: Array<string | undefined>,
+  channelId: string | undefined,
+) {
+  if (!channelId) return []
+  return await Promise.all(
+    [...new Set(teamIds.filter((teamId) => teamId !== undefined))].map(async (teamId) => {
+      await Chat.getChat().initialize()
+      const installation = await Chat.getSlack().getInstallation(teamId)
+      return {
+        channel_info: installation
+          ? sanitizeSlackConnectDebugConversation(
+              await getSlackConnectDebugConversation(env, installation.botToken, channelId),
+            )
+          : null,
+        token_team_id: teamId,
+      }
+    }),
+  )
+}
+
+function sanitizeSlackConnectDebugConversation(
+  conversation: Awaited<ReturnType<typeof getSlackConnectDebugConversation>>,
+) {
+  if (!conversation) return null
+  return {
+    context_team_id: conversation.context_team_id ?? null,
+    conversation_host_id: conversation.conversation_host_id ?? null,
+    id: conversation.id ?? null,
+    is_ext_shared: conversation.is_ext_shared ?? null,
+    is_org_shared: conversation.is_org_shared ?? null,
+    is_pending_ext_shared: conversation.is_pending_ext_shared ?? null,
+    is_shared: conversation.is_shared ?? null,
+    pending_connected_team_ids: conversation.pending_connected_team_ids ?? [],
+    pending_shared: conversation.pending_shared ?? [],
+    shared_team_ids: conversation.shared_team_ids ?? [],
+  }
 }
 
 async function getSlackConnectDebugUsersInfo(
@@ -1127,6 +1194,19 @@ async function getSlackConnectDebugUsersInfo(
           : null,
       }
     }),
+  )
+}
+
+async function getSlackConnectDebugUsersInfoByTokenTeam(
+  env: Env,
+  teamIds: Array<string | undefined>,
+  userIds: string[],
+) {
+  return await Promise.all(
+    [...new Set(teamIds.filter((teamId) => teamId !== undefined))].map(async (teamId) => ({
+      token_team_id: teamId,
+      users_info: await getSlackConnectDebugUsersInfo(env, teamId, userIds),
+    })),
   )
 }
 
