@@ -2152,7 +2152,7 @@ async function postSlackReceiptMessage(
     JSON.stringify(createReceiptBlocks(receiptText, chainId, transactionHash, context)),
   )
   body.set('channel', event.channel.id.replace(/^slack:/, ''))
-  body.set('text', `${receiptText}${context ? ` ${context}` : ''} · Receipt`)
+  body.set('text', formatReceiptText(`${receiptText}${context ? ` ${context}` : ''}`, 'Receipt'))
   if (threadTs) body.set('thread_ts', threadTs)
   if (user && !isSlackDMChannelId(event.channel.id)) body.set('user', user.userId)
   else {
@@ -2249,10 +2249,11 @@ function createReceiptBlocks(
   transactionHash: string,
   context?: string,
 ) {
+  const receiptLink = `<${Tempo.formatTxLink(chainId, transactionHash)}|Receipt>`
   return [
     {
       text: {
-        text: `${text} · <${Tempo.formatTxLink(chainId, transactionHash)}|Receipt>`,
+        text: formatReceiptText(text, receiptLink),
         type: 'mrkdwn',
       },
       type: 'section',
@@ -2266,6 +2267,12 @@ function createReceiptBlocks(
         ]
       : []),
   ]
+}
+
+function formatReceiptText(text: string, receipt: string) {
+  const lineBreakIndex = text.indexOf('\n')
+  if (lineBreakIndex === -1) return `${text} · ${receipt}`
+  return `${text.slice(0, lineBreakIndex).replace(/\.$/, '')} · ${receipt}${text.slice(lineBreakIndex)}`
 }
 
 async function isSlackAdmin(providerId: string, providerUserId: string) {

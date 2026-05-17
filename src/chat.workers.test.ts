@@ -180,7 +180,7 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      `<@${Constants.slack.adminUserId}> sent 2 accounts $0.002 each for team.`,
+      `<@${Constants.slack.adminUserId}> sent 2 accounts $0.002 each for team · Receipt`,
     )
     await expectSlackMessage(`• <@${Constants.slack.memberUserId}>`)
     await expectSlackMessage(`• <@${unconnectedProviderUserId}>`)

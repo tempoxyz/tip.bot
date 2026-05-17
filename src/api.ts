@@ -498,6 +498,12 @@ export const api = new Hono<{
                   ? `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} ${result.recipients.length} accounts ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${result.recipients.map((recipient) => `• <@${recipient.recipientProviderUserId}>`).join('\n')}`
                   : `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} <@${result.recipientProviderUserId}> ${amount}${result.memo ? ` for ${result.memo}` : ''}.`
               const receiptText = text.replace(/\.$/, '')
+              const receiptLink = `<${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`
+              const receiptMessage = (() => {
+                const lineBreakIndex = receiptText.indexOf('\n')
+                if (lineBreakIndex === -1) return `${receiptText} · ${receiptLink}`
+                return `${receiptText.slice(0, lineBreakIndex).replace(/\.$/, '')} · ${receiptLink}${receiptText.slice(lineBreakIndex)}`
+              })()
               const threadId = data.payload.providerThreadId
               const body = new URLSearchParams()
               body.set(
@@ -505,7 +511,7 @@ export const api = new Hono<{
                 JSON.stringify([
                   {
                     text: {
-                      text: `${receiptText} <${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`,
+                      text: receiptMessage,
                       type: 'mrkdwn',
                     },
                     type: 'section',
@@ -513,7 +519,7 @@ export const api = new Hono<{
                 ]),
               )
               body.set('channel', data.payload.providerChannelId.replace(/^slack:/, ''))
-              body.set('text', `${receiptText} Receipt`)
+              body.set('text', receiptMessage.replace(receiptLink, 'Receipt'))
               if (threadId) body.set('thread_ts', threadId)
               body.set('unfurl_links', 'false')
               body.set('unfurl_media', 'false')
