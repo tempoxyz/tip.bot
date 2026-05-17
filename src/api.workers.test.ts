@@ -560,6 +560,74 @@ describe('/api/confirm/:token', () => {
     ).toBe(true)
   }, 20_000) // 20 seconds
 
+  test('confirms multi-recipient one-time payments', async () => {
+    const secondRecipientProviderUserId = 'U000000003'
+    const confirmation = await createConfirmationToken({
+      amount: 1,
+      memo: `batch-${Nanoid.generate()}`,
+      recipientProviderUserIds: [Constants.slack.memberUserId, secondRecipientProviderUserId],
+    })
+    await Chat.getChat().initialize()
+    await Chat.getSlack().setInstallation(confirmation.payload.providerId, {
+      botToken: Constants.slack.botToken,
+      botUserId: Constants.slack.botUserId,
+      teamName: Constants.slack.teamName,
+    })
+    const signedTransaction = await signConfirmationTransaction(confirmation)
+
+    const response = await client.api.confirm[':token'].$post({
+      json: { address: confirmation.senderRoot.address, signedTransaction },
+      param: { token: confirmation.token },
+    })
+    await Promise.all(waitUntil)
+    const batch = await db
+      .selectFrom('tip_batch')
+      .selectAll()
+      .where('idempotency_key', '=', confirmation.payload.idempotencyKey)
+      .executeTakeFirstOrThrow()
+    const tips = await db
+      .selectFrom('tip')
+      .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
+      .select(['recipient.provider_user_id', 'tip.confirmed_at', 'tip.transaction_hash'])
+      .where('tip.batch_id', '=', batch.id)
+      .orderBy('recipient.provider_user_id', 'asc')
+      .execute()
+    const history = await slack.conversations.history({ channel: apiChannelId })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true })
+    expect(batch).toMatchObject({
+      amount_each: 1,
+      recipient_count: 2,
+      status: 'confirmed',
+      total_amount: 2,
+      transaction_hash: expect.any(String),
+    })
+    expect(tips).toEqual([
+      expect.objectContaining({
+        confirmed_at: expect.any(String),
+        provider_user_id: Constants.slack.memberUserId,
+        transaction_hash: null,
+      }),
+      expect.objectContaining({
+        confirmed_at: expect.any(String),
+        provider_user_id: secondRecipientProviderUserId,
+        transaction_hash: null,
+      }),
+    ])
+    expect(
+      history.messages?.some(
+        (message) =>
+          message.text?.includes(
+            `2 accounts $0.000001 each for ${confirmation.payload.memo} · Receipt`,
+          ) &&
+          message.text.includes(`<@${Constants.slack.memberUserId}>`) &&
+          message.text.includes(`<@${secondRecipientProviderUserId}>`),
+      ),
+      JSON.stringify(history.messages),
+    ).toBe(true)
+  }, 20_000) // 20 seconds
+
   test('does not post duplicate receipt when confirmation is retried', async () => {
     const memo = `duplicate-${Nanoid.generate()}`
     const confirmation = await createConfirmationToken({ amount: 1, memo })
@@ -768,6 +836,7 @@ async function createConfirmationToken(
     memo?: string | null
     providerId?: string
     providerThreadId?: string
+    recipientProviderUserIds?: string[]
   } = {},
 ) {
   const providerId = options.providerId ?? `T${Nanoid.generate()}`
@@ -789,6 +858,17 @@ async function createConfirmationToken(
     provider_user_id: Constants.slack.memberUserId,
     workspace_id: workspace.id,
   })
+  const recipientProviderUserIds = options.recipientProviderUserIds ?? [
+    Constants.slack.memberUserId,
+  ]
+  for (const recipientProviderUserId of recipientProviderUserIds.slice(1)) {
+    const account = await factory.account.insert({})
+    await factory.member.insert({
+      account_id: account.id,
+      provider_user_id: recipientProviderUserId,
+      workspace_id: workspace.id,
+    })
+  }
   const nonce = Nanoid.generate()
   const kind = options.kind ?? 'onetime_payment'
   const amount = options.amount ?? 5_000_000
@@ -811,7 +891,14 @@ async function createConfirmationToken(
     providerChannelId: apiChannelId,
     providerId,
     providerThreadId: options.providerThreadId,
-    recipientProviderUserId: Constants.slack.memberUserId,
+    recipientProviderUserId: recipientProviderUserIds[0] ?? Constants.slack.memberUserId,
+    ...(recipientProviderUserIds.length > 1
+      ? {
+          recipients: recipientProviderUserIds.map((recipientProviderUserId) => ({
+            recipientProviderUserId,
+          })),
+        }
+      : {}),
     senderProviderUserId: Constants.slack.adminUserId,
     tokenAddress: Tempo.addressLookup.pathUsd,
     workspaceId: workspace.id,

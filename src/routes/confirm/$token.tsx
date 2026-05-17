@@ -63,9 +63,16 @@ function ConfirmPanel(props: {
   const [error, setError] = React.useState<string | null>(null)
   const [status, setStatus] = React.useState<'idle' | 'confirming' | 'sent'>('idle')
   const [transactionHash, setTransactionHash] = React.useState<string | null>(null)
-  const recipient = data.recipientProviderLabel
-    ? `@${data.recipientProviderLabel}`
-    : data.recipientProviderUserId
+  const recipients: Array<{
+    recipientProviderLabel?: string | null
+    recipientProviderUserId: string
+  }> = data.recipients ?? [
+    {
+      recipientProviderLabel: data.recipientProviderLabel,
+      recipientProviderUserId: data.recipientProviderUserId,
+    },
+  ]
+  const totalAmount = String(Number(data.amount) * recipients.length)
 
   async function confirm() {
     setError(null)
@@ -198,13 +205,28 @@ function ConfirmPanel(props: {
                     <span className="text-base font-bold text-gray8 sm:text-lg">Amount</span>
                     <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
                       {formatCurrencyAmount(data.amount, data.tokenCurrency)} {data.tokenSymbol}
+                      {recipients.length > 1 ? ' each' : ''}
                     </span>
                   </div>
-                  <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
+                  {recipients.length > 1 ? (
+                    <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
+                      <span className="text-base font-bold text-gray8 sm:text-lg">Total</span>
+                      <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
+                        {formatCurrencyAmount(totalAmount, data.tokenCurrency)} {data.tokenSymbol}
+                      </span>
+                    </div>
+                  ) : null}
+                  <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6 sm:p-5">
                     <span className="text-base font-bold text-gray8 sm:text-lg">To</span>
-                    <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
-                      {recipient}
-                    </span>
+                    <div className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
+                      {recipients.map((recipient) => (
+                        <div key={recipient.recipientProviderUserId}>
+                          {recipient.recipientProviderLabel
+                            ? `@${recipient.recipientProviderLabel}`
+                            : recipient.recipientProviderUserId}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                   {data.memo ? (
                     <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">

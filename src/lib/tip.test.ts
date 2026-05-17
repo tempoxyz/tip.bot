@@ -139,6 +139,37 @@ test('parses tip mentions and memos', () => {
   expect(Tip.parseTipText("<@UMEMBER> $0.00000001 let's see")).toBe(null)
 })
 
+test('parses multi-recipient tip mentions', () => {
+  expect(Tip.parseTipBatchText('<@UFOO> <@UBAR>')).toEqual({
+    amount: undefined,
+    memo: null,
+    recipients: [{ recipientProviderUserId: 'UFOO' }, { recipientProviderUserId: 'UBAR' }],
+    token: null,
+  })
+  expect(Tip.parseTipBatchText('<@UFOO|foo> <@UBAR|bar> for coffee')).toEqual({
+    amount: undefined,
+    memo: 'coffee',
+    recipients: [
+      { recipientProviderLabel: 'foo', recipientProviderUserId: 'UFOO' },
+      { recipientProviderLabel: 'bar', recipientProviderUserId: 'UBAR' },
+    ],
+    token: null,
+  })
+  expect(Tip.parseTipBatchText('<@UFOO> <@UBAR> 0.005 USDC for launch')).toEqual({
+    amount: 5000,
+    memo: 'launch',
+    recipients: [{ recipientProviderUserId: 'UFOO' }, { recipientProviderUserId: 'UBAR' }],
+    token: 'USDC',
+  })
+  expect(Tip.parseTipBatchText('<@UFOO> <@UFOO> <@UBAR> coffee')).toEqual({
+    amount: undefined,
+    memo: 'coffee',
+    recipients: [{ recipientProviderUserId: 'UFOO' }, { recipientProviderUserId: 'UBAR' }],
+    token: null,
+  })
+  expect(Tip.parseTipBatchText('<@UFOO> for <@UBAR>')).toBe(null)
+})
+
 test('rejects text without tip mentions', () => {
   expect(Tip.parseTipText('')).toBe(null)
   expect(Tip.parseTipText('hello')).toBe(null)

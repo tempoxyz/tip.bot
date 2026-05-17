@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 export const payloadSchema = z.object({
   accessKeyExpiresAt: z.string().min(1).optional(),
+  accessKeyLimit: z.string().min(1).optional(),
   amount: z.number().int().positive(),
   chainId: z.number().int().positive(),
   expiresAt: z.string().min(1),
@@ -16,6 +17,14 @@ export const payloadSchema = z.object({
   providerThreadId: z.string().min(1).optional(),
   recipientProviderLabel: z.string().min(1).optional(),
   recipientProviderUserId: z.string().min(1),
+  recipients: z
+    .array(
+      z.object({
+        recipientProviderLabel: z.string().min(1).optional(),
+        recipientProviderUserId: z.string().min(1),
+      }),
+    )
+    .optional(),
   senderProviderUserId: z.string().min(1),
   tokenAddress: z.string().min(1),
   workspaceId: z.string().min(1),
