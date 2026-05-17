@@ -974,6 +974,7 @@ async function handleTipText(
           .object({
             context_team_id: z.string().optional(),
             is_ext_shared: z.boolean().optional(),
+            is_shared: z.boolean().optional(),
             shared_team_ids: z.array(z.string()).optional(),
           })
           .optional(),
@@ -981,7 +982,13 @@ async function handleTipText(
       }),
       await response.json(),
     )
-    if (!conversation.ok || !conversation.channel?.is_ext_shared)
+    const isSharedChannel =
+      conversation.channel?.is_ext_shared ||
+      conversation.channel?.is_shared ||
+      conversation.channel?.shared_team_ids?.some(
+        (teamId) => teamId !== conversation.channel?.context_team_id,
+      )
+    if (!conversation.ok || !conversation.channel || !isSharedChannel)
       return { ok: true, value: parsed.recipients }
 
     const tokenTeamIds = new Set(
@@ -993,7 +1000,10 @@ async function handleTipText(
     )
     const value = [] as Tip.TipRecipientInput[]
     for (const recipient of parsed.recipients) {
-      const candidates = [] as Array<{ providerUserId: string; providerWorkspaceId: string }>
+      const candidates = [...tokenTeamIds].map((tokenTeamId) => ({
+        providerUserId: recipient.recipientProviderUserId,
+        providerWorkspaceId: tokenTeamId,
+      }))
       for (const tokenTeamId of tokenTeamIds) {
         const tokenInstallation = await getSlack().getInstallation(tokenTeamId)
         if (!tokenInstallation) continue
@@ -1037,7 +1047,31 @@ async function handleTipText(
           .where('provider', '=', 'slack')
           .where('provider_id', '=', candidate.providerWorkspaceId)
           .executeTakeFirst()
-        if (candidateWorkspace) matches.push(candidate)
+        if (!candidateWorkspace) continue
+        const candidateMember = await ctx.db
+          .selectFrom('member')
+          .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+          .innerJoin('account', 'account.id', 'provider_identity.account_id')
+          .select('member.id')
+          .where('member.provider_user_id', '=', candidate.providerUserId)
+          .where('member.workspace_id', '=', candidateWorkspace.id)
+          .executeTakeFirst()
+        if (candidateMember) matches.push(candidate)
+      }
+      if (matches.length === 0) {
+        const connectedMembers = await ctx.db
+          .selectFrom('member')
+          .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+          .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+          .innerJoin('account', 'account.id', 'provider_identity.account_id')
+          .select([
+            'member.provider_user_id as providerUserId',
+            'workspace.provider_id as providerWorkspaceId',
+          ])
+          .where('member.provider_user_id', '=', recipient.recipientProviderUserId)
+          .where('workspace.provider', '=', 'slack')
+          .execute()
+        if (connectedMembers.length === 1) matches.push(connectedMembers[0]!)
       }
       if (matches.length !== 1)
         return {

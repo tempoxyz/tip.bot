@@ -165,10 +165,13 @@ export default defineConfig({
           __SLACK_APP_ID__: JSON.stringify(''),
         },
         plugins: lazyPlugins(async () => {
-          const { cloudflareTest } = await import('@cloudflare/vitest-pool-workers')
+          const path = await import('node:path')
+          const { cloudflareTest, readD1Migrations } =
+            await import('@cloudflare/vitest-pool-workers')
           const { tanstackStart } = await import('@tanstack/react-start/plugin/vite')
           const { setupVitestOutputFilter } = await import('./config/vitest.ts')
           const envMod = await import('./test/env.ts')
+          const migrations = await readD1Migrations(path.join(process.cwd(), 'db/migrations'))
           setupVitestOutputFilter()
           return [
             tanstackStart(),
@@ -179,7 +182,7 @@ export default defineConfig({
                 remoteBindings: false,
                 wrangler: { configPath: 'wrangler.jsonc' },
                 miniflare: {
-                  bindings: env,
+                  bindings: { ...env, TEST_MIGRATIONS: migrations },
                   compatibilityDate: '2026-05-07',
                   // TODO: Remove once configurable log level is supported
                   // https://github.com/cloudflare/workers-sdk/issues/12014
@@ -197,6 +200,7 @@ export default defineConfig({
           ]
         }),
         test: {
+          fileParallelism: true,
           include: ['src/**/*.workers.test.ts'],
           name: 'workers',
           globalSetup: ['test/workers.global.setup.ts'],

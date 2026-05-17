@@ -736,28 +736,21 @@ test('@Tipbot mention sends Slack Connect tip to recipient home workspace member
     provider_user_id: Constants.slackConnect.userId,
     workspace_id: connectWorkspace.id,
   })
+  const channelId = await getSlackConnectChannelId()
   const messageTs = `1700000000.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
-    channelId: Constants.slackConnect.channelId,
+    channelId,
     messageTs,
     text: `<@${Constants.slack.botUserId}> <@${Constants.slackConnect.userId}>`,
   })
-  const tip = await db
-    .selectFrom('tip')
-    .select(['recipient_member_id', 'sender_member_id', 'workspace_id'])
-    .where(
-      'idempotency_key',
-      '=',
-      `mention:${providerId}:${Constants.slackConnect.channelId}:${messageTs}`,
-    )
-    .executeTakeFirstOrThrow()
+  const tip = await waitForTipByIdempotencyKey(`mention:${providerId}:${channelId}:${messageTs}`)
 
   expect(response.status).toBe(200)
   await expectSlackThreadMessage(
     messageTs,
     `<@${Constants.slack.adminUserId}> tipped <@${Constants.slackConnect.userId}> $0.001 · Receipt`,
-    { channelId: Constants.slackConnect.channelId },
+    { channelId },
   )
   expect(tip).toMatchObject({
     recipient_member_id: connectMember.id,
@@ -806,10 +799,11 @@ test('@Tipbot mention fails closed when Slack Connect recipient workspace is not
     }
     await db.deleteFrom('workspace').where('id', '=', connectWorkspace.id).execute()
   }
+  const channelId = await getSlackConnectChannelId()
   const messageTs = `1700000000.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
-    channelId: Constants.slackConnect.channelId,
+    channelId,
     messageTs,
     text: `<@${Constants.slack.botUserId}> <@${Constants.slackConnect.userId}>`,
   })
@@ -2961,6 +2955,54 @@ async function findOrCreateAccount(address: string) {
   return await factory.account.insert({ address })
 }
 
+async function waitForTipByIdempotencyKey(idempotencyKey: string) {
+  const intervalMs = 100 // 100 milliseconds
+  const timeoutMs = 5_000 // 5 seconds
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    const tip = await db
+      .selectFrom('tip')
+      .select(['recipient_member_id', 'sender_member_id', 'workspace_id'])
+      .where('idempotency_key', '=', idempotencyKey)
+      .executeTakeFirst()
+    if (tip) return tip
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+  const rows = await db
+    .selectFrom('member')
+    .leftJoin('workspace', 'workspace.id', 'member.workspace_id')
+    .leftJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .select([
+      'member.account_id',
+      'member.provider_identity_id',
+      'member.provider_user_id',
+      'workspace.provider_id as workspace_provider_id',
+      'provider_identity.account_id as identity_account_id',
+    ])
+    .where('workspace.provider', '=', 'slack')
+    .execute()
+  throw new Error(
+    `Expected tip ${idempotencyKey}: ${JSON.stringify({
+      members: rows,
+    })}`,
+  )
+}
+
+async function getSlackConnectChannelId() {
+  try {
+    const info = await slack.conversations.info({ channel: Constants.slackConnect.channelId })
+    if (info.channel?.id) return info.channel.id
+  } catch {}
+
+  const list = await slack.conversations.list()
+  const channel = list.channels?.find(
+    (channel) => channel.name === Constants.slackConnect.channelName,
+  )
+  if (channel?.id) return channel.id
+
+  throw new Error(`Expected Slack Connect channel ${Constants.slackConnect.channelName}.`)
+}
+
 async function expectSlackMessage(text: string, options: { channelId?: string } = {}) {
   const history = await slack.conversations.history({
     channel: options.channelId ?? Constants.slack.channelId,
@@ -3239,7 +3281,7 @@ async function postSlashCommand(
     {},
     await createSlashCommandRequestInit(text, options),
   )
-  await Promise.all(waitUntil)
+  await drainWaitUntil()
   return response
 }
 
@@ -3255,7 +3297,7 @@ async function postSlackInteraction(payload: unknown) {
       init: { body },
     },
   )
-  await Promise.all(waitUntil)
+  await drainWaitUntil()
   return response
 }
 
@@ -3295,7 +3337,7 @@ async function postSlackAppMention(options: {
       init: { body },
     },
   )
-  await Promise.all(waitUntil)
+  await drainWaitUntil()
   return response
 }
 
@@ -3334,8 +3376,14 @@ async function postSlackReaction(options: {
       init: { body },
     },
   )
-  await Promise.all(waitUntil)
+  await drainWaitUntil()
   return response
+}
+
+async function drainWaitUntil() {
+  for (let index = 0; index < waitUntil.length; index = waitUntil.length) {
+    await Promise.all(waitUntil.slice(index))
+  }
 }
 
 function createViewSubmissionPayload(input: {

@@ -26,7 +26,7 @@ export const slack = {
 
 export const slackConnect = {
   channelId: 'C0000000SC',
-  channelName: 'connect',
+  channelName: 'slackconnect',
   enterpriseId: 'E0000000SC',
   teamBotToken: 'xoxb-connect',
   teamBotUserId: 'B0000000SC',

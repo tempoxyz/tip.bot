@@ -50,7 +50,7 @@ export default async function (project: TestProject) {
     }),
     {
       account: Account.fromSecp256k1(env.FEE_PAYER_PRIVATE_KEY_TESTNET),
-      amount: parseUnits('10', 6),
+      amount: parseUnits('1000', 6),
       to: Account.fromSecp256k1(Constants.tip.senderRootPrivateKey).address,
       token: Tempo.addressLookup.pathUsd,
     },
