@@ -334,8 +334,7 @@ jobs:
           EMULATE_SLACK: 0
           SLACK_APP_ID: ${{ steps.slack.outputs.app_id }}
 
-      - name: Deploy new preview
-        if: steps.slack.outputs.created == 'true'
+      - name: Deploy preview
         uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # v3.14.1
         with:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -353,32 +352,9 @@ jobs:
           FEE_PAYER_PRIVATE_KEY_MAINNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_MAINNET }}
           FEE_PAYER_PRIVATE_KEY_TESTNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_TESTNET }}
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
-          SLACK_CLIENT_ID: ${{ steps.slack.outputs.client_id }}
-          SLACK_CLIENT_SECRET: ${{ steps.slack.outputs.client_secret }}
-          SLACK_SIGNING_SECRET: ${{ steps.slack.outputs.signing_secret }}
-
-      - name: Deploy existing preview
-        if: steps.slack.outputs.created != 'true'
-        uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # v3.14.1
-        with:
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          command: deploy --env preview
-          environment: preview
-          secrets: |
-            FEE_PAYER_PRIVATE_KEY_MAINNET
-            FEE_PAYER_PRIVATE_KEY_TESTNET
-            SECRET_KEY
-            SLACK_CLIENT_ID
-            SLACK_CLIENT_SECRET
-            SLACK_SIGNING_SECRET
-        env:
-          FEE_PAYER_PRIVATE_KEY_MAINNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_MAINNET }}
-          FEE_PAYER_PRIVATE_KEY_TESTNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_TESTNET }}
-          SECRET_KEY: ${{ secrets.SECRET_KEY }}
-          SLACK_CLIENT_ID: ${{ steps.state.outputs.client_id }}
-          SLACK_CLIENT_SECRET: ${{ steps.state.outputs.client_secret }}
-          SLACK_SIGNING_SECRET: ${{ steps.state.outputs.signing_secret }}
+          SLACK_CLIENT_ID: ${{ steps.slack.outputs.client_id || steps.state.outputs.client_id }}
+          SLACK_CLIENT_SECRET: ${{ steps.slack.outputs.client_secret || steps.state.outputs.client_secret }}
+          SLACK_SIGNING_SECRET: ${{ steps.slack.outputs.signing_secret || steps.state.outputs.signing_secret }}
 
       - name: Enable Slack event subscriptions
         if: steps.slack.outputs.created == 'true'
