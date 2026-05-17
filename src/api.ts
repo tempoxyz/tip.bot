@@ -987,6 +987,19 @@ async function logSlackConnectDebug(env: Env, body: string, params: URLSearchPar
   const channelId = parsed.data.event?.channel ?? parsed.data.event?.item?.channel
   const eventTeamId = parsed.data.event?.team_id ?? parsed.data.event?.team
   const teamId = parsed.data.team_id ?? parsed.data.context_team_id ?? parsed.data.event?.team_id
+  const seedChannelInfoByToken = await getSlackConnectDebugChannelInfoByTokenTeam(
+    env,
+    [teamId, eventTeamId],
+    channelId,
+  )
+  const tokenTeamIds = [
+    teamId,
+    eventTeamId,
+    ...seedChannelInfoByToken.flatMap((entry) => entry.channel_info?.shared_team_ids ?? []),
+  ]
+  const userIds = [parsed.data.event?.user, ...mentionedUserIds].filter(
+    (userId) => userId !== undefined,
+  )
   console.info(
     JSON.stringify({
       authorizations: parsed.data.authorizations?.map((authorization) => ({
@@ -998,7 +1011,7 @@ async function logSlackConnectDebug(env: Env, body: string, params: URLSearchPar
       })),
       channel_info_by_token: await getSlackConnectDebugChannelInfoByTokenTeam(
         env,
-        [teamId, eventTeamId],
+        tokenTeamIds,
         channelId,
       ),
       context_enterprise_id: parsed.data.context_enterprise_id ?? null,
@@ -1016,8 +1029,8 @@ async function logSlackConnectDebug(env: Env, body: string, params: URLSearchPar
       users_info: await getSlackConnectDebugUsersInfo(env, teamId, mentionedUserIds),
       users_info_by_token: await getSlackConnectDebugUsersInfoByTokenTeam(
         env,
-        [teamId, eventTeamId],
-        mentionedUserIds,
+        tokenTeamIds,
+        userIds,
       ),
     }),
   )
