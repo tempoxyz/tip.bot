@@ -80,6 +80,16 @@
       "ai": {
         "binding": "AI",
       },
+      "observability": {
+        "enabled": true,
+        "logs": {
+          "head_sampling_rate": 1,
+        },
+        "traces": {
+          "enabled": true,
+          "head_sampling_rate": 0.01,
+        },
+      },
       "secrets": {
         "required": [
           "FEE_PAYER_PRIVATE_KEY_MAINNET",

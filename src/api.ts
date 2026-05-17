@@ -1084,10 +1084,23 @@ async function getSlackConnectDebugUsersInfo(
           ok: z.boolean().optional(),
           user: z
             .object({
-              enterprise_user: z.unknown().optional(),
+              enterprise_user: z
+                .object({
+                  enterprise_id: z.string().optional(),
+                  id: z.string().optional(),
+                  is_admin: z.boolean().optional(),
+                  is_owner: z.boolean().optional(),
+                  team_id: z.string().optional(),
+                })
+                .passthrough()
+                .nullable()
+                .optional(),
+              is_bot: z.boolean().optional(),
+              is_restricted: z.boolean().optional(),
               id: z.string().optional(),
               is_stranger: z.boolean().optional(),
               team_id: z.string().optional(),
+              is_ultra_restricted: z.boolean().optional(),
             })
             .passthrough()
             .optional(),
@@ -1097,10 +1110,21 @@ async function getSlackConnectDebugUsersInfo(
       return {
         error: json.ok ? null : (json.error ?? null),
         id: json.user?.id ?? userId,
+        is_bot: json.user?.is_bot ?? null,
+        is_restricted: json.user?.is_restricted ?? null,
         is_stranger: json.user?.is_stranger ?? null,
+        is_ultra_restricted: json.user?.is_ultra_restricted ?? null,
         ok: Boolean(json.ok),
         team_id: json.user?.team_id ?? null,
-        enterprise_user: json.user?.enterprise_user ?? null,
+        enterprise_user: json.user?.enterprise_user
+          ? {
+              enterprise_id: json.user.enterprise_user.enterprise_id ?? null,
+              id: json.user.enterprise_user.id ?? null,
+              is_admin: json.user.enterprise_user.is_admin ?? null,
+              is_owner: json.user.enterprise_user.is_owner ?? null,
+              team_id: json.user.enterprise_user.team_id ?? null,
+            }
+          : null,
       }
     }),
   )

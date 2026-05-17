@@ -438,7 +438,7 @@ jobs:
           UPDATED=$(date -u +"%b %-d, %Y, %-I:%M %p")
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           PREVIEW="[${PREVIEW_HOST}](https://${PREVIEW_HOST})"
-          INSTALL="<a href=\"https://${PREVIEW_HOST}/install/slack\"><img alt=\"Add to Slack\" height=\"38\" width=\"auto\" src=\"https://platform.slack-edge.com/img/add_to_slack.png\" srcSet=\"https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x\" /></a>"
+          INSTALL="<a href=\"https://${PREVIEW_HOST}/install/slack\"><img alt=\"Add to Slack\" height=\"38\" width=\"auto\" src=\"https://platform.slack-edge.com/img/add_to_slack@2x.png\" /></a>"
           COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\` or \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`."
           STATUS="[![Ready](https://vercel.com/static/status/ready.svg) Ready](${RUN_URL})"
           if [ "$JOB_STATUS" != "success" ]; then STATUS="[![Error](https://vercel.com/static/status/error.svg) Error](${RUN_URL})"; fi
