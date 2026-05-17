@@ -6,6 +6,7 @@ import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import { getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
+import * as Home from '#/lib/home.ts'
 import * as hono from '#/lib/hono.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Slack from '#/lib/slack.ts'
@@ -671,6 +672,50 @@ export const api = new Hono<{
         .getState()
         .setIfNotExists(duplicateKey, true, 65 * 60 * 1000) // 65 minutes
       if (!inserted) return params ? new Response('', { status: 200 }) : c.json({ ok: true })
+    }
+
+    // Republish the Home tab when a user opens it. We intercept here because the
+    // chat-adapter/slack AppHomeOpenedEvent does not expose team_id, so we can't
+    // reliably resolve the workspace from inside bot.onAppHomeOpened.
+    if (!params) {
+      const homeOpened = (() => {
+        let payload: unknown
+        try {
+          payload = JSON.parse(body)
+        } catch {
+          return null
+        }
+        const parsed = z
+          .object({
+            event: z
+              .object({
+                channel: z.string().min(1).optional(),
+                tab: z.string().optional(),
+                type: z.string().min(1),
+                user: z.string().min(1),
+              })
+              .optional(),
+            team_id: z.string().min(1).optional(),
+            type: z.string().min(1).optional(),
+          })
+          .safeParse(payload)
+        if (!parsed.success) return null
+        if (parsed.data.type !== 'event_callback') return null
+        if (parsed.data.event?.type !== 'app_home_opened') return null
+        if (parsed.data.event.tab && parsed.data.event.tab !== 'home') return null
+        if (!parsed.data.team_id) return null
+        return { slackUserId: parsed.data.event.user, teamId: parsed.data.team_id }
+      })()
+      if (homeOpened) {
+        c.executionCtx.waitUntil(
+          Home.publishHome({
+            env: c.env,
+            slackUserId: homeOpened.slackUserId,
+            teamId: homeOpened.teamId,
+          }).catch(() => {}),
+        )
+        return new Response('', { status: 200 })
+      }
     }
 
     if (params?.has('command') && !params.has('payload')) {

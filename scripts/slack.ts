@@ -60,7 +60,7 @@ function createManifest() {
     process.env.SLACK_EVENT_SUBSCRIPTIONS === '0'
       ? undefined
       : {
-          bot_events: ['app_mention', 'reaction_added', 'reaction_removed'],
+          bot_events: ['app_home_opened', 'app_mention', 'reaction_added', 'reaction_removed'],
           request_url: `${baseUrl}/api/chat/slack`,
         }
 
@@ -71,6 +71,11 @@ function createManifest() {
       name: appName,
     },
     features: {
+      app_home: {
+        home_tab_enabled: true,
+        messages_tab_enabled: false,
+        messages_tab_read_only_enabled: false,
+      },
       bot_user: {
         always_online: true,
         display_name: botDisplayName,
