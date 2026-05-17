@@ -8,6 +8,7 @@ import { useConnect, useConnection, useConnectors } from 'wagmi'
 import * as z from 'zod/mini'
 import { api } from '#/api.ts'
 import { WalletProviders } from '#/components/WalletProviders.tsx'
+import { slackCommand, tipbotImagePath } from '#/lib/app.ts'
 import { getErrorMessage } from '#/lib/error.ts'
 import { formatCurrencyAmount } from '#/lib/format.ts'
 import { rpc } from '#/lib/rpc.ts'
@@ -32,13 +33,13 @@ function Component() {
             alt="Tipbot"
             className="size-28 rounded-3xl object-cover shadow-lg sm:size-36"
             height={160}
-            src="/tipbot.png"
+            src={tipbotImagePath}
             width={160}
           />
           <div className="max-w-sm space-y-3 text-center">
             <h1 className="text-3xl font-bold text-gray10">Confirmation link expired</h1>
             <p className="text-base text-gray9">{data.message}</p>
-            <p className="text-base text-gray9">Run `/tip` again in Slack.</p>
+            <p className="text-base text-gray9">Run `{slackCommand}` again in Slack.</p>
           </div>
         </section>
       </main>
@@ -62,9 +63,16 @@ function ConfirmPanel(props: {
   const [error, setError] = React.useState<string | null>(null)
   const [status, setStatus] = React.useState<'idle' | 'confirming' | 'sent'>('idle')
   const [transactionHash, setTransactionHash] = React.useState<string | null>(null)
-  const recipient = data.recipientProviderLabel
-    ? `@${data.recipientProviderLabel}`
-    : data.recipientProviderUserId
+  const recipients: Array<{
+    recipientProviderLabel?: string | null
+    recipientProviderUserId: string
+  }> = data.recipients ?? [
+    {
+      recipientProviderLabel: data.recipientProviderLabel,
+      recipientProviderUserId: data.recipientProviderUserId,
+    },
+  ]
+  const totalAmount = String(Number(data.amount) * recipients.length)
 
   async function confirm() {
     setError(null)
@@ -155,7 +163,7 @@ function ConfirmPanel(props: {
           alt="Tipbot"
           className="size-28 rounded-3xl object-cover shadow-lg sm:size-36"
           height={160}
-          src="/tipbot.png"
+          src={tipbotImagePath}
           width={160}
         />
         {status === 'sent' ? (
@@ -197,13 +205,28 @@ function ConfirmPanel(props: {
                     <span className="text-base font-bold text-gray8 sm:text-lg">Amount</span>
                     <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
                       {formatCurrencyAmount(data.amount, data.tokenCurrency)} {data.tokenSymbol}
+                      {recipients.length > 1 ? ' each' : ''}
                     </span>
                   </div>
-                  <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
+                  {recipients.length > 1 ? (
+                    <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
+                      <span className="text-base font-bold text-gray8 sm:text-lg">Total</span>
+                      <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
+                        {formatCurrencyAmount(totalAmount, data.tokenCurrency)} {data.tokenSymbol}
+                      </span>
+                    </div>
+                  ) : null}
+                  <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6 sm:p-5">
                     <span className="text-base font-bold text-gray8 sm:text-lg">To</span>
-                    <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
-                      {recipient}
-                    </span>
+                    <div className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
+                      {recipients.map((recipient) => (
+                        <div key={recipient.recipientProviderUserId}>
+                          {recipient.recipientProviderLabel
+                            ? `@${recipient.recipientProviderLabel}`
+                            : recipient.recipientProviderUserId}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                   {data.memo ? (
                     <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">

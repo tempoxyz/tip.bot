@@ -145,6 +145,199 @@ describe('/tip @account', () => {
     expect(tip.transaction_hash).toEqual(expect.any(String))
   }, 20_000) // 20 seconds
 
+  test('sends atomic multi-recipient tip', async () => {
+    const accounts = await connectTipAccounts()
+    const secondRecipientAccount = await findOrCreateAccount(
+      Account.fromSecp256k1('0x2222222222222222222222222222222222222222222222222222222222222222')
+        .address,
+    )
+    await factory.member.insert({
+      account_id: secondRecipientAccount.id,
+      provider_user_id: unconnectedProviderUserId,
+      workspace_id: accounts.workspace.id,
+    })
+
+    const response = await postSlashCommand(
+      `<@${Constants.slack.memberUserId}> <@${unconnectedProviderUserId}> $0.002 for team`,
+    )
+    const batch = await db
+      .selectFrom('tip_batch')
+      .selectAll()
+      .where('idempotency_key', 'like', `command:${providerId}:%`)
+      .executeTakeFirstOrThrow()
+    const tips = await db
+      .selectFrom('tip')
+      .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
+      .select([
+        'recipient.provider_user_id',
+        'tip.amount',
+        'tip.confirmed_at',
+        'tip.transaction_hash',
+      ])
+      .where('tip.batch_id', '=', batch.id)
+      .orderBy('recipient.provider_user_id', 'asc')
+      .execute()
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(
+      `<@${Constants.slack.adminUserId}> sent 2 accounts $0.002 each for team · Receipt`,
+    )
+    await expectSlackMessage(`• <@${Constants.slack.memberUserId}>`)
+    await expectSlackMessage(`• <@${unconnectedProviderUserId}>`)
+    expect(batch).toMatchObject({
+      amount_each: 2000,
+      recipient_count: 2,
+      status: 'confirmed',
+      total_amount: 4000,
+      transaction_hash: expect.any(String),
+    })
+    expect(tips).toHaveLength(2)
+    expect(tips).toEqual([
+      expect.objectContaining({
+        amount: 2000,
+        confirmed_at: expect.any(String),
+        provider_user_id: Constants.slack.memberUserId,
+        transaction_hash: null,
+      }),
+      expect.objectContaining({
+        amount: 2000,
+        confirmed_at: expect.any(String),
+        provider_user_id: unconnectedProviderUserId,
+        transaction_hash: null,
+      }),
+    ])
+  }, 20_000) // 20 seconds
+
+  test('deduplicates duplicate multi-recipient tip requests', async () => {
+    const accounts = await connectTipAccounts()
+    const secondRecipientAccount = await findOrCreateAccount(
+      Account.fromSecp256k1('0x2222222222222222222222222222222222222222222222222222222222222222')
+        .address,
+    )
+    await factory.member.insert({
+      account_id: secondRecipientAccount.id,
+      provider_user_id: unconnectedProviderUserId,
+      workspace_id: accounts.workspace.id,
+    })
+    const text = `<@${Constants.slack.memberUserId}> <@${unconnectedProviderUserId}> $0.002 for team`
+
+    const firstResponse = await postSlashCommand(text)
+    const secondResponse = await postSlashCommand(text)
+    const batches = await db
+      .selectFrom('tip_batch')
+      .selectAll()
+      .where('idempotency_key', 'like', `command:${providerId}:%`)
+      .execute()
+    const tips = await db
+      .selectFrom('tip')
+      .select(['batch_id', 'confirmed_at'])
+      .where('batch_id', '=', batches[0]!.id)
+      .execute()
+
+    expect(firstResponse.status).toBe(200)
+    expect(secondResponse.status).toBe(200)
+    expect(batches).toHaveLength(1)
+    expect(batches[0]).toMatchObject({
+      recipient_count: 2,
+      status: 'confirmed',
+      transaction_hash: expect.any(String),
+    })
+    expect(tips).toHaveLength(2)
+    expect(tips).toEqual([
+      expect.objectContaining({ confirmed_at: expect.any(String) }),
+      expect.objectContaining({ confirmed_at: expect.any(String) }),
+    ])
+  }, 20_000) // 20 seconds
+
+  test('accepts 20 recipients for confirmation', async () => {
+    const accounts = await connectTipAccounts()
+    const recipients: string[] = [Constants.slack.memberUserId]
+    for (let index = 0; index < 19; index++) {
+      const account = await factory.account.insert({})
+      const providerUserId = `U${String(index + 10).padStart(8, '0')}`
+      recipients.push(providerUserId)
+      await factory.member.insert({
+        account_id: account.id,
+        provider_user_id: providerUserId,
+        workspace_id: accounts.workspace.id,
+      })
+    }
+
+    const response = await postSlashCommand(
+      `${recipients.map((recipient) => `<@${recipient}>`).join(' ')} 1`,
+    )
+    const token = await getLatestConfirmToken()
+    const confirmation = await client.api.confirm[':token'].$get({ param: { token } })
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('Tipbot needs your approval to send this payment.')
+    expect(confirmation.status).toBe(200)
+    const json = await confirmation.json()
+    expect(json).toMatchObject({
+      amount: '1',
+      kind: 'onetime_payment',
+    })
+    if (!json.ok) throw new Error('Expected confirmation metadata.')
+    expect(json.recipients).toHaveLength(20)
+    expect(json.transactionRequest?.calls).toHaveLength(20)
+  }, 20_000) // 20 seconds
+
+  test('rejects 21 recipients', async () => {
+    const recipients = Array.from({ length: 21 }, (_value, index) => ({
+      recipientProviderUserId: `U${String(index + 10).padStart(8, '0')}`,
+    }))
+
+    const result = await Tip.handleTipBatchRequest(env, {
+      idempotencyKey: `limit:${Nanoid.generate()}`,
+      memo: null,
+      provider: 'slack',
+      providerChannelId: Constants.slack.channelId,
+      providerId,
+      recipients,
+      senderProviderUserId: Constants.slack.adminUserId,
+      source: 'command',
+    })
+
+    expect(result).toEqual({
+      code: 'failed',
+      message: 'Multi-tip supports up to 20 recipients.',
+      ok: false,
+    })
+  })
+
+  test('requests one-time approval when batch total exceeds existing access key limit', async () => {
+    const accounts = await connectTipAccounts()
+    const secondRecipientAccount = await findOrCreateAccount(
+      Account.fromSecp256k1('0x2222222222222222222222222222222222222222222222222222222222222222')
+        .address,
+    )
+    await factory.member.insert({
+      account_id: secondRecipientAccount.id,
+      provider_user_id: unconnectedProviderUserId,
+      workspace_id: accounts.workspace.id,
+    })
+
+    const response = await postSlashCommand(
+      `<@${Constants.slack.memberUserId}> <@${unconnectedProviderUserId}> 6`,
+    )
+    const token = await getLatestConfirmToken()
+    const confirmation = await client.api.confirm[':token'].$get({ param: { token } })
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('Tipbot needs your approval to send this payment.')
+    await expectSlackMessageNotContaining('Receipt')
+    expect(confirmation.status).toBe(200)
+    await expect(confirmation.json()).resolves.toMatchObject({
+      amount: '6',
+      kind: 'onetime_payment',
+      recipients: [
+        { recipientProviderUserId: Constants.slack.memberUserId },
+        { recipientProviderUserId: unconnectedProviderUserId },
+      ],
+      transactionRequest: expect.objectContaining({ calls: expect.any(Array) }),
+    })
+  })
+
   test('shows confirmation action for token without access key', async () => {
     await connectTipAccounts()
 
@@ -825,7 +1018,7 @@ test('@Tipbot mention accepts repeated bot mentions', async () => {
   expect(tip.transaction_hash).toEqual(expect.any(String))
 }, 20_000) // 20 seconds
 
-test('@Tipbot mention rejects ambiguous mentions', async () => {
+test('@Tipbot mention rejects multi-recipient tips with unconnected recipients', async () => {
   aiRunMock.mockResolvedValueOnce({
     response: 'Almost. Try `@Tipbot @account for coffee`.',
   } as never)
@@ -844,7 +1037,6 @@ test('@Tipbot mention rejects ambiguous mentions', async () => {
 
   expect(response.status).toBe(200)
   expect(tips).toHaveLength(0)
-  await expectSlackThreadMessage(messageTs, 'Almost. Try `@Tipbot @account for coffee`.')
   await expectSlackThreadMessageNotContaining(messageTs, 'tipped')
 })
 
@@ -1206,17 +1398,34 @@ test('reaction tipping updates one aggregate reply for multiple tipped messages 
   })
   if (!reply.ts) throw new Error('Expected Slack reply message timestamp.')
 
+  const firstTransactionHash = `0x${Nanoid.generate().padEnd(64, '1').slice(0, 64)}`
+  const firstBatch = await factory.tip_batch.insert({
+    amount_each: 1000,
+    idempotency_key: `${Chat.reactionTipIdempotencyPrefix}${Nanoid.generate()}`,
+    provider: 'slack',
+    provider_channel_id: channelId,
+    provider_id: providerId,
+    recipient_count: 1,
+    sender_member_id: connected.senderMember.id,
+    source: 'reaction',
+    status: 'confirmed',
+    token_address: Tempo.addressLookup.pathUsd,
+    total_amount: 1000,
+    transaction_hash: firstTransactionHash,
+    workspace_id: connected.workspace.id,
+  })
   const firstTip = await factory.tip.insert({
     access_key_id: connected.accessKey.id,
+    batch_id: firstBatch.id,
     chain_id: connected.workspace.chain_id,
     confirmed_at: new Date().toISOString(),
-    idempotency_key: `${Chat.reactionTipIdempotencyPrefix}${Nanoid.generate()}`,
+    idempotency_key: firstBatch.idempotency_key,
     recipient_id: connected.recipientAccount.id,
     recipient_member_id: connected.recipientMember.id,
     sender_id: connected.senderAccount.id,
     sender_member_id: connected.senderMember.id,
     token_address: Tempo.addressLookup.pathUsd,
-    transaction_hash: `0x${Nanoid.generate().padEnd(64, '1').slice(0, 64)}`,
+    transaction_hash: firstTransactionHash,
     workspace_id: connected.workspace.id,
   })
   await factory.reaction_tip.insert({
@@ -1237,17 +1446,34 @@ test('reaction tipping updates one aggregate reply for multiple tipped messages 
     workspaceId: connected.workspace.id,
   })
 
+  const secondTransactionHash = `0x${Nanoid.generate().padEnd(64, '2').slice(0, 64)}`
+  const secondBatch = await factory.tip_batch.insert({
+    amount_each: 1000,
+    idempotency_key: `${Chat.reactionTipIdempotencyPrefix}${Nanoid.generate()}`,
+    provider: 'slack',
+    provider_channel_id: channelId,
+    provider_id: providerId,
+    recipient_count: 1,
+    sender_member_id: connected.senderMember.id,
+    source: 'reaction',
+    status: 'confirmed',
+    token_address: Tempo.addressLookup.pathUsd,
+    total_amount: 1000,
+    transaction_hash: secondTransactionHash,
+    workspace_id: connected.workspace.id,
+  })
   const secondTip = await factory.tip.insert({
     access_key_id: connected.accessKey.id,
+    batch_id: secondBatch.id,
     chain_id: connected.workspace.chain_id,
     confirmed_at: new Date().toISOString(),
-    idempotency_key: `${Chat.reactionTipIdempotencyPrefix}${Nanoid.generate()}`,
+    idempotency_key: secondBatch.idempotency_key,
     recipient_id: connected.recipientAccount.id,
     recipient_member_id: connected.recipientMember.id,
     sender_id: connected.senderAccount.id,
     sender_member_id: connected.senderMember.id,
     token_address: Tempo.addressLookup.pathUsd,
-    transaction_hash: `0x${Nanoid.generate().padEnd(64, '2').slice(0, 64)}`,
+    transaction_hash: secondTransactionHash,
     workspace_id: connected.workspace.id,
   })
   await factory.reaction_tip.insert({
@@ -2876,6 +3102,14 @@ async function expectNoSlackMessages() {
   const history = await slack.conversations.history({ channel: Constants.slack.channelId })
 
   expect(history).toMatchObject({ messages: [], ok: true })
+}
+
+async function getLatestConfirmToken() {
+  const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+  const message = history.messages?.find((message) => message.text?.includes('/confirm/'))
+  const token = message?.text?.match(/\/confirm\/(0x[0-9a-f]+\.0x[0-9a-f]+)/i)?.[1]
+  if (!token) throw new Error('Expected confirmation token in Slack message.')
+  return token
 }
 
 async function createSlackTestChannel(prefix: string) {

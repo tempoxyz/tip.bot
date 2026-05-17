@@ -2,6 +2,7 @@ import * as DB from '#db/client.ts'
 import type { DB as DB_gen } from '#db/types.gen.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as AccessKey from '#/lib/accessKey.ts'
+import { getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as ProviderIdentity from '#/lib/providerIdentity.ts'
@@ -126,17 +127,15 @@ export function getChat() {
     if (!context) return
     await handleSlackReactionTip(reaction, context)
   })
-  bot.onSlashCommand('/tip', async (event) => {
+  bot.onSlashCommand(getSlackCommand(env.HOST), async (event) => {
     if (event.adapter !== getSlack()) throw new Error('Provider not implemented yet.')
 
     const context = {
       db: DB.create(env.DB),
       provider: getProvider(event),
       text: event.text.trim(),
-      threadTs: z
-        .object({ thread_ts: z.string().min(1).optional() })
-        .passthrough()
-        .parse(event.raw).thread_ts,
+      threadTs: z.looseObject({ thread_ts: z.string().min(1).optional() }).parse(event.raw)
+        .thread_ts,
     } satisfies HandlerContext
 
     const match = context.text.match(commandPattern)
@@ -495,28 +494,34 @@ const handlers = {
       .executeTakeFirst()
 
     const commandRows = [
-      ['/tip @account [amount] [token] [for memo]', 'Send payment'],
-      ['/tip balance', 'Show wallet balance'],
-      ['/tip config', 'Manage workspace configuration'],
-      ['/tip connect', 'Connect to Tipbot'],
-      ['/tip disconnect', 'Disconnect from Tipbot'],
-      ['/tip help', 'Show help message'],
-      ['/tip leaderboard', 'Show top tippers and recipients'],
-      ['/tip stats', 'Show your tip stats'],
-      ['/tip status', 'Check connection status'],
+      [`${getSlackCommand(env.HOST)} @account [amount] [token] [for memo]`, 'Send payment'],
+      [`${getSlackCommand(env.HOST)} balance`, 'Show wallet balance'],
+      [`${getSlackCommand(env.HOST)} config`, 'Manage workspace configuration'],
+      [`${getSlackCommand(env.HOST)} connect`, 'Connect to Tipbot'],
+      [`${getSlackCommand(env.HOST)} disconnect`, 'Disconnect from Tipbot'],
+      [`${getSlackCommand(env.HOST)} help`, 'Show help message'],
+      [`${getSlackCommand(env.HOST)} leaderboard`, 'Show top tippers and recipients'],
+      [`${getSlackCommand(env.HOST)} stats`, 'Show your tip stats'],
+      [`${getSlackCommand(env.HOST)} status`, 'Check connection status'],
     ]
     const paymentExampleRows = [
-      ['/tip @account', 'Send default amount'],
-      ['/tip @account for coffee', 'Send default amount with memo'],
-      ['/tip @account 0.005', 'Send custom amount'],
-      ['/tip @account 0.005 for coffee', 'Send custom amount with memo'],
-      ['/tip @account 0.005 USDC', 'Send custom token'],
-      ['/tip @account 0.005 USDC for coffee', 'Send custom token with memo'],
+      [`${getSlackCommand(env.HOST)} @account`, 'Send default amount'],
+      [`${getSlackCommand(env.HOST)} @account for coffee`, 'Send default amount with memo'],
+      [`${getSlackCommand(env.HOST)} @account 0.005`, 'Send custom amount'],
+      [`${getSlackCommand(env.HOST)} @account 0.005 for coffee`, 'Send custom amount with memo'],
+      [`${getSlackCommand(env.HOST)} @account 0.005 USDC`, 'Send custom token'],
+      [
+        `${getSlackCommand(env.HOST)} @account 0.005 USDC for coffee`,
+        'Send custom token with memo',
+      ],
     ]
     const mentionExampleRows = [
-      ['@Tipbot @account', 'Send default amount'],
-      ['@Tipbot @account for coffee', 'Send default amount with memo'],
-      ['@Tipbot @account 0.005 for coffee', 'Send custom amount with memo'],
+      [`@${getSlackBotDisplayName(env.HOST)} @account`, 'Send default amount'],
+      [`@${getSlackBotDisplayName(env.HOST)} @account for coffee`, 'Send default amount with memo'],
+      [
+        `@${getSlackBotDisplayName(env.HOST)} @account 0.005 for coffee`,
+        'Send custom amount with memo',
+      ],
       [
         `[emoji] :${workspace?.reaction_tip_emoji ?? 'money_with_wings'}:`,
         'Send default amount by reacting to a message',
@@ -940,7 +945,7 @@ async function handleTipText(
     .where('provider', '=', ctx.provider.type)
     .where('provider_id', '=', ctx.provider.id)
     .executeTakeFirst()
-  const parsed = Tip.parseTipText(ctx.text, {
+  const parsed = Tip.parseTipBatchText(ctx.text, {
     chainId: workspace?.chain_id ?? Tempo.chainLookup.mainnet,
   })
   if (!parsed) {
@@ -971,19 +976,35 @@ async function handleTipText(
       // Best effort only. Payment flow must not depend on Slack assistant UI.
     })
   try {
-    const result = await Tip.handleTipRequest(env, {
-      amount: parsed.amount,
-      idempotencyKey: options.idempotencyKey,
-      memo: parsed.memo,
-      provider: ctx.provider.type,
-      providerChannelId: event.channel.id,
-      providerId: ctx.provider.id,
-      providerThreadId: options.threadTs,
-      recipientProviderLabel: parsed.recipientProviderLabel,
-      recipientProviderUserId: parsed.recipientProviderUserId,
-      senderProviderUserId: event.user.userId,
-      tokenAddress: tokenAddress ?? undefined,
-    }).catch(
+    const result = await (
+      parsed.recipients.length === 1
+        ? Tip.handleTipRequest(env, {
+            amount: parsed.amount,
+            idempotencyKey: options.idempotencyKey,
+            memo: parsed.memo,
+            provider: ctx.provider.type,
+            providerChannelId: event.channel.id,
+            providerId: ctx.provider.id,
+            providerThreadId: options.threadTs,
+            recipientProviderLabel: parsed.recipients[0]?.recipientProviderLabel,
+            recipientProviderUserId: parsed.recipients[0]!.recipientProviderUserId,
+            senderProviderUserId: event.user.userId,
+            tokenAddress: tokenAddress ?? undefined,
+          })
+        : Tip.handleTipBatchRequest(env, {
+            amount: parsed.amount,
+            idempotencyKey: options.idempotencyKey,
+            memo: parsed.memo,
+            provider: ctx.provider.type,
+            providerChannelId: event.channel.id,
+            providerId: ctx.provider.id,
+            providerThreadId: options.threadTs,
+            recipients: parsed.recipients,
+            senderProviderUserId: event.user.userId,
+            source: options.mention ? 'mention' : 'command',
+            tokenAddress: tokenAddress ?? undefined,
+          })
+    ).catch(
       (error) =>
         ({
           code: 'failed',
@@ -992,7 +1013,25 @@ async function handleTipText(
         }) satisfies Tip.TipResult,
     )
 
-    if (result.ok && result.status === 'sent') {
+    if (result.ok && result.status === 'sent' && 'recipients' in result) {
+      const amount = result.isDefaultToken
+        ? formatCurrencyAmount(result.amount, result.tokenCurrency)
+        : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
+      await postSlackReceiptMessage(
+        event,
+        ctx,
+        `${event.channel.mentionUser(result.senderProviderUserId)} ${result.memo ? 'sent' : 'tipped'} ${result.recipients.length} accounts ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${result.recipients.map((recipient) => `• ${event.channel.mentionUser(recipient.recipientProviderUserId)}`).join('\n')}`,
+        result.chainId,
+        result.transactionHash,
+        undefined,
+        result.feePayer === 'sender'
+          ? 'Fee sponsor unavailable; fee paid from your balance.'
+          : undefined,
+        options.threadTs,
+      )
+      if (result.memo && options.threadTs)
+        await postSlackMemoReply(event, ctx, result.memo, options.threadTs)
+    } else if (result.ok && result.status === 'sent' && !('recipients' in result)) {
       await postSlackReceiptMessage(
         event,
         ctx,
@@ -1055,7 +1094,7 @@ async function handleTipText(
         if (result.code === 'self_tip')
           return 'Payment not sent. Cannot send a payment to yourself.'
         if (result.code === 'recipient_unconnected')
-          return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
+          return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipients[0]!.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
         if (result.code === 'pending') return 'Payment still sending.'
         if (result.code === 'insufficient_funds')
           return 'Payment not sent. Your wallet has insufficient funds.'
@@ -1329,7 +1368,7 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
       provider.id,
       event.item.channel,
       event.user,
-      'Payment not sent. Connect to Tipbot with `/tip connect` and try again.',
+      `Payment not sent. Connect to Tipbot with \`${getSlackCommand(env.HOST)} connect\` and try again.`,
     )
     return
   }
@@ -1392,14 +1431,15 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
   })()
   if (!inserted) return
 
-  const result = await Tip.handleTipRequest(env, {
+  const result = await Tip.handleTipBatchRequest(env, {
     idempotencyKey,
     memo: null,
     provider: provider.type,
     providerChannelId: event.item.channel,
     providerId: provider.id,
-    recipientProviderUserId: recipient.providerUserId,
+    recipients: [{ recipientProviderUserId: recipient.providerUserId }],
     senderProviderUserId: sender.providerUserId,
+    source: 'reaction',
   }).catch(
     (error) =>
       ({
@@ -1592,6 +1632,7 @@ export async function updateReactionTipAggregate(
   const rows = await db
     .selectFrom('reaction_tip')
     .innerJoin('tip', 'tip.id', 'reaction_tip.tip_id')
+    .innerJoin('tip_batch', 'tip_batch.id', 'tip.batch_id')
     .innerJoin('member as sender', 'sender.id', 'reaction_tip.sender_member_id')
     .innerJoin('member as recipient', 'recipient.id', 'reaction_tip.recipient_member_id')
     .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
@@ -1602,7 +1643,7 @@ export async function updateReactionTipAggregate(
       'tip.amount',
       'tip.chain_id',
       'tip.token_address',
-      'tip.transaction_hash',
+      'tip_batch.transaction_hash',
       'workspace.default_token_address',
       'workspace.reaction_tip_emoji',
     ])
@@ -1611,7 +1652,7 @@ export async function updateReactionTipAggregate(
     .where('reaction_tip.thread_ts', '=', options.threadTs)
     .where('reaction_tip.reaction', '=', options.reaction)
     .where('tip.confirmed_at', 'is not', null)
-    .where('tip.transaction_hash', 'is not', null)
+    .where('tip_batch.transaction_hash', 'is not', null)
     .orderBy('reaction_tip.created_at', 'asc')
     .execute()
   if (rows.length === 0) return
@@ -1762,7 +1803,7 @@ function normalizeSlackMentionText(value: string, botUserId: string) {
 
 function parseSlackMentionTipText(text: string) {
   const mentions = [...text.matchAll(/<@([A-Z0-9_]+)(?:\|[^>]+)?>/g)]
-  if (mentions.length !== 1) return null
+  if (mentions.length < 1) return null
   const prefix = text.slice(0, mentions[0]!.index).trim().toLowerCase()
   if (prefix && !['pay', 'send', 'tip'].includes(prefix)) return null
   return text.slice(mentions[0]!.index).trim()
@@ -1827,8 +1868,8 @@ async function postInvalidUsage(
   body.set(
     'text',
     options.mention
-      ? 'Invalid `@Tipbot` usage. Try `@Tipbot @account for coffee` or `@Tipbot @account 0.005 for coffee`.'
-      : 'Invalid `/tip` usage. Try `/tip @account` or `/tip help` for more info.',
+      ? `Invalid \`@${getSlackBotDisplayName(env.HOST)}\` usage. Try \`@${getSlackBotDisplayName(env.HOST)} @account for coffee\` or \`@${getSlackBotDisplayName(env.HOST)} @account 0.005 for coffee\`.`
+      : `Invalid \`${getSlackCommand(env.HOST)}\` usage. Try \`${getSlackCommand(env.HOST)} @account\` or \`${getSlackCommand(env.HOST)} help\` for more info.`,
   )
   if (options.threadTs) body.set('thread_ts', options.threadTs)
   await postSlackPrivateReply(
@@ -1881,11 +1922,13 @@ async function generateInvalidMentionReply(mentionText: string) {
   const isThanksText = /^(thank you|thanks|ty|thx|thank u)\b/i.test(text)
   const fallback = (() => {
     if (creatureMatch && isTipText)
-      return `${creatureMatch[0].toUpperCase()}? Excellent. For tips: \`@Tipbot @account for coffee\`.`
+      return `${creatureMatch[0].toUpperCase()}? Excellent. For tips: \`@${getSlackBotDisplayName(env.HOST)} @account for coffee\`.`
     if (creatureMatch) return `${creatureMatch[0].toUpperCase()}? Now we are talking.`
     if (isThanksText) return 'Anytime.'
-    if (isSetupText) return 'Run `/tip connect`, then try `@Tipbot tip @account`.'
-    if (isTipText) return 'Almost. Try `@Tipbot @account for coffee`.'
+    if (isSetupText)
+      return `Run \`${getSlackCommand(env.HOST)} connect\`, then try \`@${getSlackBotDisplayName(env.HOST)} tip @account\`.`
+    if (isTipText)
+      return `Almost. Try \`@${getSlackBotDisplayName(env.HOST)} @account for coffee\`.`
     return 'Anytime.'
   })()
   try {
@@ -1896,8 +1939,7 @@ async function generateInvalidMentionReply(mentionText: string) {
           max_tokens: 48,
           messages: [
             {
-              content:
-                'You are Tipbot in Slack. Reply to an invalid @Tipbot mention. Keep it under 140 chars. Be short and pithy. Do not mention users. If the user mentions goblins or other creatures, get REALLY EXCITED. If the user seems to be trying to send a tip/payment, include this exact syntax: `@Tipbot @account for coffee`. Otherwise just acknowledge or deflect lightly.',
+              content: `You are ${getSlackBotDisplayName(env.HOST)} in Slack. Reply to an invalid @${getSlackBotDisplayName(env.HOST)} mention. Keep it under 140 chars. Be short and pithy. Do not mention users. If the user mentions goblins or other creatures, get REALLY EXCITED. If the user seems to be trying to send a tip/payment, include this exact syntax: \`@${getSlackBotDisplayName(env.HOST)} @account for coffee\`. Otherwise just acknowledge or deflect lightly.`,
               role: 'system',
             },
             { content: text || '(empty mention)', role: 'user' },
@@ -1917,7 +1959,8 @@ async function generateInvalidMentionReply(mentionText: string) {
 function isValidInvalidMentionAiReply(value: string) {
   if (!value || value.length > 200) return false
   if (/^@?tipbot[.!?]?$/i.test(value)) return false
-  if (/@Tipbot|<@[A-Z0-9_]+/i.test(value)) return false
+  if (value.includes(`@${getSlackBotDisplayName(env.HOST)}`) || /@Tipbot|<@[A-Z0-9_]+/i.test(value))
+    return false
   return true
 }
 
@@ -1926,8 +1969,8 @@ async function postSlackIntroduction(event: TipEvent, ctx: HandlerContext, threa
   if (!installation) throw new Error('Tibot app not installed for this workspace.')
 
   const text =
-    'I’m Tipbot: sometime tipper, sometime messenger, always bot.\n' +
-    'Connect with `/tip connect`, then send stablecoins with `@Tipbot @account for coffee`, `@Tipbot @account 0.005 for coffee`, `/tip @account for coffee`, or a 💸 reaction.'
+    `I’m ${getSlackBotDisplayName(env.HOST)}: sometime tipper, sometime messenger, always bot.\n` +
+    `Connect with \`${getSlackCommand(env.HOST)} connect\`, then send stablecoins with \`@${getSlackBotDisplayName(env.HOST)} @account for coffee\`, \`@${getSlackBotDisplayName(env.HOST)} @account 0.005 for coffee\`, \`${getSlackCommand(env.HOST)} @account for coffee\`, or a 💸 reaction.`
   const body = new URLSearchParams()
   body.set('channel', event.channel.id.replace(/^slack:/, ''))
   body.set('text', text)
@@ -2156,7 +2199,7 @@ async function postSlackReceiptMessage(
     JSON.stringify(createReceiptBlocks(receiptText, chainId, transactionHash, context)),
   )
   body.set('channel', event.channel.id.replace(/^slack:/, ''))
-  body.set('text', `${receiptText}${context ? ` ${context}` : ''} · Receipt`)
+  body.set('text', formatReceiptText(`${receiptText}${context ? ` ${context}` : ''}`, 'Receipt'))
   if (threadTs) body.set('thread_ts', threadTs)
   if (user && !isSlackDMChannelId(event.channel.id)) body.set('user', user.userId)
   else {
@@ -2253,10 +2296,11 @@ function createReceiptBlocks(
   transactionHash: string,
   context?: string,
 ) {
+  const receiptLink = `<${Tempo.formatTxLink(chainId, transactionHash)}|Receipt>`
   return [
     {
       text: {
-        text: `${text} · <${Tempo.formatTxLink(chainId, transactionHash)}|Receipt>`,
+        text: formatReceiptText(text, receiptLink),
         type: 'mrkdwn',
       },
       type: 'section',
@@ -2270,6 +2314,12 @@ function createReceiptBlocks(
         ]
       : []),
   ]
+}
+
+function formatReceiptText(text: string, receipt: string) {
+  const lineBreakIndex = text.indexOf('\n')
+  if (lineBreakIndex === -1) return `${text} · ${receipt}`
+  return `${text.slice(0, lineBreakIndex).replace(/\.$/, '')} · ${receipt}${text.slice(lineBreakIndex)}`
 }
 
 async function isSlackAdmin(providerId: string, providerUserId: string) {

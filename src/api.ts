@@ -4,6 +4,7 @@ import * as chat from 'chat'
 import { z } from 'zod'
 import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
+import { getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as hono from '#/lib/hono.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
@@ -299,12 +300,12 @@ export const api = new Hono<{
                       children: [
                         chat.CardText(`Connected \`${truncatedAddress}\` <${explorerUrl}|View>`),
                         chat.CardText(
-                          `Mention \`@Tipbot @user\` or use \`/tip @user\` to send a payment. React with :${link.reaction_tip_emoji}: to tip a message.`,
+                          `Mention \`@${getSlackBotDisplayName(c.env.HOST)} @user\` or use \`${getSlackCommand(c.env.HOST)} @user\` to send a payment. React with :${link.reaction_tip_emoji}: to tip a message.`,
                           { style: 'muted' },
                         ),
                       ],
                     }),
-                    fallbackText: `Connected\nWallet: ${account.address}\nUse /tip @user to send your first tip.`,
+                    fallbackText: `Connected\nWallet: ${account.address}\nUse ${getSlackCommand(c.env.HOST)} @user to send your first tip.`,
                   },
                   { fallbackToDM: false },
                 ),
@@ -408,7 +409,9 @@ export const api = new Hono<{
             : data.payload.expiresAt,
         accessKeyLimit:
           data.payload.kind === 'reusable_access_key'
-            ? AccountLink.reusableAccessKeyLimitText
+            ? formatAmount(
+                Number(data.payload.accessKeyLimit ?? AccountLink.reusableAccessKeyLimit),
+              )
             : formatAmount(data.payload.amount),
         accessKeyLimitPeriodSeconds:
           data.payload.kind === 'reusable_access_key'
@@ -422,6 +425,12 @@ export const api = new Hono<{
         ok: true as const,
         recipientProviderLabel,
         recipientProviderUserId: data.payload.recipientProviderUserId,
+        recipients: data.payload.recipients ?? [
+          {
+            recipientProviderLabel,
+            recipientProviderUserId: data.payload.recipientProviderUserId,
+          },
+        ],
         tokenAddress: Address.checksum(data.payload.tokenAddress),
         tokenCurrency: metadata.currency,
         tokenSymbol: metadata.symbol,
@@ -525,8 +534,17 @@ export const api = new Hono<{
               const amount = result.isDefaultToken
                 ? formatCurrencyAmount(result.amount, result.tokenCurrency)
                 : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
-              const text = `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} <@${result.recipientProviderUserId}> ${amount}${result.memo ? ` for ${result.memo}` : ''}.`
+              const text =
+                'recipients' in result
+                  ? `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} ${result.recipients.length} accounts ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${result.recipients.map((recipient) => `• <@${recipient.recipientProviderUserId}>`).join('\n')}`
+                  : `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} <@${result.recipientProviderUserId}> ${amount}${result.memo ? ` for ${result.memo}` : ''}.`
               const receiptText = text.replace(/\.$/, '')
+              const receiptLink = `<${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`
+              const receiptMessage = (() => {
+                const lineBreakIndex = receiptText.indexOf('\n')
+                if (lineBreakIndex === -1) return `${receiptText} · ${receiptLink}`
+                return `${receiptText.slice(0, lineBreakIndex).replace(/\.$/, '')} · ${receiptLink}${receiptText.slice(lineBreakIndex)}`
+              })()
               const threadId = data.payload.providerThreadId
               const body = new URLSearchParams()
               body.set(
@@ -534,7 +552,7 @@ export const api = new Hono<{
                 JSON.stringify([
                   {
                     text: {
-                      text: `${receiptText} <${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`,
+                      text: receiptMessage,
                       type: 'mrkdwn',
                     },
                     type: 'section',
@@ -542,7 +560,7 @@ export const api = new Hono<{
                 ]),
               )
               body.set('channel', data.payload.providerChannelId.replace(/^slack:/, ''))
-              body.set('text', `${receiptText} Receipt`)
+              body.set('text', receiptMessage.replace(receiptLink, 'Receipt'))
               if (threadId) body.set('thread_ts', threadId)
               body.set('unfurl_links', 'false')
               body.set('unfurl_media', 'false')
@@ -633,7 +651,7 @@ export const api = new Hono<{
           return null
         }
         const parsed = z
-          .object({
+          .looseObject({
             actions: z
               .array(
                 z.object({
@@ -643,18 +661,16 @@ export const api = new Hono<{
               )
               .optional(),
             container: z
-              .object({
+              .looseObject({
                 message_ts: z.string().optional(),
                 view_id: z.string().optional(),
               })
-              .passthrough()
               .optional(),
             team: z.object({ id: z.string().min(1) }).optional(),
             trigger_id: z.string().min(1).optional(),
             type: z.string().min(1),
             user: z.object({ id: z.string().min(1) }).optional(),
           })
-          .passthrough()
           .safeParse(payload)
         if (!parsed.success) return null
         if (parsed.data.type !== 'block_actions') return null
@@ -683,10 +699,7 @@ export const api = new Hono<{
       }
       const parsed = z
         .object({
-          event: z
-            .object({ type: z.string().min(1) })
-            .passthrough()
-            .optional(),
+          event: z.looseObject({ type: z.string().min(1) }).optional(),
           event_id: z.string().min(1).optional(),
           type: z.string().min(1).optional(),
         })
