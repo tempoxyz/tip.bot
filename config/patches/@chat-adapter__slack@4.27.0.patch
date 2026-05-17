@@ -1,8 +1,8 @@
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index b83318f020332a5c55871d886b268f5308469ad9..d955186f2b9a9dd00103eb7bb0c1d9d998c86803 100644
+index b83318f..a3246f6 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
-@@ -145,6 +145,7 @@ interface SlackThreadId {
+@@ -150,6 +150,7 @@ interface SlackThreadId {
  }
  /** Slack event payload (raw message format) */
  interface SlackEvent {
@@ -10,8 +10,7 @@ index b83318f020332a5c55871d886b268f5308469ad9..d955186f2b9a9dd00103eb7bb0c1d9d9
      /** Legacy attachments (unfurl previews, app unfurls, etc.) */
      attachments?: Array<{
          from_url?: string;
-@@ -175,9 +176,14 @@ interface SlackEvent {
-     bot_id?: string;
+@@ -179,9 +180,13 @@ interface SlackEvent {
      channel?: string;
      /** Channel type: "channel", "group", "mpim", or "im" (DM) */
      channel_type?: string;
@@ -25,7 +24,7 @@ index b83318f020332a5c55871d886b268f5308469ad9..d955186f2b9a9dd00103eb7bb0c1d9d9
      files?: Array<{
          id?: string;
          mimetype?: string;
-@@ -198,6 +204,7 @@ interface SlackEvent {
+@@ -197,6 +202,7 @@ interface SlackEvent {
      latest_reply?: string;
      /** Inner message on message_changed events */
      message?: SlackEvent;
@@ -33,7 +32,7 @@ index b83318f020332a5c55871d886b268f5308469ad9..d955186f2b9a9dd00103eb7bb0c1d9d9
      /** Number of replies in the thread (present on thread parent messages) */
      reply_count?: number;
      subtype?: string;
-@@ -208,10 +215,28 @@ interface SlackEvent {
+@@ -208,10 +214,30 @@ interface SlackEvent {
      type: string;
      user?: string;
      username?: string;
@@ -64,7 +63,7 @@ index b83318f020332a5c55871d886b268f5308469ad9..d955186f2b9a9dd00103eb7bb0c1d9d9
      item: {
          type: string;
          channel: string;
-@@ -219,6 +244,7 @@ interface SlackReactionEvent {
+@@ -219,6 +245,7 @@ interface SlackReactionEvent {
      };
      item_user?: string;
      reaction: string;
@@ -73,11 +72,10 @@ index b83318f020332a5c55871d886b268f5308469ad9..d955186f2b9a9dd00103eb7bb0c1d9d9
      user: string;
  }
 diff --git a/dist/index.js b/dist/index.js
-index e1d9675be93dfbd8a1e128edb9c2db0448b18109..0f003e717fe0811f3c72f0aa9d8d5bbac61f0b73 100644
+index e1d9675..a02b223 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -1280,12 +1280,58 @@ var SlackAdapter = class _SlackAdapter {
-         const slackEvent = event;
+@@ -1282,10 +1282,56 @@ var SlackAdapter = class _SlackAdapter {
          if (!(slackEvent.team || slackEvent.team_id) && payload.team_id) {
            slackEvent.team_id = payload.team_id;
          }

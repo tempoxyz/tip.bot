@@ -18,7 +18,7 @@ overrides:
 packageExtensionsChecksum: sha256-+qeowdyxhNxOoPcupUZ6hUvH9lsA69jGqvTwkjD2d+c=
 
 patchedDependencies:
-  '@chat-adapter/slack@4.27.0': fc5f4a38f0f6b46069bb68e66af0bc8eb262068020dc3c0be3b4e8e245e51f00
+  '@chat-adapter/slack@4.27.0': f129c43965d79b15a626b2f5e493aee5ae9b5638ff12257bd4cf6cecb048d1dd
   '@slack/web-api@7.15.2': 97b9149f438abff67b083a9f281917a3b7e1d3133ca6b8be85c6e6ba78b591ae
   emulate@0.5.0: d2045cc26ad7d356cc10e676eee0ed4be242e12a837f1a65af268c8e1cf3f7ac
 
@@ -31,7 +31,7 @@ importers:
         version: 1.4.1(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@chat-adapter/slack':
         specifier: 4.27.0
-        version: 4.27.0(patch_hash=fc5f4a38f0f6b46069bb68e66af0bc8eb262068020dc3c0be3b4e8e245e51f00)
+        version: 4.27.0(patch_hash=f129c43965d79b15a626b2f5e493aee5ae9b5638ff12257bd4cf6cecb048d1dd)
       '@emoji-mart/data':
         specifier: 1.2.1
         version: 1.2.1
@@ -4267,7 +4267,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@chat-adapter/slack@4.27.0(patch_hash=fc5f4a38f0f6b46069bb68e66af0bc8eb262068020dc3c0be3b4e8e245e51f00)':
+  '@chat-adapter/slack@4.27.0(patch_hash=f129c43965d79b15a626b2f5e493aee5ae9b5638ff12257bd4cf6cecb048d1dd)':
     dependencies:
       '@chat-adapter/shared': 4.27.0
       '@slack/socket-mode': 2.0.7
