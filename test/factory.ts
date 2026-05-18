@@ -114,11 +114,9 @@ const defaultConfig: Partial<{
   member() {
     const now = new Date().toISOString()
     return {
-      account_id: null,
       created_at: now,
       login: null,
       name: null,
-      provider_identity_id: null,
       provider_user_id: `U${Nanoid.generate()}`,
       updated_at: now,
     }
@@ -151,7 +149,6 @@ const defaultConfig: Partial<{
       memo: null,
       sponsorship_memo: null,
       token_address: Address.checksum('0x0000000000000000000000000000000000000001'),
-      transaction_hash: null,
       updated_at: now,
     }
   },

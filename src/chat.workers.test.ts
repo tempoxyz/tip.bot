@@ -83,7 +83,6 @@ describe('/tip @account', () => {
         'sender.provider_user_id as sender_provider_user_id',
         'tip.amount',
         'tip.confirmed_at',
-        'tip.transaction_hash',
       ])
       .where('workspace.provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
@@ -101,7 +100,6 @@ describe('/tip @account', () => {
       sender_provider_user_id: Constants.slack.adminUserId,
     })
     expect(tip.confirmed_at).toEqual(expect.any(String))
-    expect(tip.transaction_hash).toEqual(expect.any(String))
   }, 20_000) // 20 seconds
 
   test('sends tip with memo', async () => {
@@ -110,7 +108,7 @@ describe('/tip @account', () => {
     const response = await postSlashCommand(`<@${Constants.slack.memberUserId}> for coffee`)
     const tip = await db
       .selectFrom('tip')
-      .select(['confirmed_at', 'memo', 'transaction_hash'])
+      .select(['confirmed_at', 'memo'])
       .where('memo', '=', 'coffee')
       .executeTakeFirstOrThrow()
 
@@ -122,7 +120,6 @@ describe('/tip @account', () => {
       `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for coffee. Receipt`,
     )
     expect(tip.confirmed_at).toEqual(expect.any(String))
-    expect(tip.transaction_hash).toEqual(expect.any(String))
   }, 20_000) // 20 seconds
 
   test('sends tip with custom amount', async () => {
@@ -131,7 +128,7 @@ describe('/tip @account', () => {
     const response = await postSlashCommand(`<@${Constants.slack.memberUserId}> $0.002`)
     const tip = await db
       .selectFrom('tip')
-      .select(['amount', 'confirmed_at', 'transaction_hash'])
+      .select(['amount', 'confirmed_at'])
       .where('amount', '=', 2000)
       .executeTakeFirstOrThrow()
 
@@ -143,7 +140,6 @@ describe('/tip @account', () => {
       `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.002. Receipt`,
     )
     expect(tip.confirmed_at).toEqual(expect.any(String))
-    expect(tip.transaction_hash).toEqual(expect.any(String))
   }, 20_000) // 20 seconds
 
   test('sends atomic multi-recipient tip', async () => {
@@ -169,12 +165,7 @@ describe('/tip @account', () => {
     const tips = await db
       .selectFrom('tip')
       .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
-      .select([
-        'recipient.provider_user_id',
-        'tip.amount',
-        'tip.confirmed_at',
-        'tip.transaction_hash',
-      ])
+      .select(['recipient.provider_user_id', 'tip.amount', 'tip.confirmed_at'])
       .where('tip.batch_id', '=', batch.id)
       .orderBy('recipient.provider_user_id', 'asc')
       .execute()
@@ -190,7 +181,6 @@ describe('/tip @account', () => {
       recipient_count: 2,
       status: 'confirmed',
       total_amount: 4000,
-      transaction_hash: expect.any(String),
     })
     expect(tips).toHaveLength(2)
     expect(tips).toEqual([
@@ -198,13 +188,11 @@ describe('/tip @account', () => {
         amount: 2000,
         confirmed_at: expect.any(String),
         provider_user_id: Constants.slack.memberUserId,
-        transaction_hash: null,
       }),
       expect.objectContaining({
         amount: 2000,
         confirmed_at: expect.any(String),
         provider_user_id: unconnectedProviderUserId,
-        transaction_hash: null,
       }),
     ])
   }, 20_000) // 20 seconds
@@ -241,7 +229,6 @@ describe('/tip @account', () => {
     expect(batches[0]).toMatchObject({
       recipient_count: 2,
       status: 'confirmed',
-      transaction_hash: expect.any(String),
     })
     expect(tips).toHaveLength(2)
     expect(tips).toEqual([
@@ -401,7 +388,6 @@ describe('/tip @account', () => {
       sender_id: connected.senderAccount.id,
       sender_member_id: connected.senderMember.id,
       token_address: Tempo.addressLookup.thetaUsd,
-      transaction_hash: `0x${'1'.repeat(64)}`,
       workspace_id: connected.workspace.id,
     })
 
@@ -665,7 +651,6 @@ describe('/tip @account', () => {
       recipient_member_id: recipientMember.id,
       sender_id: senderAccount.id,
       sender_member_id: senderMember.id,
-      transaction_hash: null,
       workspace_id: workspace.id,
     })
 
@@ -697,7 +682,6 @@ test('@Tipbot mention sends tip in thread', async () => {
       'tip.amount',
       'tip.confirmed_at',
       'tip.idempotency_key',
-      'tip.transaction_hash',
     ])
     .where('workspace.provider_id', '=', providerId)
     .executeTakeFirstOrThrow()
@@ -715,7 +699,6 @@ test('@Tipbot mention sends tip in thread', async () => {
     sender_provider_user_id: Constants.slack.adminUserId,
   })
   expect(tip.confirmed_at).toEqual(expect.any(String))
-  expect(tip.transaction_hash).toEqual(expect.any(String))
   fetchSpy.mockRestore()
 }, 20_000) // 20 seconds
 
@@ -879,10 +862,7 @@ test.each(['pay', 'send', 'tip'])(
       messageTs,
       text: `<@${Constants.slack.botUserId}> ${verb} <@${Constants.slack.memberUserId}>`,
     })
-    const tip = await db
-      .selectFrom('tip')
-      .select(['confirmed_at', 'transaction_hash'])
-      .executeTakeFirstOrThrow()
+    const tip = await db.selectFrom('tip').select('confirmed_at').executeTakeFirstOrThrow()
 
     expect(response.status).toBe(200)
     await expectSlackThreadMessage(
@@ -890,7 +870,6 @@ test.each(['pay', 'send', 'tip'])(
       `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 · Receipt`,
     )
     expect(tip.confirmed_at).toEqual(expect.any(String))
-    expect(tip.transaction_hash).toEqual(expect.any(String))
   },
   20_000,
 ) // 20 seconds
@@ -1032,7 +1011,7 @@ test('@Tipbot mention accepts bot mention after recipient', async () => {
   })
   const tip = await db
     .selectFrom('tip')
-    .select(['confirmed_at', 'memo', 'transaction_hash'])
+    .select(['confirmed_at', 'memo'])
     .where('memo', '=', 'coffee')
     .executeTakeFirstOrThrow()
 
@@ -1043,7 +1022,6 @@ test('@Tipbot mention accepts bot mention after recipient', async () => {
     `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for coffee · Receipt`,
   )
   expect(tip.confirmed_at).toEqual(expect.any(String))
-  expect(tip.transaction_hash).toEqual(expect.any(String))
 }, 20_000) // 20 seconds
 
 test('@Tipbot mention replies to creature memo with AI', async () => {
@@ -1057,7 +1035,7 @@ test('@Tipbot mention replies to creature memo with AI', async () => {
   })
   const tip = await db
     .selectFrom('tip')
-    .select(['confirmed_at', 'memo', 'transaction_hash'])
+    .select(['confirmed_at', 'memo'])
     .where('memo', '=', 'goblin snacks')
     .executeTakeFirstOrThrow()
 
@@ -1069,7 +1047,6 @@ test('@Tipbot mention replies to creature memo with AI', async () => {
   )
   await expectSlackThreadMessage(messageTs, 'GOBLINS? Tip lore unlocked.')
   expect(tip.confirmed_at).toEqual(expect.any(String))
-  expect(tip.transaction_hash).toEqual(expect.any(String))
 }, 20_000) // 20 seconds
 
 test('@Tipbot mention falls back for creature memo when AI reply is invalid', async () => {
@@ -1101,7 +1078,7 @@ test('@Tipbot mention accepts repeated bot mentions', async () => {
   })
   const tip = await db
     .selectFrom('tip')
-    .select(['amount', 'confirmed_at', 'transaction_hash'])
+    .select(['amount', 'confirmed_at'])
     .where('amount', '=', 2000)
     .executeTakeFirstOrThrow()
 
@@ -1111,7 +1088,6 @@ test('@Tipbot mention accepts repeated bot mentions', async () => {
     `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.002 · Receipt`,
   )
   expect(tip.confirmed_at).toEqual(expect.any(String))
-  expect(tip.transaction_hash).toEqual(expect.any(String))
 }, 20_000) // 20 seconds
 
 test('@Tipbot mention rejects multi-recipient tips with unconnected recipients', async () => {
@@ -1521,7 +1497,6 @@ test('reaction tipping updates one aggregate reply for multiple tipped messages 
     sender_id: connected.senderAccount.id,
     sender_member_id: connected.senderMember.id,
     token_address: Tempo.addressLookup.pathUsd,
-    transaction_hash: firstTransactionHash,
     workspace_id: connected.workspace.id,
   })
   await factory.reaction_tip.insert({
@@ -1569,7 +1544,6 @@ test('reaction tipping updates one aggregate reply for multiple tipped messages 
     sender_id: connected.senderAccount.id,
     sender_member_id: connected.senderMember.id,
     token_address: Tempo.addressLookup.pathUsd,
-    transaction_hash: secondTransactionHash,
     workspace_id: connected.workspace.id,
   })
   await factory.reaction_tip.insert({
@@ -1617,7 +1591,6 @@ test('reaction tipping ignores one-time confirmed tips for access key limit', as
     sender_id: connected.senderAccount.id,
     sender_member_id: connected.senderMember.id,
     token_address: Tempo.addressLookup.pathUsd,
-    transaction_hash: `0x${Nanoid.generate().padEnd(64, '1').slice(0, 64)}`,
     workspace_id: connected.workspace.id,
   })
   await Actions.token.mintSync(
@@ -1950,7 +1923,7 @@ describe('/tip config', () => {
     expect(workspace.chain_id).toBe(Tempo.chainLookup.testnet)
     expect(workspace.default_amount).toBe(2000)
     expect(workspace.default_token_address).toBe(Tempo.addressLookup.betaUsd)
-    expect(workspace.reaction_tip_emoji).toBe('tip')
+    expect(workspace.reaction_tip_emoji).toBe('money_with_wings')
   })
 
   test('allows settings edit from allowlisted connected account', async () => {
@@ -2034,6 +2007,39 @@ describe('/tip config', () => {
       response_action: 'errors',
     })
     expect(workspace.default_token_address).toBe(null)
+  })
+
+  test('rejects unknown reaction tip emoji', async () => {
+    const fetchOriginal = globalThis.fetch
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    fetchSpy.mockImplementation((input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.endsWith('/emoji.list'))
+        return Promise.resolve(Response.json({ emoji: {}, ok: true }))
+      return fetchOriginal(input, init)
+    })
+
+    const response = await postSlackInteraction(
+      createViewSubmissionPayload({
+        amount: '0.001',
+        emoji: ':not_real_tipbot_emoji:',
+        network: 'testnet',
+        token: 'pathUSD',
+      }),
+    )
+    const workspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider_id', '=', providerId)
+      .executeTakeFirstOrThrow()
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      errors: { reaction_tip_emoji: 'Choose an emoji that exists in this Slack workspace.' },
+      response_action: 'errors',
+    })
+    expect(workspace.reaction_tip_emoji).toBe('money_with_wings')
+    fetchSpy.mockRestore()
   })
 
   test('denies non-admin edit action', async () => {
@@ -2290,8 +2296,9 @@ describe('/tip disconnect', () => {
     const response = await postSlashCommand('disconnect')
     const updatedMember = await db
       .selectFrom('member')
-      .selectAll()
-      .where('id', '=', member.id)
+      .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+      .select('provider_identity.account_id')
+      .where('member.id', '=', member.id)
       .executeTakeFirstOrThrow()
     const accessKeys = await db
       .selectFrom('access_key')
@@ -2323,8 +2330,9 @@ describe('/tip disconnect', () => {
     const response = await postSlashCommand('disconnect', { channelId: dm.channelId })
     const updatedMember = await db
       .selectFrom('member')
-      .selectAll()
-      .where('id', '=', member.id)
+      .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+      .select('provider_identity.account_id')
+      .where('member.id', '=', member.id)
       .executeTakeFirstOrThrow()
     const accessKeys = await db
       .selectFrom('access_key')
@@ -2446,7 +2454,6 @@ describe('/tip leaderboard', () => {
         recipient_member_id: memberMember.id,
         sender_id: adminAccount.id,
         sender_member_id: adminMember.id,
-        transaction_hash: '0x1',
         workspace_id: workspace.id,
       },
       {
@@ -2455,7 +2462,6 @@ describe('/tip leaderboard', () => {
         recipient_member_id: memberMember.id,
         sender_id: adminAccount.id,
         sender_member_id: adminMember.id,
-        transaction_hash: '0x2',
         workspace_id: workspace.id,
       },
       {
@@ -2464,7 +2470,6 @@ describe('/tip leaderboard', () => {
         recipient_member_id: memberMember.id,
         sender_id: thirdAccount.id,
         sender_member_id: thirdMember.id,
-        transaction_hash: '0x3',
         workspace_id: workspace.id,
       },
       {
@@ -2473,7 +2478,6 @@ describe('/tip leaderboard', () => {
         recipient_member_id: adminMember.id,
         sender_id: memberAccount.id,
         sender_member_id: memberMember.id,
-        transaction_hash: '0x4',
         workspace_id: workspace.id,
       },
       {
@@ -2490,7 +2494,6 @@ describe('/tip leaderboard', () => {
         recipient_member_id: otherMember.id,
         sender_id: adminAccount.id,
         sender_member_id: otherMember.id,
-        transaction_hash: '0x5',
         workspace_id: otherWorkspace.id,
       },
     ]
@@ -2551,7 +2554,6 @@ describe('/tip stats', () => {
       workspace_id: otherWorkspace.id,
     })
     const now = new Date().toISOString()
-    const transactionHashPrefix = `0x${Nanoid.generate()}`
     const tips = [
       {
         amount: 1000,
@@ -2560,7 +2562,6 @@ describe('/tip stats', () => {
         recipient_member_id: memberMember.id,
         sender_id: adminAccount.id,
         sender_member_id: adminMember.id,
-        transaction_hash: `${transactionHashPrefix}1`,
         workspace_id: workspace.id,
       },
       {
@@ -2570,7 +2571,6 @@ describe('/tip stats', () => {
         recipient_member_id: memberMember.id,
         sender_id: adminAccount.id,
         sender_member_id: adminMember.id,
-        transaction_hash: `${transactionHashPrefix}2`,
         workspace_id: workspace.id,
       },
       {
@@ -2580,7 +2580,6 @@ describe('/tip stats', () => {
         recipient_member_id: thirdMember.id,
         sender_id: adminAccount.id,
         sender_member_id: adminMember.id,
-        transaction_hash: `${transactionHashPrefix}3`,
         workspace_id: workspace.id,
       },
       {
@@ -2590,7 +2589,6 @@ describe('/tip stats', () => {
         recipient_member_id: adminMember.id,
         sender_id: memberAccount.id,
         sender_member_id: memberMember.id,
-        transaction_hash: `${transactionHashPrefix}4`,
         workspace_id: workspace.id,
       },
       {
@@ -2600,8 +2598,16 @@ describe('/tip stats', () => {
         recipient_member_id: adminMember.id,
         sender_id: thirdAccount.id,
         sender_member_id: thirdMember.id,
-        transaction_hash: `${transactionHashPrefix}5`,
         workspace_id: workspace.id,
+      },
+      {
+        amount: 8000,
+        confirmed_at: now,
+        recipient_id: adminAccount.id,
+        recipient_member_id: adminMember.id,
+        sender_id: thirdAccount.id,
+        sender_member_id: otherMember.id,
+        workspace_id: otherWorkspace.id,
       },
       {
         amount: 9000,
@@ -2619,7 +2625,6 @@ describe('/tip stats', () => {
         recipient_member_id: otherMember.id,
         sender_id: adminAccount.id,
         sender_member_id: otherMember.id,
-        transaction_hash: `${transactionHashPrefix}6`,
         workspace_id: otherWorkspace.id,
       },
     ]
@@ -2629,11 +2634,10 @@ describe('/tip stats', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage('Your tip stats')
-    await expectSlackMessage('Received $0.008 (2 tips)')
+    await expectSlackMessage('Received $0.016 (3 tips)')
     await expectSlackMessage('Tipped $0.0035 (3 tips)')
     await expectSlackMessage(`Most tipped <@${Constants.slack.memberUserId}> $0.003 (2 tips)`)
-    await expectSlackMessage(`Most tipped by <@${Constants.slack.memberUserId}> $0.007 (1 tip)`)
-    await expectSlackMessageNotContaining('U000000004')
+    await expectSlackMessage('Most tipped by <@U000000004> $0.008 (1 tip)')
     await expectSlackMessageNotContaining('$1.00')
   })
 
@@ -2974,7 +2978,6 @@ async function waitForTipByIdempotencyKey(idempotencyKey: string) {
     .leftJoin('workspace', 'workspace.id', 'member.workspace_id')
     .leftJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
     .select([
-      'member.account_id',
       'member.provider_identity_id',
       'member.provider_user_id',
       'workspace.provider_id as workspace_provider_id',
@@ -3457,7 +3460,7 @@ function createViewSubmissionPayload(input: {
           reaction_tip_emoji: {
             reaction_tip_emoji: {
               type: 'plain_text_input',
-              value: input.emoji ?? ':tip:',
+              value: input.emoji ?? ':money_with_wings:',
             },
           },
         },
@@ -3498,10 +3501,14 @@ async function createSlashCommandRequestInit(
 }
 
 async function insertMember(
-  attrs: Partial<DB_gen.Insertable.member> & Pick<DB_gen.Insertable.member, 'workspace_id'>,
+  attrs: Partial<DB_gen.Insertable.member> &
+    Pick<DB_gen.Insertable.member, 'workspace_id'> & { account_id?: string | null },
 ) {
   const member = factory.member.attrs(attrs as never)
-  if (member.provider_identity_id !== null) return await factory.member.insert(member)
+  const { account_id: accountId, ...memberValues } = member as typeof member & {
+    account_id?: string | null
+  }
+  if (member.provider_identity_id) return await factory.member.insert(memberValues)
 
   const workspace = await db
     .selectFrom('workspace')
@@ -3509,7 +3516,7 @@ async function insertMember(
     .where('id', '=', member.workspace_id)
     .executeTakeFirstOrThrow()
   const identity = await factory.provider_identity.insert({
-    account_id: member.account_id,
+    account_id: accountId ?? null,
     created_at: member.created_at,
     display_name: member.login,
     provider: workspace.provider,
@@ -3518,5 +3525,5 @@ async function insertMember(
     real_name: member.name,
     updated_at: member.updated_at,
   })
-  return await factory.member.insert({ ...member, provider_identity_id: identity.id })
+  return await factory.member.insert({ ...memberValues, provider_identity_id: identity.id })
 }

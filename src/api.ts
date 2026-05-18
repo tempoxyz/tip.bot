@@ -191,12 +191,6 @@ export const api = new Hono<{
             .execute()
           const duplicateIdentityIds = duplicateIdentities.map((row) => row.provider_identity_id)
           await c.var.db
-            .updateTable('member')
-            // TODO: Remove member.account_id compatibility write after provider_identity backfill is verified in production.
-            .set({ account_id: null, updated_at: now })
-            .where('provider_identity_id', 'in', duplicateIdentityIds)
-            .execute()
-          await c.var.db
             .updateTable('provider_identity')
             .set({ account_id: null, updated_at: now })
             .where('id', 'in', duplicateIdentityIds)
@@ -243,12 +237,6 @@ export const api = new Hono<{
             .set({ account_id: account.id, updated_at: now })
             .where('id', '=', link.member_provider_identity_id)
             .execute()
-        await c.var.db
-          .updateTable('member')
-          // TODO: Remove member.account_id compatibility write after provider_identity backfill is verified in production.
-          .set({ account_id: account.id, updated_at: now })
-          .where('id', '=', link.member_id)
-          .execute()
         await c.var.db
           .updateTable('account_link_token')
           .set({
@@ -762,6 +750,7 @@ export const api = new Hono<{
         'channels:read',
         'chat:write',
         'commands',
+        'emoji:read',
         'groups:history',
         'groups:read',
         'reactions:read',

@@ -22,6 +22,7 @@ If a test fails, run it in isolation and gradually expand out to more tests as y
 - Use singular snake_case table and column names.
 - Prefer timestamps like `deleted_at` over boolean lifecycle fields like `deleted`.
 - Use CHECK constraints for enum-like text values where SQLite/D1 supports the invariant.
+- Add comment to top of migration files explaining the migration's purpose
 
 ## Naming
 

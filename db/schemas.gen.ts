@@ -41,12 +41,11 @@ export const account_link_token = z.object({
 })
 
 export const member = z.object({
-  account_id: z.string().nullable(),
   created_at: z.string(),
   id: z.string(),
   login: z.string().nullable(),
   name: z.string().nullable(),
-  provider_identity_id: z.string().nullable(),
+  provider_identity_id: z.string(),
   provider_user_id: z.string(),
   updated_at: z.string(),
   workspace_id: z.string(),
@@ -110,7 +109,6 @@ export const tip = z.object({
   sender_member_id: z.string(),
   sponsorship_memo: z.string().nullable(),
   token_address: z.string(),
-  transaction_hash: z.string().nullable(),
   transfer_log_index: z.number().nullable(),
   updated_at: z.string(),
   workspace_id: z.string(),

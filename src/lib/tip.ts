@@ -724,8 +724,6 @@ async function getConnectedMember(db: DB.Type, workspaceId: string, providerUser
       'account.created_at as account_created_at',
       'account.id as account_id',
       'account.updated_at as account_updated_at',
-      // TODO: Remove member.account_id from ConnectedMember after provider_identity backfill cleanup lands.
-      'member.account_id as member_account_id',
       'member.created_at as member_created_at',
       'member.id as member_id',
       'member.login',
@@ -767,7 +765,6 @@ function connectedMemberFromRow(row: {
   account_created_at: string
   account_id: string
   account_updated_at: string
-  member_account_id: string | null
   member_created_at: string
   member_id: string
   login: string | null
@@ -785,7 +782,6 @@ function connectedMemberFromRow(row: {
       updated_at: row.account_updated_at,
     },
     member: {
-      account_id: row.member_account_id,
       created_at: row.member_created_at,
       id: row.member_id,
       login: row.login,
@@ -815,8 +811,7 @@ async function getExistingTipResult(
     .select('tip_batch.transaction_hash as batch_transaction_hash')
     .where('tip.idempotency_key', '=', input.idempotencyKey)
     .executeTakeFirst()
-  const transactionHash = existing?.batch_transaction_hash ?? existing?.transaction_hash
-  if (existing?.confirmed_at && transactionHash) {
+  if (existing?.confirmed_at && existing.batch_transaction_hash) {
     const tokenMetadata = await Tempo.getTokenMetadata(
       env,
       existing.chain_id,
@@ -837,7 +832,7 @@ async function getExistingTipResult(
       status: 'duplicate',
       tokenCurrency: tokenMetadata.currency,
       tokenSymbol: tokenMetadata.symbol,
-      transactionHash,
+      transactionHash: existing.batch_transaction_hash,
     }
   }
   if (existing?.failed_at)
@@ -846,7 +841,7 @@ async function getExistingTipResult(
       code: existing.failure_reason ? getFailureCodeFromReason(existing.failure_reason) : 'failed',
       message: existing.failure_reason ?? 'Tip failed. Try again.',
       ok: false,
-      transactionHash: transactionHash ?? undefined,
+      transactionHash: existing.batch_transaction_hash ?? undefined,
     }
   if (existing)
     return {
@@ -854,7 +849,7 @@ async function getExistingTipResult(
       code: 'pending',
       message: 'Tip is still sending.',
       ok: false,
-      transactionHash: transactionHash ?? undefined,
+      transactionHash: existing.batch_transaction_hash ?? undefined,
     }
   return null
 }
@@ -1052,7 +1047,6 @@ async function submitTipBatch(
           token: input.tokenAddress,
         }),
         token_address: input.tokenAddress,
-        transaction_hash: null,
         transfer_log_index: null,
         updated_at: now,
         workspace_id: input.workspace.id,
@@ -1079,7 +1073,6 @@ async function submitTipBatch(
         status: 'pending',
         token_address: input.tokenAddress,
         total_amount: input.amount * input.connectedRecipients.length,
-        transaction_hash: null,
         updated_at: now,
         workspace_id: input.workspace.id,
       })
@@ -1170,7 +1163,6 @@ async function submitTipBatch(
       .updateTable('tip')
       .set({
         confirmed_at: new Date().toISOString(),
-        transaction_hash: tipRows.length === 1 ? receipt.transactionHash : null,
         updated_at: new Date().toISOString(),
       })
       .where('batch_id', '=', batchId)
@@ -1357,7 +1349,6 @@ async function submitSignedTipBatch(
           token: input.tokenAddress,
         }),
         token_address: input.tokenAddress,
-        transaction_hash: null,
         transfer_log_index: null,
         updated_at: now,
         workspace_id: input.workspace.id,
@@ -1383,7 +1374,6 @@ async function submitSignedTipBatch(
       status: 'pending',
       token_address: input.tokenAddress,
       total_amount: input.payload.amount * input.connectedRecipients.length,
-      transaction_hash: null,
       updated_at: now,
       workspace_id: input.workspace.id,
     })
@@ -1530,7 +1520,6 @@ async function submitSignedTip(
       status: 'pending',
       token_address: input.tokenAddress,
       total_amount: input.payload.amount,
-      transaction_hash: null,
       updated_at: now,
       workspace_id: input.workspace.id,
     })
@@ -1555,7 +1544,6 @@ async function submitSignedTip(
       sender_member_id: input.sender.member.id,
       sponsorship_memo: sponsorshipMemo,
       token_address: input.tokenAddress,
-      transaction_hash: null,
       transfer_log_index: null,
       updated_at: now,
       workspace_id: input.workspace.id,
@@ -1597,7 +1585,6 @@ async function submitSignedTip(
       .updateTable('tip')
       .set({
         confirmed_at: new Date().toISOString(),
-        transaction_hash: receipt.transactionHash,
         updated_at: new Date().toISOString(),
       })
       .where('id', '=', id)

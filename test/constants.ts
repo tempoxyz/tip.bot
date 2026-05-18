@@ -45,6 +45,7 @@ const slackScopes = [
   'channels:read',
   'chat:write',
   'commands',
+  'emoji:read',
   'groups:history',
   'groups:read',
   'reactions:read',

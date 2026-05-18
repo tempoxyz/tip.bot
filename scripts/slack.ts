@@ -16,6 +16,7 @@ const scopeReasons = {
   'channels:read': 'Check public channel metadata and respond in the correct conversation.',
   'chat:write': 'Send tip receipts, connection prompts, confirmation prompts, and error messages.',
   commands: 'Register and handle the /tip slash command.',
+  'emoji:read': 'Validate configured custom tip reaction emoji exist in the workspace.',
   'groups:history':
     'Read messages Tipbot is asked to act on in private channels where Tipbot has been added.',
   'groups:read': 'Check private channel metadata where Tipbot has been added.',
@@ -95,6 +96,7 @@ function createManifest() {
           'channels:read',
           'chat:write',
           'commands',
+          'emoji:read',
           'groups:history',
           'groups:read',
           'reactions:read',

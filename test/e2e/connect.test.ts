@@ -218,13 +218,15 @@ test('slack member can disconnect an existing member and connect wallet', async 
 
   const updatedCurrentMember = await db
     .selectFrom('member')
-    .selectAll()
-    .where('id', '=', currentMember.id)
+    .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .select('provider_identity.account_id')
+    .where('member.id', '=', currentMember.id)
     .executeTakeFirstOrThrow()
   const updatedDuplicateMember = await db
     .selectFrom('member')
-    .selectAll()
-    .where('id', '=', duplicateMember.id)
+    .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .select('provider_identity.account_id')
+    .where('member.id', '=', duplicateMember.id)
     .executeTakeFirstOrThrow()
   const link = await db
     .selectFrom('account_link_token')
@@ -315,10 +317,14 @@ async function postSlashCommand(app: { url: (path: `/api/${string}`) => string }
 async function insertMember(
   db: Kysely<DB>,
   factory: ReturnType<typeof Factory.create>,
-  attrs: Partial<DB.Insertable.member> & Pick<DB.Insertable.member, 'workspace_id'>,
+  attrs: Partial<DB.Insertable.member> &
+    Pick<DB.Insertable.member, 'workspace_id'> & { account_id?: string | null },
 ) {
   const member = factory.member.attrs(attrs as never)
-  if (member.provider_identity_id !== null) return await factory.member.insert(member)
+  const { account_id: accountId, ...memberValues } = member as typeof member & {
+    account_id?: string | null
+  }
+  if (member.provider_identity_id) return await factory.member.insert(memberValues)
 
   const workspace = await db
     .selectFrom('workspace')
@@ -326,7 +332,7 @@ async function insertMember(
     .where('id', '=', member.workspace_id)
     .executeTakeFirstOrThrow()
   const identity = await factory.provider_identity.insert({
-    account_id: member.account_id,
+    account_id: accountId ?? null,
     created_at: member.created_at,
     display_name: member.login,
     provider: workspace.provider,
@@ -335,5 +341,5 @@ async function insertMember(
     real_name: member.name,
     updated_at: member.updated_at,
   })
-  return await factory.member.insert({ ...member, provider_identity_id: identity.id })
+  return await factory.member.insert({ ...memberValues, provider_identity_id: identity.id })
 }

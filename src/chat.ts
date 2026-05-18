@@ -3,6 +3,7 @@ import type { DB as DB_gen } from '#db/types.gen.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as AccessKey from '#/lib/accessKey.ts'
 import { getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
+import * as Emoji from '#/lib/emoji.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Slack from '#/lib/slack.ts'
@@ -301,6 +302,31 @@ const modalSubmits = {
       errors.default_amount = 'Enter a positive amount with up to 6 decimal places. Example: 0.005'
     if (!reactionTipEmoji)
       errors.reaction_tip_emoji = 'Enter a Slack emoji name. Example: money_with_wings'
+    else if (
+      !(await (async () => {
+        // Standard emoji are known locally; custom workspace emoji require Slack lookup.
+        if (Emoji.replaceEmojiShortcodes(`:${reactionTipEmoji}:`) !== `:${reactionTipEmoji}:`)
+          return true
+
+        const installation = await getSlack().getInstallation(metadata.providerId)
+        if (!installation) return false
+        const response = await getSlack().withBotToken(installation.botToken, () =>
+          fetch(`${env.SLACK_API_URL}/emoji.list`, {
+            headers: { authorization: `Bearer ${installation.botToken}` },
+            method: 'GET',
+          }),
+        )
+        const json = z.parse(
+          z.object({
+            emoji: z.record(z.string(), z.string()).optional(),
+            ok: z.boolean().optional(),
+          }),
+          await response.json(),
+        )
+        return Boolean(json.ok && json.emoji?.[reactionTipEmoji])
+      })())
+    )
+      errors.reaction_tip_emoji = 'Choose an emoji that exists in this Slack workspace.'
     if (chainId !== null && tokenAddress !== null && !Tempo.isAllowedToken(chainId, tokenAddress))
       errors.default_token = 'This token isn’t available on the selected network.'
     if (Object.keys(errors).length > 0) return { action: 'errors' as const, errors }
@@ -467,12 +493,6 @@ const handlers = {
       .updateTable('provider_identity')
       .set({ account_id: null, updated_at: new Date().toISOString() })
       .where('id', '=', member.provider_identity_id)
-      .execute()
-    await ctx.db
-      .updateTable('member')
-      // TODO: Remove member.account_id compatibility write after provider_identity backfill is verified in production.
-      .set({ account_id: null, updated_at: new Date().toISOString() })
-      .where('id', '=', member.id)
       .execute()
     await postPrivateReply(event, event.user, 'Disconnected')
   },
@@ -750,14 +770,12 @@ const handlers = {
       return
     }
 
-    // TODO: Add cross-workspace/global stats once Slack Connect payments are enabled.
     const received = await ctx.db
       .selectFrom('tip')
       .select([
         sql<number>`coalesce(sum("tip"."amount"), 0)`.as('amount'),
         sql<number>`count("tip"."id")`.as('tip_count'),
       ])
-      .where('tip.workspace_id', '=', workspace.id)
       .where('tip.recipient_member_id', '=', member.id)
       .where('tip.confirmed_at', 'is not', null)
       .executeTakeFirstOrThrow()
@@ -767,7 +785,6 @@ const handlers = {
         sql<number>`coalesce(sum("tip"."amount"), 0)`.as('amount'),
         sql<number>`count("tip"."id")`.as('tip_count'),
       ])
-      .where('tip.workspace_id', '=', workspace.id)
       .where('tip.sender_member_id', '=', member.id)
       .where('tip.confirmed_at', 'is not', null)
       .executeTakeFirstOrThrow()
@@ -779,7 +796,6 @@ const handlers = {
         sql<number>`coalesce(sum("tip"."amount"), 0)`.as('amount'),
         sql<number>`count("tip"."id")`.as('tip_count'),
       ])
-      .where('tip.workspace_id', '=', workspace.id)
       .where('tip.sender_member_id', '=', member.id)
       .where('tip.confirmed_at', 'is not', null)
       .groupBy(['member.id', 'member.provider_user_id'])
@@ -795,7 +811,6 @@ const handlers = {
         sql<number>`coalesce(sum("tip"."amount"), 0)`.as('amount'),
         sql<number>`count("tip"."id")`.as('tip_count'),
       ])
-      .where('tip.workspace_id', '=', workspace.id)
       .where('tip.recipient_member_id', '=', member.id)
       .where('tip.confirmed_at', 'is not', null)
       .groupBy(['member.id', 'member.provider_user_id'])
@@ -2200,8 +2215,6 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
     await ctx.db
       .insertInto('member')
       .values({
-        // TODO: Drop member.account_id after provider_identity is the only account link source.
-        account_id: null,
         created_at: createdAt,
         id,
         login: null,

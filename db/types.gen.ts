@@ -54,12 +54,11 @@ type account_link_token = {
 }
 
 type member = {
-  account_id: string | null
   created_at: k.Generated<string>
   id: string
   login: string | null
   name: string | null
-  provider_identity_id: string | null
+  provider_identity_id: string
   provider_user_id: string
   updated_at: k.Generated<string>
   workspace_id: string
@@ -123,7 +122,6 @@ type tip = {
   sender_member_id: string
   sponsorship_memo: string | null
   token_address: string
-  transaction_hash: string | null
   transfer_log_index: number | null
   updated_at: k.Generated<string>
   workspace_id: string

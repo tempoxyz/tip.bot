@@ -62,9 +62,10 @@ try {
   if (env.STATE_SEEDED_AT && previewWorkspace) {
     const linked = await previewDb
       .selectFrom('member')
+      .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
       .select((eb) => eb.fn.countAll<number>().as('count'))
       .where('workspace_id', '=', previewWorkspace.id)
-      .where('account_id', 'is not', null)
+      .where('provider_identity.account_id', 'is not', null)
       .executeTakeFirstOrThrow()
     const linkedCount = Number(linked.count)
     if (linkedCount > 0) {
@@ -109,7 +110,8 @@ try {
 
   const members = await productionDb
     .selectFrom('member')
-    .innerJoin('account', 'account.id', 'member.account_id')
+    .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .innerJoin('account', 'account.id', 'provider_identity.account_id')
     .select([
       'account.address',
       'account.created_at as account_created_at',
@@ -118,11 +120,15 @@ try {
       'member.created_at as member_created_at',
       'member.login',
       'member.name',
+      'provider_identity.display_name',
+      'provider_identity.metadata',
+      'provider_identity.provider_global_user_id',
+      'provider_identity.real_name',
       'member.provider_user_id',
       'member.updated_at as member_updated_at',
     ])
     .where('member.workspace_id', '=', sourceWorkspace.id)
-    .where('member.account_id', 'is not', null)
+    .where('provider_identity.account_id', 'is not', null)
     .orderBy('member.created_at', 'asc')
     .orderBy('member.id', 'asc')
     .execute()
@@ -153,23 +159,63 @@ try {
       account = { id: accountId }
     }
 
+    let identity = await previewDb
+      .selectFrom('provider_identity')
+      .select('id')
+      .where('provider', '=', 'slack')
+      .where('provider_workspace_id', '=', env.PREVIEW_SEED_SLACK_TEAM_ID)
+      .where('provider_user_id', '=', member.provider_user_id)
+      .executeTakeFirst()
+    if (identity)
+      await previewDb
+        .updateTable('provider_identity')
+        .set({
+          account_id: account.id,
+          display_name: member.display_name,
+          metadata: member.metadata,
+          provider_global_user_id: member.provider_global_user_id,
+          real_name: member.real_name,
+          updated_at: member.member_updated_at,
+        })
+        .where('id', '=', identity.id)
+        .execute()
+    else {
+      identity = { id: Nanoid.generate() }
+      await previewDb
+        .insertInto('provider_identity')
+        .values({
+          account_id: account.id,
+          created_at: member.member_created_at,
+          display_name: member.display_name,
+          id: identity.id,
+          metadata: member.metadata,
+          provider: 'slack',
+          provider_global_user_id: member.provider_global_user_id,
+          provider_user_id: member.provider_user_id,
+          provider_workspace_id: env.PREVIEW_SEED_SLACK_TEAM_ID,
+          real_name: member.real_name,
+          updated_at: member.member_updated_at,
+        })
+        .execute()
+    }
+
     await previewDb
       .insertInto('member')
       .values({
-        account_id: account.id,
         created_at: member.member_created_at,
         id: Nanoid.generate(),
         login: member.login,
         name: member.name,
+        provider_identity_id: identity.id,
         provider_user_id: member.provider_user_id,
         updated_at: member.member_updated_at,
         workspace_id: workspace.id,
       })
       .onConflict((oc) =>
         oc.columns(['workspace_id', 'provider_user_id']).doUpdateSet((eb) => ({
-          account_id: eb.ref('excluded.account_id'),
           login: eb.ref('excluded.login'),
           name: eb.ref('excluded.name'),
+          provider_identity_id: eb.ref('excluded.provider_identity_id'),
           updated_at: eb.ref('excluded.updated_at'),
         })),
       )
