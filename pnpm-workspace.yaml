@@ -34,6 +34,7 @@ overrides:
   tar: 7.5.11
   vite: 'catalog:'
   vitest: 'catalog:'
+  ws: 8.20.1
 packageExtensions:
   '@cloudflare/vitest-pool-workers@*':
     dependencies:
