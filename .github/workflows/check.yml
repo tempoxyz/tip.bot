@@ -107,6 +107,14 @@ jobs:
           docker pull "${image}"
           docker save "${image}" -o /tmp/tempo-image.tar
 
+      - name: Cache Vite transform cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: node_modules/.vite
+          key: ${{ runner.os }}-vite-workers-${{ hashFiles('pnpm-lock.yaml', 'package.json', 'vite.config.ts', 'wrangler.jsonc', 'config/vitest.ts', 'config/tsconfig*.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vite-workers-
+
       - name: Test workers
         run: |
           started_at=$(date +%s)
