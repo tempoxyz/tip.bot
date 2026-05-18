@@ -738,52 +738,26 @@ test('@Tipbot mention sends Slack Connect tip to recipient home workspace member
   })
   const channelId = await getSlackConnectChannelId()
   const messageTs = `1700000000.${Nanoid.generate().slice(0, 6)}`
-  const originalFetch = globalThis.fetch
-  const fetchSpy = vi.spyOn(globalThis, 'fetch')
-  fetchSpy.mockImplementation(async (input, init) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-    const params = await slackFetchCallBodyParams(input, init)
-    if (url.endsWith('/conversations.info') && params.get('channel') === channelId)
-      return Response.json({
-        channel: {
-          context_team_id: Constants.slack.teamId,
-          id: channelId,
-          is_ext_shared: true,
-          is_shared: true,
-          shared_team_ids: [Constants.slackConnect.teamId],
-        },
-        ok: true,
-      })
-    if (url.endsWith('/users.info') && params.get('user') === Constants.slackConnect.userId)
-      return Response.json({
-        ok: true,
-        user: { id: Constants.slackConnect.userId, team_id: Constants.slackConnect.teamId },
-      })
-    return originalFetch(input, init)
+  await expectSlackConnectEmulator(channelId)
+
+  const response = await postSlackAppMention({
+    channelId,
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slackConnect.userId}>`,
   })
+  const tip = await waitForTipByIdempotencyKey(`mention:${providerId}:${channelId}:${messageTs}`)
 
-  try {
-    const response = await postSlackAppMention({
-      channelId,
-      messageTs,
-      text: `<@${Constants.slack.botUserId}> <@${Constants.slackConnect.userId}>`,
-    })
-    const tip = await waitForTipByIdempotencyKey(`mention:${providerId}:${channelId}:${messageTs}`)
-
-    expect(response.status).toBe(200)
-    await expectSlackThreadMessage(
-      messageTs,
-      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slackConnect.userId}> $0.001 · Receipt`,
-      { channelId },
-    )
-    expect(tip).toMatchObject({
-      recipient_member_id: connectMember.id,
-      sender_member_id: connected.senderMember.id,
-      workspace_id: connected.workspace.id,
-    })
-  } finally {
-    fetchSpy.mockRestore()
-  }
+  expect(response.status).toBe(200)
+  await expectSlackThreadMessage(
+    messageTs,
+    `<@${Constants.slack.adminUserId}> tipped <@${Constants.slackConnect.userId}> $0.001 · Receipt`,
+    { channelId },
+  )
+  expect(tip).toMatchObject({
+    recipient_member_id: connectMember.id,
+    sender_member_id: connected.senderMember.id,
+    workspace_id: connected.workspace.id,
+  })
 }, 20_000) // 20 seconds
 
 test('@Tipbot mention fails closed when Slack Connect recipient workspace is not installed', async () => {
@@ -3028,6 +3002,29 @@ async function getSlackConnectChannelId() {
   if (channel?.id) return channel.id
 
   throw new Error(`Expected Slack Connect channel ${Constants.slackConnect.channelName}.`)
+}
+
+async function expectSlackConnectEmulator(channelId: string) {
+  const conversation = await slack.conversations.info({ channel: channelId })
+  const connectSlack = new WebClient(Constants.slackConnect.teamBotToken, {
+    slackApiUrl: env.SLACK_API_URL,
+  })
+  const connectUser = await connectSlack.users.info({ user: Constants.slackConnect.userId })
+
+  expect(conversation).toMatchObject({
+    channel: {
+      context_team_id: Constants.slack.teamId,
+      id: channelId,
+      is_ext_shared: true,
+      is_shared: true,
+      shared_team_ids: expect.arrayContaining([Constants.slackConnect.teamId]),
+    },
+    ok: true,
+  })
+  expect(connectUser).toMatchObject({
+    ok: true,
+    user: { id: Constants.slackConnect.userId, team_id: Constants.slackConnect.teamId },
+  })
 }
 
 async function expectSlackMessage(text: string, options: { channelId?: string } = {}) {
