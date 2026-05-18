@@ -203,6 +203,7 @@ export default defineConfig({
         test: {
           fileParallelism: false,
           include: ['src/**/*.workers.test.ts'],
+          isolate: false,
           name: 'workers',
           globalSetup: ['test/workers.global.setup.ts'],
           setupFiles: ['test/workers.setup.ts'],

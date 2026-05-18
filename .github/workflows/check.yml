@@ -117,41 +117,9 @@ jobs:
 
       - name: Test workers
         run: |
-          set -o pipefail
           started_at=$(date +%s)
-          DEBUG=vite:transform,vite:load pnpm test --project workers --run 2>&1 | tee workers-vite-debug.log
+          pnpm test --project workers --run
           echo "workers: CI test step completed in $(($(date +%s) - started_at))s"
-          python3 <<'PY'
-          import collections
-          import re
-          from pathlib import Path
-
-          lines = Path('workers-vite-debug.log').read_text().splitlines()
-          for kind in ['transform', 'load']:
-              rows = []
-              for line in lines:
-                  if f'vite:{kind}' not in line:
-                      continue
-                  match = re.search(rf'vite:{kind}\s+([0-9.]+)ms(?: \[[^]]+\])? (.+)$', line)
-                  if match:
-                      rows.append((float(match.group(1)), match.group(2)))
-              print(f'workers: vite {kind} count={len(rows)} total={round(sum(ms for ms, _ in rows))}ms')
-              print(f'workers: slowest vite {kind}s')
-              for ms, path in sorted(rows, reverse=True)[:20]:
-                  print(f'workers: {kind} {ms:.2f}ms {path}')
-              packages = collections.defaultdict(lambda: [0, 0])
-              for ms, path in rows:
-                  name = 'local'
-                  if '/node_modules/' in path:
-                      tail = path.split('/node_modules/', 1)[1]
-                      parts = tail.split('/')
-                      name = '/'.join(parts[:2]) if parts[0].startswith('@') else parts[0]
-                  packages[name][0] += ms
-                  packages[name][1] += 1
-              print(f'workers: top vite {kind} packages')
-              for name, (total, count) in sorted(packages.items(), key=lambda item: item[1][0], reverse=True)[:20]:
-                  print(f'workers: {kind} package {round(total)}ms {count} {name}')
-          PY
         env:
           FEE_PAYER_PRIVATE_KEY_MAINNET: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
           FEE_PAYER_PRIVATE_KEY_TESTNET: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
