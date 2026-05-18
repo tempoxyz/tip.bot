@@ -134,7 +134,7 @@ importers:
         version: 12.9.0
       emulate:
         specifier: 0.5.0
-        version: 0.5.0(patch_hash=30364ff9d4a474590283be75d1c7e02221f138595ab72f549a61323426b6c539)(hono@4.12.18)
+        version: 0.5.0(patch_hash=7d089ac7fcf9216304f14509be63be70e4730a444ac80d869771a8a4491f4fb4)(hono@4.12.18)
       msw:
         specifier: 2.13.6
         version: 2.13.6(@types/node@22.19.17)(typescript@6.0.3)
