@@ -1007,6 +1007,10 @@ async function handleTipText(
       event.user,
       `Payment not sent. Memo must be at most 32 bytes; shorten the text after \`for\`.${suggestion ? ` Try: \`${suggestion}\`.` : ''}`,
     )
+    if (options.threadTs)
+      await setSlackAssistantThreadStatus(event, ctx, options.threadTs, '').catch(() => {
+        // Best effort only. Payment/error flow must not depend on Slack assistant UI cleanup.
+      })
     return
   }
   const recipients = await (async (): Promise<
