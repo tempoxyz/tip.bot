@@ -1,0 +1,20 @@
+diff --git a/dist/default-entry/esm/server.js b/dist/default-entry/esm/server.js
+index 53110d52d8d90f3852e5dbef78e15f49d9f2ab0d..596078bdbb9f4ab4be10083739e96f80c7fe94c6 100644
+--- a/dist/default-entry/esm/server.js
++++ b/dist/default-entry/esm/server.js
+@@ -1,6 +1,13 @@
+-import { createStartHandler, defaultStreamHandler } from "@tanstack/react-start/server";
+ //#region src/default-entry/server.ts
+-var fetch = createStartHandler(defaultStreamHandler);
++var defaultHandlerPromise;
++function getDefaultHandler() {
++	if (!defaultHandlerPromise) defaultHandlerPromise = import("@tanstack/react-start/server").then((mod) => mod.createStartHandler(mod.defaultStreamHandler));
++	return defaultHandlerPromise;
++}
++var fetch = async (...args) => {
++	const handler = await getDefaultHandler();
++	return await handler(...args);
++};
+ function createServerEntry(entry) {
+ 	return { async fetch(...args) {
+ 		return await entry.fetch(...args);

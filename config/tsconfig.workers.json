@@ -5,6 +5,7 @@
     "../src/vite-env.d.ts",
     "../src/**/*.workers.test.ts",
     "../test/**/*.workers.test.ts",
+    "../test/workers.entry.ts",
     "../test/workers.setup.ts",
     "../src/worker-configuration.d.ts"
   ],
