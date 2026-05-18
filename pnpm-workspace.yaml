@@ -56,6 +56,7 @@ patchedDependencies:
   accounts@0.10.6: config/patches/accounts@0.10.6.patch
   emulate@0.5.0: config/patches/emulate@0.5.0.patch
   mppx@0.6.19: config/patches/mppx@0.6.19.patch
+  prool@0.2.4: config/patches/prool@0.2.4.patch
   viem@2.48.11: config/patches/viem@2.48.11.patch
 peerDependencyRules:
   allowAny:

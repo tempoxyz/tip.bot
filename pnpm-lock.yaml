@@ -24,6 +24,7 @@ patchedDependencies:
   accounts@0.10.6: 9c79d7ca2432a36bc63af3dc4529cc6cacf9a058a19deac222d41ad69007310b
   emulate@0.5.0: 67fe2db5f9c966e113c6d1948ef757e1091bbb5f9169d766f13ee5d421d1c1c5
   mppx@0.6.19: 0fa53098603d42de00c283a80dac02d853d5a2775bea90368f0f29a99acf77c0
+  prool@0.2.4: 242ad315de9eb06e5a654896de221f947e3f0f5f318b55d898191bfad0a9530f
   viem@2.48.11: bd9cdc8edfb5ec594f6c32548eb0433bfbd042f8e1b793bc94b88cfbd78cf7bb
 
 importers:
@@ -150,7 +151,7 @@ importers:
         version: 0.13.0
       prool:
         specifier: ^0.2.4
-        version: 0.2.4(testcontainers@11.14.0)
+        version: 0.2.4(patch_hash=242ad315de9eb06e5a654896de221f947e3f0f5f318b55d898191bfad0a9530f)(testcontainers@11.14.0)
       tailwindcss:
         specifier: 4.2.4
         version: 4.2.4
@@ -7145,7 +7146,7 @@ snapshots:
 
   process@0.11.10: {}
 
-  prool@0.2.4(testcontainers@11.14.0):
+  prool@0.2.4(patch_hash=242ad315de9eb06e5a654896de221f947e3f0f5f318b55d898191bfad0a9530f)(testcontainers@11.14.0):
     dependencies:
       change-case: 5.4.4
       eventemitter3: 5.0.1
