@@ -20,7 +20,7 @@ packageExtensionsChecksum: sha256-+qeowdyxhNxOoPcupUZ6hUvH9lsA69jGqvTwkjD2d+c=
 patchedDependencies:
   '@chat-adapter/slack@4.27.0': f129c43965d79b15a626b2f5e493aee5ae9b5638ff12257bd4cf6cecb048d1dd
   '@slack/web-api@7.15.2': 97b9149f438abff67b083a9f281917a3b7e1d3133ca6b8be85c6e6ba78b591ae
-  emulate@0.5.0: 30364ff9d4a474590283be75d1c7e02221f138595ab72f549a61323426b6c539
+  emulate@0.5.0: 7d089ac7fcf9216304f14509be63be70e4730a444ac80d869771a8a4491f4fb4
 
 importers:
 
@@ -6038,7 +6038,7 @@ snapshots:
 
   emoji-regex@9.2.2: {}
 
-  emulate@0.5.0(patch_hash=30364ff9d4a474590283be75d1c7e02221f138595ab72f549a61323426b6c539)(hono@4.12.18):
+  emulate@0.5.0(patch_hash=7d089ac7fcf9216304f14509be63be70e4730a444ac80d869771a8a4491f4fb4)(hono@4.12.18):
     dependencies:
       '@hono/node-server': 1.19.14(hono@4.12.18)
       commander: 14.0.3

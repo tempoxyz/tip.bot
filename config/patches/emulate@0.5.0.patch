@@ -1,5 +1,5 @@
 diff --git a/dist/dist-CE6BUCWQ.js b/dist/dist-CE6BUCWQ.js
-index 6876d0e..ed5ef83 100644
+index 6876d0e..e1ae8da 100644
 --- a/dist/dist-CE6BUCWQ.js
 +++ b/dist/dist-CE6BUCWQ.js
 @@ -76,6 +76,38 @@ function authRoutes(ctx) {
@@ -77,7 +77,7 @@ index 6876d0e..ed5ef83 100644
        const email = u.email ?? `${u.name}@emulate.dev`;
        ss.users.insert({
          user_id: userId,
-@@ -1347,13 +1402,28 @@ function seedFromConfig(store, _baseUrl, config) {
+@@ -1347,18 +1402,42 @@ function seedFromConfig(store, _baseUrl, config) {
    }
    if (config.channels) {
      for (const ch of config.channels) {
@@ -105,7 +105,22 @@ index 6876d0e..ed5ef83 100644
        const isPrivate = ch.is_private ?? false;
        ss.channels.insert({
 -        channel_id: generateSlackId("C"),
+-        team_id: teamId,
 +        channel_id: ch.channel_id ?? generateSlackId("C"),
-         team_id: teamId,
++        team_id: ch.team_id ?? teamId,
          name: ch.name,
          is_channel: !isPrivate,
+         is_private: isPrivate,
+         is_archived: false,
++        context_team_id: ch.context_team_id,
++        conversation_host_id: ch.conversation_host_id,
++        is_ext_shared: ch.is_ext_shared,
++        is_org_shared: ch.is_org_shared,
++        is_pending_ext_shared: ch.is_pending_ext_shared,
++        is_shared: ch.is_shared,
++        pending_connected_team_ids: ch.pending_connected_team_ids,
++        pending_shared: ch.pending_shared,
++        shared_team_ids: ch.shared_team_ids,
+         topic: { value: ch.topic ?? "", creator, last_set: now },
+         purpose: { value: ch.purpose ?? "", creator, last_set: now },
+         members: ss.users.all().map((u) => u.user_id),
