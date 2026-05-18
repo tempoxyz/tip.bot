@@ -3,12 +3,14 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..ef01d9fa93914f3c6de1081d6b82e00ae300c09d
 --- /dev/null
 +++ b/_cjs/tempo/chains.js
-@@ -0,0 +1,9 @@
+@@ -0,0 +1,11 @@
 +"use strict";
 +Object.defineProperty(exports, "__esModule", { value: true });
-+exports.tempoModerato = exports.tempoLocalnet = exports.tempo = void 0;
++exports.tempoModerato = exports.tempoLocalnet = exports.tempoDevnet = exports.tempo = void 0;
 +var tempo_js_1 = require("../chains/definitions/tempo.js");
 +Object.defineProperty(exports, "tempo", { enumerable: true, get: function () { return tempo_js_1.tempo; } });
++var tempoDevnet_js_1 = require("../chains/definitions/tempoDevnet.js");
++Object.defineProperty(exports, "tempoDevnet", { enumerable: true, get: function () { return tempoDevnet_js_1.tempoDevnet; } });
 +var tempoLocalnet_js_1 = require("../chains/definitions/tempoLocalnet.js");
 +Object.defineProperty(exports, "tempoLocalnet", { enumerable: true, get: function () { return tempoLocalnet_js_1.tempoLocalnet; } });
 +var tempoModerato_js_1 = require("../chains/definitions/tempoModerato.js");
@@ -18,8 +20,9 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..a50b7557881ccf776ddd35aac84bf5b63804e459
 --- /dev/null
 +++ b/_esm/tempo/chains.js
-@@ -0,0 +1,3 @@
+@@ -0,0 +1,4 @@
 +export { tempo } from '../chains/definitions/tempo.js';
++export { tempoDevnet } from '../chains/definitions/tempoDevnet.js';
 +export { tempoLocalnet } from '../chains/definitions/tempoLocalnet.js';
 +export { tempoModerato } from '../chains/definitions/tempoModerato.js';
 diff --git a/_types/tempo/chains.d.ts b/_types/tempo/chains.d.ts
@@ -27,8 +30,9 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..1fd65325f7fb428037f475bbdeecff279900fc6d
 --- /dev/null
 +++ b/_types/tempo/chains.d.ts
-@@ -0,0 +1,3 @@
+@@ -0,0 +1,4 @@
 +export { tempo } from '../chains/definitions/tempo.js';
++export { tempoDevnet } from '../chains/definitions/tempoDevnet.js';
 +export { tempoLocalnet } from '../chains/definitions/tempoLocalnet.js';
 +export { tempoModerato } from '../chains/definitions/tempoModerato.js';
 diff --git a/package.json b/package.json
