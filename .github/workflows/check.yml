@@ -116,53 +116,8 @@ jobs:
       - name: Test workers
         run: |
           started_at=$(date +%s)
-          set +e
-          rm -rf node_modules/.vite
-          DEBUG=vite:transform,vite:load pnpm test --project workers --run > workers-test.log 2>&1
-          status=$?
-          node <<'NODE'
-          const fs = require('node:fs')
-          const log = fs.readFileSync('workers-test.log', 'utf8').replaceAll('\0', '')
-          const lines = log.split('\n')
-          for (const line of lines) {
-            if (!/vite:(load|transform)/.test(line)) console.log(line)
-          }
-          const timings = []
-          for (const line of lines) {
-            const match = line.match(/vite:(load|transform) ([0-9.]+)ms(?: \[([^\]]+)\])? (.*)$/)
-            if (!match) continue
-            timings.push({
-              kind: match[1],
-              ms: Number(match[2]),
-              path: match[4],
-              status: match[3] ?? '',
-            })
-          }
-          const chainDefinitions = new Set(
-            timings
-              .filter(
-                (timing) =>
-                  timing.kind === 'transform' &&
-                  timing.path.includes('/viem/_esm/chains/definitions/'),
-              )
-              .map((timing) => timing.path.split('/definitions/')[1]?.split(/[ ?]/)[0])
-              .filter(Boolean),
-          )
-          const chainIndex = timings.filter((timing) => timing.path.includes('/viem/_esm/chains/index.js'))
-          console.log(`workers: vite debug events ${timings.length}`)
-          console.log(`workers: viem chain definitions transformed ${chainDefinitions.size}`)
-          console.log(`workers: viem chains index events ${chainIndex.length}`)
-          for (const timing of timings
-            .filter((item) => item.status !== 'skipped')
-            .sort((a, b) => b.ms - a.ms)
-            .slice(0, 20)) {
-            console.log(
-              `workers: vite slow ${timing.kind} ${timing.ms}ms ${timing.path.replace(process.cwd(), '.')}`,
-            )
-          }
-          NODE
+          pnpm test --project workers --run
           echo "workers: CI test step completed in $(($(date +%s) - started_at))s"
-          exit $status
         env:
           FEE_PAYER_PRIVATE_KEY_MAINNET: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
           FEE_PAYER_PRIVATE_KEY_TESTNET: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
