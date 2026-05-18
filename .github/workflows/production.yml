@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 concurrency:
-  group: production
+  group: slack-config-ci
   cancel-in-progress: false
 
 permissions: {}
@@ -70,3 +70,17 @@ jobs:
           SLACK_CLIENT_ID: ${{ secrets.SLACK_CLIENT_ID }}
           SLACK_CLIENT_SECRET: ${{ secrets.SLACK_CLIENT_SECRET }}
           SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
+
+      - name: Setup Slack config token
+        id: slack_token
+        uses: ./.github/actions/setup-slack-config-token
+        with:
+          github-token: ${{ secrets.SLACK_GH_TOKEN }}
+          slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
+          slack-config-token: ${{ secrets.SLACK_CONFIG_TOKEN }}
+
+      - name: Update Slack production app
+        env:
+          SLACK_APP_ID: ${{ vars.SLACK_APP_ID }}
+          SLACK_CONFIG_TOKEN: ${{ steps.slack_token.outputs.token }}
+        run: pnpm slack:app update production tip.bot "$SLACK_APP_ID"

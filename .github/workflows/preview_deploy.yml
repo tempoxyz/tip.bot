@@ -18,7 +18,7 @@ on:
         required: true
       FEE_PAYER_PRIVATE_KEY_TESTNET:
         required: true
-      PREVIEW_GITHUB_TOKEN:
+      SLACK_GH_TOKEN:
         required: false
       SECRET_KEY:
         required: true
@@ -28,7 +28,7 @@ on:
         required: false
 
 concurrency:
-  group: slack-preview-ci
+  group: slack-config-ci
   cancel-in-progress: false
 
 permissions:
@@ -86,31 +86,11 @@ jobs:
 
       - name: Setup Slack config token
         id: slack_token
-        env:
-          GH_TOKEN: ${{ secrets.PREVIEW_GITHUB_TOKEN }}
-          SLACK_CONFIG_REFRESH_TOKEN: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
-          SLACK_CONFIG_TOKEN: ${{ secrets.SLACK_CONFIG_TOKEN }}
-        run: |
-          if [ -n "$SLACK_CONFIG_TOKEN" ]; then
-            echo "::add-mask::$SLACK_CONFIG_TOKEN"
-            echo "token=$SLACK_CONFIG_TOKEN" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          gh api "repos/${{ github.repository }}/environments/preview/secrets/public-key" > /dev/null
-          RESPONSE=$(curl -fsS -X POST https://slack.com/api/tooling.tokens.rotate \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            --data-urlencode "refresh_token=${SLACK_CONFIG_REFRESH_TOKEN}")
-          OK=$(echo "$RESPONSE" | jq -r '.ok')
-          if [ "$OK" != "true" ]; then
-            echo "$RESPONSE" | jq '{ok,error,errors}'
-            exit 1
-          fi
-          TOKEN=$(echo "$RESPONSE" | jq -r '.token')
-          REFRESH_TOKEN=$(echo "$RESPONSE" | jq -r '.refresh_token')
-          echo "::add-mask::$TOKEN"
-          echo "::add-mask::$REFRESH_TOKEN"
-          gh secret set SLACK_CONFIG_REFRESH_TOKEN --env preview --body "$REFRESH_TOKEN"
-          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/setup-slack-config-token
+        with:
+          github-token: ${{ secrets.SLACK_GH_TOKEN }}
+          slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
+          slack-config-token: ${{ secrets.SLACK_CONFIG_TOKEN }}
 
       - name: Read preview state
         id: state
