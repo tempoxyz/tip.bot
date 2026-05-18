@@ -96,6 +96,7 @@ export const api = new Hono<{
           'account_link_token.member_id',
           'account_link_token.provider_channel_id',
           'account_link_token.used_at',
+          'member.provider_identity_id as member_provider_identity_id',
           'member.provider_user_id as member_provider_user_id',
           'workspace.chain_id',
           'workspace.default_token_address',
@@ -164,10 +165,11 @@ export const api = new Hono<{
 
         const duplicate = await c.var.db
           .selectFrom('member')
-          .select(['id'])
-          .where('workspace_id', '=', link.workspace_id)
-          .where('account_id', '=', account.id)
-          .where('id', '!=', link.member_id)
+          .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+          .select(['member.id', 'member.provider_identity_id'])
+          .where('member.workspace_id', '=', link.workspace_id)
+          .where('member.id', '!=', link.member_id)
+          .where('provider_identity.account_id', '=', account.id)
           .executeTakeFirst()
         if (duplicate && !body.disconnectExistingAccount)
           return c.json(
@@ -178,14 +180,28 @@ export const api = new Hono<{
             },
             409,
           )
-        if (duplicate && body.disconnectExistingAccount)
+        if (duplicate && body.disconnectExistingAccount) {
+          const duplicateIdentities = await c.var.db
+            .selectFrom('member')
+            .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+            .select('member.provider_identity_id')
+            .where('member.workspace_id', '=', link.workspace_id)
+            .where('member.id', '!=', link.member_id)
+            .where('provider_identity.account_id', '=', account.id)
+            .execute()
+          const duplicateIdentityIds = duplicateIdentities.map((row) => row.provider_identity_id)
           await c.var.db
             .updateTable('member')
+            // TODO: Remove member.account_id compatibility write after provider_identity backfill is verified in production.
             .set({ account_id: null, updated_at: now })
-            .where('workspace_id', '=', link.workspace_id)
-            .where('account_id', '=', account.id)
-            .where('id', '!=', link.member_id)
+            .where('provider_identity_id', 'in', duplicateIdentityIds)
             .execute()
+          await c.var.db
+            .updateTable('provider_identity')
+            .set({ account_id: null, updated_at: now })
+            .where('id', 'in', duplicateIdentityIds)
+            .execute()
+        }
 
         await c.var.db
           .deleteFrom('access_key')
@@ -221,8 +237,15 @@ export const api = new Hono<{
             updated_at: now,
           })
           .execute()
+        if (link.member_provider_identity_id)
+          await c.var.db
+            .updateTable('provider_identity')
+            .set({ account_id: account.id, updated_at: now })
+            .where('id', '=', link.member_provider_identity_id)
+            .execute()
         await c.var.db
           .updateTable('member')
+          // TODO: Remove member.account_id compatibility write after provider_identity backfill is verified in production.
           .set({ account_id: account.id, updated_at: now })
           .where('id', '=', link.member_id)
           .execute()

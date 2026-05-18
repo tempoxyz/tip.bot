@@ -1,16 +1,69 @@
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index b83318f020332a5c55871d886b268f5308469ad9..47d488322b5016136ea7ab59545dc0cc2e26d049 100644
+index b83318f..a3246f6 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
-@@ -211,6 +211,7 @@ interface SlackEvent {
+@@ -150,6 +150,7 @@ interface SlackThreadId {
+ }
+ /** Slack event payload (raw message format) */
+ interface SlackEvent {
++    api_app_id?: string;
+     /** Legacy attachments (unfurl previews, app unfurls, etc.) */
+     attachments?: Array<{
+         from_url?: string;
+@@ -179,9 +180,13 @@ interface SlackEvent {
+     channel?: string;
+     /** Channel type: "channel", "group", "mpim", or "im" (DM) */
+     channel_type?: string;
++    context_enterprise_id?: string | null;
++    context_team_id?: string | null;
+     edited?: {
+         ts: string;
+     };
++    event_context?: string;
++    event_id?: string;
+     files?: Array<{
+         id?: string;
+         mimetype?: string;
+@@ -197,6 +202,7 @@ interface SlackEvent {
+     latest_reply?: string;
+     /** Inner message on message_changed events */
+     message?: SlackEvent;
++    is_ext_shared_channel?: boolean;
+     /** Number of replies in the thread (present on thread parent messages) */
+     reply_count?: number;
+     subtype?: string;
+@@ -208,10 +214,30 @@ interface SlackEvent {
+     type: string;
+     user?: string;
+     username?: string;
++    authorizations?: Array<{
++        enterprise_id?: string | null;
++        team_id?: string | null;
++        user_id?: string | null;
++        is_bot?: boolean;
++        is_enterprise_install?: boolean;
++    }>;
  }
  /** Slack reaction event payload */
  interface SlackReactionEvent {
++    api_app_id?: string;
++    authorizations?: Array<{
++        enterprise_id?: string | null;
++        team_id?: string | null;
++        user_id?: string | null;
++        is_bot?: boolean;
++        is_enterprise_install?: boolean;
++    }>;
++    context_enterprise_id?: string | null;
++    context_team_id?: string | null;
++    event_context?: string;
 +    event_id?: string;
      event_ts: string;
++    is_ext_shared_channel?: boolean;
      item: {
          type: string;
-@@ -219,6 +220,7 @@ interface SlackReactionEvent {
+         channel: string;
+@@ -219,6 +245,7 @@ interface SlackReactionEvent {
      };
      item_user?: string;
      reaction: string;
@@ -19,11 +72,34 @@ index b83318f020332a5c55871d886b268f5308469ad9..47d488322b5016136ea7ab59545dc0cc
      user: string;
  }
 diff --git a/dist/index.js b/dist/index.js
-index e1d9675be93dfbd8a1e128edb9c2db0448b18109..c80ca4155b714aac350cfcfad27f7c7bb4c5303d 100644
+index e1d9675..a02b223 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -1284,8 +1284,15 @@ var SlackAdapter = class _SlackAdapter {
+@@ -1282,10 +1282,56 @@ var SlackAdapter = class _SlackAdapter {
+         if (!(slackEvent.team || slackEvent.team_id) && payload.team_id) {
+           slackEvent.team_id = payload.team_id;
          }
++        if (!slackEvent.event_id && payload.event_id) {
++          slackEvent.event_id = payload.event_id;
++        }
++        if (!slackEvent.event_context && payload.event_context) {
++          slackEvent.event_context = payload.event_context;
++        }
++        if (!slackEvent.api_app_id && payload.api_app_id) {
++          slackEvent.api_app_id = payload.api_app_id;
++        }
++        if (!slackEvent.context_team_id && payload.context_team_id) {
++          slackEvent.context_team_id = payload.context_team_id;
++        }
++        if (!slackEvent.context_enterprise_id && payload.context_enterprise_id) {
++          slackEvent.context_enterprise_id = payload.context_enterprise_id;
++        }
++        if (!slackEvent.authorizations && payload.authorizations) {
++          slackEvent.authorizations = payload.authorizations;
++        }
++        if (slackEvent.is_ext_shared_channel === void 0 && payload.is_ext_shared_channel !== void 0) {
++          slackEvent.is_ext_shared_channel = payload.is_ext_shared_channel;
++        }
          this.handleMessageEvent(slackEvent, options);
        } else if (event.type === "reaction_added" || event.type === "reaction_removed") {
 +        const slackEvent = event;
@@ -32,6 +108,24 @@ index e1d9675be93dfbd8a1e128edb9c2db0448b18109..c80ca4155b714aac350cfcfad27f7c7b
 +        }
 +        if (!slackEvent.event_id && payload.event_id) {
 +          slackEvent.event_id = payload.event_id;
++        }
++        if (!slackEvent.event_context && payload.event_context) {
++          slackEvent.event_context = payload.event_context;
++        }
++        if (!slackEvent.api_app_id && payload.api_app_id) {
++          slackEvent.api_app_id = payload.api_app_id;
++        }
++        if (!slackEvent.context_team_id && payload.context_team_id) {
++          slackEvent.context_team_id = payload.context_team_id;
++        }
++        if (!slackEvent.context_enterprise_id && payload.context_enterprise_id) {
++          slackEvent.context_enterprise_id = payload.context_enterprise_id;
++        }
++        if (!slackEvent.authorizations && payload.authorizations) {
++          slackEvent.authorizations = payload.authorizations;
++        }
++        if (slackEvent.is_ext_shared_channel === void 0 && payload.is_ext_shared_channel !== void 0) {
++          slackEvent.is_ext_shared_channel = payload.is_ext_shared_channel;
 +        }
          const task = this.handleReactionEvent(
 -          event,

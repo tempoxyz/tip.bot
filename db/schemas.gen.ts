@@ -46,9 +46,24 @@ export const member = z.object({
   id: z.string(),
   login: z.string().nullable(),
   name: z.string().nullable(),
+  provider_identity_id: z.string().nullable(),
   provider_user_id: z.string(),
   updated_at: z.string(),
   workspace_id: z.string(),
+})
+
+export const provider_identity = z.object({
+  account_id: z.string().nullable(),
+  created_at: z.string(),
+  display_name: z.string().nullable(),
+  id: z.string(),
+  metadata: z.string().nullable(),
+  provider: z.literal('slack'),
+  provider_global_user_id: z.string().nullable(),
+  provider_user_id: z.string(),
+  provider_workspace_id: z.string().nullable(),
+  real_name: z.string().nullable(),
+  updated_at: z.string(),
 })
 
 export const reaction_tip = z.object({
@@ -148,6 +163,7 @@ export const db = {
   account: account,
   account_link_token: account_link_token,
   member: member,
+  provider_identity: provider_identity,
   reaction_tip: reaction_tip,
   reaction_tip_thread: reaction_tip_thread,
   tip: tip,
