@@ -6,7 +6,6 @@ import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import { getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
-import * as Home from '#/lib/home.ts'
 import * as hono from '#/lib/hono.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Slack from '#/lib/slack.ts'
@@ -678,15 +677,16 @@ export const api = new Hono<{
     // chat-adapter/slack AppHomeOpenedEvent does not expose team_id, so we can't
     // reliably resolve the workspace from inside bot.onAppHomeOpened.
     if (!params) {
-      const homeOpened = (() => {
-        let payload: unknown
+      const payload = (() => {
         try {
-          payload = JSON.parse(body)
+          return JSON.parse(body)
         } catch {
           return null
         }
-        const parsed = z
-          .object({
+      })()
+      const homeOpened = (() => {
+        const parsed = z.safeParse(
+          z.object({
             event: z
               .object({
                 channel: z.string().min(1).optional(),
@@ -697,8 +697,9 @@ export const api = new Hono<{
               .optional(),
             team_id: z.string().min(1).optional(),
             type: z.string().min(1).optional(),
-          })
-          .safeParse(payload)
+          }),
+          payload,
+        )
         if (!parsed.success) return null
         if (parsed.data.type !== 'event_callback') return null
         if (parsed.data.event?.type !== 'app_home_opened') return null
@@ -707,22 +708,18 @@ export const api = new Hono<{
         return { slackUserId: parsed.data.event.user, teamId: parsed.data.team_id }
       })()
       if (homeOpened) {
-        console.log('app_home_opened', {
-          slackUserId: homeOpened.slackUserId,
-          teamId: homeOpened.teamId,
-        })
         c.executionCtx.waitUntil(
-          Home.publishHome({
+          Slack.publishHome({
             env: c.env,
+            getInstallation: (teamId) => Chat.getSlack().getInstallation(teamId),
+            initializeChat: () => Chat.getChat().initialize(),
+            publishHomeView: (slackUserId, view) =>
+              Chat.getSlack().publishHomeView(slackUserId, view),
             slackUserId: homeOpened.slackUserId,
             teamId: homeOpened.teamId,
+            withBotToken: (botToken, fn) => Chat.getSlack().withBotToken(botToken, fn),
           }).catch((error) => {
-            console.error('publishHome failed', {
-              error: error instanceof Error ? error.message : String(error),
-              slackUserId: homeOpened.slackUserId,
-              stack: error instanceof Error ? error.stack : undefined,
-              teamId: homeOpened.teamId,
-            })
+            console.error('publishHome failed', error)
           }),
         )
         return new Response('', { status: 200 })
