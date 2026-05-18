@@ -17,6 +17,7 @@ jobs:
 
   preview:
     name: Preview
+    if: github.event.pull_request.draft == false && contains(fromJSON('["COLLABORATOR", "MEMBER", "OWNER"]'), github.event.pull_request.author_association)
     needs: check
     permissions:
       contents: read
