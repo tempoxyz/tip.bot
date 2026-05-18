@@ -11,15 +11,18 @@ import { Env } from './env.ts'
 import { getAvailablePort } from './utils.ts'
 
 export default async function (project: TestProject) {
+  const setupStartedAt = performance.now()
   console.log('workers: starting slack emulator')
+  const slackStartedAt = performance.now()
   const slack = await createEmulator({
     port: await getAvailablePort(),
     seed: Constants.seed,
     service: 'slack',
   })
-  console.log('workers: started slack emulator')
+  console.log(`workers: started slack emulator in ${formatMs(slackStartedAt)}`)
 
   console.log('workers: starting tempo')
+  const tempoStartedAt = performance.now()
   const rpcPort = await getAvailablePort()
   const tempo = Server.create({
     instance: TestContainers.Instance.tempo({
@@ -35,7 +38,7 @@ export default async function (project: TestProject) {
   } finally {
     restorePullPolicy()
   }
-  console.log('workers: started tempo')
+  console.log(`workers: started tempo in ${formatMs(tempoStartedAt)}`)
 
   const env = Env.get({
     RPC_URL_TESTNET: `http://127.0.0.1:${rpcPort}/1`,
@@ -43,6 +46,7 @@ export default async function (project: TestProject) {
   })
 
   console.log('workers: minting fee payer')
+  const mintStartedAt = performance.now()
   await Actions.token.mintSync(
     createClient({
       chain: Tempo.getChain(Tempo.chainLookup.localnet),
@@ -55,17 +59,20 @@ export default async function (project: TestProject) {
       token: Tempo.addressLookup.pathUsd,
     },
   )
-  console.log('workers: minted fee payer')
+  console.log(`workers: minted fee payer in ${formatMs(mintStartedAt)}`)
 
   process.env.FEE_PAYER_PRIVATE_KEY_MAINNET = env.FEE_PAYER_PRIVATE_KEY_MAINNET
   process.env.FEE_PAYER_PRIVATE_KEY_TESTNET = env.FEE_PAYER_PRIVATE_KEY_TESTNET
   process.env.VITE_RPC_PORT = String(rpcPort)
 
   project.provide('env', JSON.stringify(env))
+  console.log(`workers: global setup completed in ${formatMs(setupStartedAt)}`)
 
   return async () => {
+    const teardownStartedAt = performance.now()
     await tempo.stop()
     await slack.close()
+    console.log(`workers: global teardown completed in ${formatMs(teardownStartedAt)}`)
   }
 }
 
@@ -81,4 +88,8 @@ function useDefaultPullPolicy() {
   return () => {
     PullPolicy.alwaysPull = alwaysPull
   }
+}
+
+function formatMs(startedAt: number) {
+  return `${Math.round(performance.now() - startedAt)}ms`
 }
