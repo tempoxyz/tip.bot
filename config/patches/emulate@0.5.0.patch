@@ -1,5 +1,5 @@
 diff --git a/dist/dist-CE6BUCWQ.js b/dist/dist-CE6BUCWQ.js
-index 6876d0e09488b5533c787b541f674e755004e739..cd7dc89ca1772dffd50debaf05c71b30d411cc48 100644
+index 6876d0e..ed5ef83 100644
 --- a/dist/dist-CE6BUCWQ.js
 +++ b/dist/dist-CE6BUCWQ.js
 @@ -76,6 +76,38 @@ function authRoutes(ctx) {
@@ -41,7 +41,43 @@ index 6876d0e09488b5533c787b541f674e755004e739..cd7dc89ca1772dffd50debaf05c71b30
    app.post("/api/chat.postMessage", async (c) => {
      const authUser = c.get("authUser");
      if (!authUser) return slackError(c, "not_authed");
-@@ -1348,13 +1380,28 @@ function seedFromConfig(store, _baseUrl, config) {
+@@ -1322,9 +1354,32 @@ function seedFromConfig(store, _baseUrl, config) {
+   const teamId = team?.team_id ?? "T000000001";
+   if (config.users) {
+     for (const u of config.users) {
+-      const existing = ss.users.all().find((eu) => eu.name === u.name);
+-      if (existing) continue;
+-      const userId = generateSlackId("U");
++      const existing = u.user_id ? ss.users.findOneBy("user_id", u.user_id) : ss.users.all().find((eu) => eu.name === u.name || eu.email === u.email);
++      if (existing) {
++        const email2 = u.email ?? existing.email;
++        ss.users.update(existing.id, {
++          deleted: u.deleted ?? existing.deleted,
++          email: email2,
++          enterprise_id: u.enterprise_id ?? existing.enterprise_id,
++          enterprise_is_admin: u.enterprise_is_admin ?? existing.enterprise_is_admin,
++          enterprise_is_owner: u.enterprise_is_owner ?? existing.enterprise_is_owner,
++          enterprise_team_id: u.enterprise_team_id ?? existing.enterprise_team_id,
++          enterprise_user_id: u.enterprise_user_id ?? existing.enterprise_user_id,
++          is_admin: u.is_admin ?? existing.is_admin,
++          name: u.name ?? existing.name,
++          profile: {
++            ...existing.profile,
++            display_name: u.name ?? existing.profile?.display_name,
++            email: email2,
++            real_name: u.real_name ?? u.name ?? existing.profile?.real_name
++          },
++          real_name: u.real_name ?? existing.real_name,
++          team_id: u.team_id ?? existing.team_id,
++          user_id: u.user_id ?? existing.user_id
++        });
++        continue;
++      }
++      const userId = u.user_id ?? generateSlackId("U");
+       const email = u.email ?? `${u.name}@emulate.dev`;
+       ss.users.insert({
+         user_id: userId,
+@@ -1347,13 +1402,28 @@ function seedFromConfig(store, _baseUrl, config) {
    }
    if (config.channels) {
      for (const ch of config.channels) {
