@@ -453,6 +453,9 @@ const handlers = {
       canEdit: await canManageSlackWorkspaceSettings(ctx.provider.id, event.user.userId),
     })
   },
+  async bounty(event, ctx) {
+    await handleBountyCommand(event, ctx)
+  },
   async connect(event, ctx) {
     await postConnectLink(event, ctx)
   },
@@ -507,6 +510,12 @@ const handlers = {
     const commandRows = [
       [`${getSlackCommand(env.HOST)} @account [amount] [token] [for memo]`, 'Send payment'],
       [`${getSlackCommand(env.HOST)} balance`, 'Show wallet balance'],
+      [
+        `${getSlackCommand(env.HOST)} bounty create [amount] by YYYY-MM-DD oracle @account [for memo]`,
+        'Create bounty',
+      ],
+      [`${getSlackCommand(env.HOST)} bounty resolve [id] @account...`, 'Resolve bounty'],
+      [`${getSlackCommand(env.HOST)} bounty refund [id]`, 'Refund expired bounty'],
       [`${getSlackCommand(env.HOST)} config`, 'Manage workspace configuration'],
       [`${getSlackCommand(env.HOST)} connect`, 'Connect to Tipbot'],
       [`${getSlackCommand(env.HOST)} disconnect`, 'Disconnect from Tipbot'],
@@ -857,6 +866,7 @@ const handlers = {
 
 const commandNames = [
   'balance',
+  'bounty',
   'config',
   'connect',
   'disconnect',
@@ -927,6 +937,190 @@ const slackReactionEventSchema = z.object({
 })
 
 type SlackReactionEvent = z.infer<typeof slackReactionEventSchema>
+
+async function handleBountyCommand(event: chat.SlashCommandEvent, ctx: HandlerContext) {
+  const workspace = await ctx.db
+    .selectFrom('workspace')
+    .selectAll()
+    .where('provider', '=', ctx.provider.type)
+    .where('provider_id', '=', ctx.provider.id)
+    .executeTakeFirst()
+  if (!workspace) {
+    await postPrivateReply(
+      event,
+      event.user,
+      'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+    )
+    return
+  }
+
+  const [subcommand = '', ...rest] = ctx.text.split(/\s+/)
+  const text = rest.join(' ').trim()
+  if (subcommand === 'create') {
+    const parsed = parseBountyCreateText(text, workspace.chain_id)
+    if (!parsed) {
+      await postPrivateReply(
+        event,
+        event.user,
+        `Invalid bounty usage. Try \`${getSlackCommand(env.HOST)} bounty create $10 by 2026-06-01 oracle @account for launch demo\`.`,
+      )
+      return
+    }
+    const tokenAddress = parsed.token
+      ? Tempo.getTokenAddress(workspace.chain_id, parsed.token)
+      : (workspace.default_token_address ?? Tempo.addressLookup.pathUsd)
+    if (!tokenAddress || !Tempo.isAllowedToken(workspace.chain_id, tokenAddress)) {
+      await postPrivateReply(event, event.user, 'Bounty not created. Token is not supported.')
+      return
+    }
+    const creator = await getOrCreateSlackMember(ctx, workspace, event.user.userId)
+    const oracle = await getOrCreateSlackMember(ctx, workspace, parsed.oracleProviderUserId)
+    const id = Nanoid.generate().slice(0, 10)
+    const now = new Date().toISOString()
+    await ctx.db
+      .insertInto('bounty')
+      .values({
+        amount: parsed.amount,
+        created_at: now,
+        creator_member_id: creator.id,
+        deadline_at: parsed.deadlineAt,
+        id,
+        memo: parsed.memo,
+        oracle_member_id: oracle.id,
+        provider_channel_id: event.channel.id,
+        provider_thread_id: ctx.threadTs ?? null,
+        token_address: Address.checksum(tokenAddress),
+        updated_at: now,
+        workspace_id: workspace.id,
+      })
+      .execute()
+    await event.channel.post(
+      `Bounty ${id} created: ${formatBountyAmount(parsed.amount, workspace.chain_id, tokenAddress)} by ${formatBountyDate(parsed.deadlineAt)}. Oracle: <@${parsed.oracleProviderUserId}>.${parsed.memo ? ` ${parsed.memo}` : ''}\nResolve with \`${getSlackCommand(env.HOST)} bounty resolve ${id} @winner\`.`,
+    )
+    return
+  }
+
+  if (subcommand === 'resolve') {
+    const parsed = parseBountyResolveText(text)
+    if (!parsed) {
+      await postPrivateReply(
+        event,
+        event.user,
+        `Invalid bounty usage. Try \`${getSlackCommand(env.HOST)} bounty resolve bounty_id @winner [@winner2]\`.`,
+      )
+      return
+    }
+    const bounty = await getBounty(ctx, workspace.id, parsed.id)
+    if (!bounty) {
+      await postPrivateReply(event, event.user, 'Bounty not found.')
+      return
+    }
+    if (bounty.status !== 'open') {
+      await postPrivateReply(event, event.user, `Bounty is already ${bounty.status}.`)
+      return
+    }
+    const oracle = await ctx.db
+      .selectFrom('member')
+      .select('provider_user_id')
+      .where('id', '=', bounty.oracle_member_id)
+      .executeTakeFirstOrThrow()
+    if (oracle.provider_user_id !== event.user.userId) {
+      await postPrivateReply(event, event.user, 'Only the bounty oracle can resolve this bounty.')
+      return
+    }
+    const creator = await ctx.db
+      .selectFrom('member')
+      .select('provider_user_id')
+      .where('id', '=', bounty.creator_member_id)
+      .executeTakeFirstOrThrow()
+    const share = Math.floor(bounty.amount / parsed.winnerProviderUserIds.length)
+    if (share <= 0) {
+      await postPrivateReply(event, event.user, 'Bounty amount is too small to split.')
+      return
+    }
+    const result = await Tip.handleTipBatchRequest(env, {
+      amount: share,
+      idempotencyKey: `bounty:${bounty.id}:resolve`,
+      memo: `bounty ${bounty.id}`,
+      provider: ctx.provider.type,
+      providerChannelId: event.channel.id,
+      providerId: ctx.provider.id,
+      providerThreadId: ctx.threadTs,
+      recipients: parsed.winnerProviderUserIds.map((recipientProviderUserId) => ({
+        recipientProviderUserId,
+      })),
+      senderProviderUserId: creator.provider_user_id,
+      source: 'command',
+      tokenAddress: bounty.token_address,
+    })
+    if (!result.ok) {
+      await postPrivateReply(event, event.user, bountyResultError(result))
+      return
+    }
+    const batch = await ctx.db
+      .selectFrom('tip_batch')
+      .select('id')
+      .where('idempotency_key', '=', `bounty:${bounty.id}:resolve`)
+      .executeTakeFirst()
+    await ctx.db
+      .updateTable('bounty')
+      .set({
+        resolution_batch_id: batch?.id ?? null,
+        resolved_at: new Date().toISOString(),
+        status: 'resolved',
+        updated_at: new Date().toISOString(),
+      })
+      .where('id', '=', bounty.id)
+      .execute()
+    await event.channel.post(
+      `Bounty ${bounty.id} resolved: ${parsed.winnerProviderUserIds.map((id) => `<@${id}>`).join(', ')} split ${formatBountyAmount(bounty.amount, workspace.chain_id, bounty.token_address)}.`,
+    )
+    return
+  }
+
+  if (subcommand === 'refund') {
+    const id = text.trim()
+    const bounty = id ? await getBounty(ctx, workspace.id, id) : null
+    if (!bounty) {
+      await postPrivateReply(event, event.user, 'Bounty not found.')
+      return
+    }
+    const creator = await ctx.db
+      .selectFrom('member')
+      .select('provider_user_id')
+      .where('id', '=', bounty.creator_member_id)
+      .executeTakeFirstOrThrow()
+    if (creator.provider_user_id !== event.user.userId) {
+      await postPrivateReply(event, event.user, 'Only the bounty creator can refund this bounty.')
+      return
+    }
+    if (bounty.status !== 'open') {
+      await postPrivateReply(event, event.user, `Bounty is already ${bounty.status}.`)
+      return
+    }
+    if (Date.now() < new Date(bounty.deadline_at).getTime()) {
+      await postPrivateReply(event, event.user, 'Bounty deadline has not passed yet.')
+      return
+    }
+    await ctx.db
+      .updateTable('bounty')
+      .set({
+        refunded_at: new Date().toISOString(),
+        status: 'refunded',
+        updated_at: new Date().toISOString(),
+      })
+      .where('id', '=', bounty.id)
+      .execute()
+    await event.channel.post(`Bounty ${bounty.id} refunded to creator.`)
+    return
+  }
+
+  await postPrivateReply(
+    event,
+    event.user,
+    `Invalid bounty usage. Try \`${getSlackCommand(env.HOST)} bounty create $10 by 2026-06-01 oracle @account\`.`,
+  )
+}
 
 async function handleTipText(
   event: TipEvent,
@@ -1307,6 +1501,128 @@ async function handleTipText(
         // Best effort only. Payment/error flow must not depend on Slack assistant UI cleanup.
       })
   }
+}
+
+function parseBountyCreateText(value: string, chainId: number) {
+  const match = value.match(
+    /^(\$?\d+(?:\.\d+)?)(?:\s+([A-Za-z0-9._-]+))?\s+by\s+(\d{4}-\d{2}-\d{2})\s+oracle\s+<@([A-Z0-9_]+)(?:\|[^>]+)?>(?:\s+for\s+([\s\S]+))?$/i,
+  )
+  if (!match) return null
+  const amount = Tip.parseAmount(match[1]!)
+  if (amount === null) return null
+  const maybeToken = match[2] ?? null
+  const token = maybeToken && Tempo.getTokenAddress(chainId, maybeToken) ? maybeToken : null
+  if (maybeToken && !token) return null
+  const deadline = new Date(`${match[3]}T23:59:59.999Z`)
+  if (Number.isNaN(deadline.getTime())) return null
+  return {
+    amount,
+    deadlineAt: deadline.toISOString(),
+    memo: match[5]?.trim() || null,
+    oracleProviderUserId: match[4]!,
+    token,
+  }
+}
+
+function parseBountyResolveText(value: string) {
+  const [id = '', ...winnerParts] = value.trim().split(/\s+/)
+  const winnerProviderUserIds = winnerParts
+    .map((part) => part.match(/^<@([A-Z0-9_]+)(?:\|[^>]+)?>$/)?.[1])
+    .filter((winner): winner is string => Boolean(winner))
+  if (
+    !id ||
+    winnerProviderUserIds.length !== winnerParts.length ||
+    winnerProviderUserIds.length === 0
+  )
+    return null
+  return { id, winnerProviderUserIds: [...new Set(winnerProviderUserIds)] }
+}
+
+async function getBounty(ctx: HandlerContext, workspaceId: string, id: string) {
+  return await ctx.db
+    .selectFrom('bounty')
+    .selectAll()
+    .where('workspace_id', '=', workspaceId)
+    .where('id', '=', id)
+    .executeTakeFirst()
+}
+
+async function getOrCreateSlackMember(
+  ctx: HandlerContext,
+  workspace: DB_gen.Selectable.workspace,
+  providerUserId: string,
+) {
+  const existing = await ctx.db
+    .selectFrom('member')
+    .selectAll()
+    .where('workspace_id', '=', workspace.id)
+    .where('provider_user_id', '=', providerUserId)
+    .executeTakeFirst()
+  if (existing) return existing
+
+  const now = new Date().toISOString()
+  const providerIdentityId = Nanoid.generate()
+  const memberId = Nanoid.generate()
+  await ctx.db
+    .insertInto('provider_identity')
+    .values({
+      account_id: null,
+      created_at: now,
+      display_name: null,
+      id: providerIdentityId,
+      metadata: null,
+      provider: workspace.provider,
+      provider_global_user_id: null,
+      provider_user_id: providerUserId,
+      provider_workspace_id: workspace.provider_id,
+      real_name: null,
+      updated_at: now,
+    })
+    .execute()
+  await ctx.db
+    .insertInto('member')
+    .values({
+      created_at: now,
+      id: memberId,
+      login: null,
+      name: null,
+      provider_identity_id: providerIdentityId,
+      provider_user_id: providerUserId,
+      updated_at: now,
+      workspace_id: workspace.id,
+    })
+    .execute()
+  return await ctx.db
+    .selectFrom('member')
+    .selectAll()
+    .where('id', '=', memberId)
+    .executeTakeFirstOrThrow()
+}
+
+function formatBountyAmount(amount: number, chainId: number, tokenAddress: string) {
+  const token = workspaceTokenOptions(chainId).find((option) =>
+    Address.isEqual(Address.checksum(tokenAddress), option.address),
+  )
+  const formatted = formatAmount(amount)
+  return token
+    ? formatTipAmount(formatted, 'USD', token.label)
+    : formatCurrencyAmount(formatted, 'USD')
+}
+
+function formatBountyDate(value: string) {
+  return value.slice(0, 10)
+}
+
+function bountyResultError(result: Extract<Tip.TipBatchResult, { ok: false }>) {
+  if (result.code === 'sender_unconnected' || result.code === 'missing_sender_access_key')
+    return 'Bounty not resolved. The oracle needs to connect Tipbot first.'
+  if (result.code === 'recipient_unconnected')
+    return `Bounty not resolved. <@${result.recipientProviderUserId}> needs to connect Tipbot first.`
+  if (result.code === 'insufficient_funds')
+    return 'Bounty not resolved. The oracle wallet has insufficient funds.'
+  if (result.code === 'confirmation_required')
+    return 'Bounty not resolved. The oracle needs to confirm this payment first.'
+  return result.message ?? 'Bounty not resolved. Payment failed.'
 }
 
 async function setSlackAssistantThreadStatus(

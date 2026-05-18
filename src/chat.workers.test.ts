@@ -2108,6 +2108,40 @@ describe('/tip config', () => {
   })
 })
 
+describe('/tip bounty', () => {
+  test('creates a bounty with amount, deadline, oracle, and memo', async () => {
+    const response = await postSlashCommand(
+      `bounty create $10 by 2099-06-01 oracle <@${Constants.slack.memberUserId}> for launch demo`,
+    )
+    const bounty = await db
+      .selectFrom('bounty')
+      .innerJoin('member as creator', 'creator.id', 'bounty.creator_member_id')
+      .innerJoin('member as oracle', 'oracle.id', 'bounty.oracle_member_id')
+      .select([
+        'bounty.amount',
+        'bounty.deadline_at',
+        'bounty.memo',
+        'bounty.status',
+        'creator.provider_user_id as creator_provider_user_id',
+        'oracle.provider_user_id as oracle_provider_user_id',
+      ])
+      .executeTakeFirstOrThrow()
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('Bounty ')
+    await expectSlackMessage('created: $10.00 PathUSD by 2099-06-01')
+    await expectSlackMessage(`Oracle: <@${Constants.slack.memberUserId}>`)
+    expect(bounty).toMatchObject({
+      amount: 10_000_000,
+      creator_provider_user_id: Constants.slack.adminUserId,
+      deadline_at: '2099-06-01T23:59:59.999Z',
+      memo: 'launch demo',
+      oracle_provider_user_id: Constants.slack.memberUserId,
+      status: 'open',
+    })
+  })
+})
+
 describe('/tip connect', () => {
   test('creates one-time account link', async () => {
     const response = await postSlashCommand('connect')

@@ -6,6 +6,7 @@ export interface DB {
   access_key: access_key
   account: account
   account_link_token: account_link_token
+  bounty: bounty
   member: member
   provider_identity: provider_identity
   reaction_tip: reaction_tip
@@ -51,6 +52,25 @@ type account_link_token = {
   provider_channel_id: string | null
   token_hash: string
   used_at: string | null
+}
+
+type bounty = {
+  amount: number
+  created_at: k.Generated<string>
+  creator_member_id: string
+  deadline_at: string
+  id: string
+  memo: string | null
+  oracle_member_id: string
+  provider_channel_id: string
+  provider_thread_id: string | null
+  refunded_at: string | null
+  resolution_batch_id: string | null
+  resolved_at: string | null
+  status: k.Generated<'open' | 'resolved' | 'refunded' | 'canceled'>
+  token_address: string
+  updated_at: k.Generated<string>
+  workspace_id: string
 }
 
 type member = {
@@ -166,6 +186,7 @@ export declare namespace DB {
   type access_key = k.Selectable<DB['access_key']>
   type account = k.Selectable<DB['account']>
   type account_link_token = k.Selectable<DB['account_link_token']>
+  type bounty = k.Selectable<DB['bounty']>
   type member = k.Selectable<DB['member']>
   type provider_identity = k.Selectable<DB['provider_identity']>
   type reaction_tip = k.Selectable<DB['reaction_tip']>
@@ -178,6 +199,7 @@ export declare namespace DB {
     type access_key = k.Insertable<DB['access_key']>
     type account = k.Insertable<DB['account']>
     type account_link_token = k.Insertable<DB['account_link_token']>
+    type bounty = k.Insertable<DB['bounty']>
     type member = k.Insertable<DB['member']>
     type provider_identity = k.Insertable<DB['provider_identity']>
     type reaction_tip = k.Insertable<DB['reaction_tip']>
@@ -191,6 +213,7 @@ export declare namespace DB {
     type access_key = k.Selectable<DB['access_key']>
     type account = k.Selectable<DB['account']>
     type account_link_token = k.Selectable<DB['account_link_token']>
+    type bounty = k.Selectable<DB['bounty']>
     type member = k.Selectable<DB['member']>
     type provider_identity = k.Selectable<DB['provider_identity']>
     type reaction_tip = k.Selectable<DB['reaction_tip']>
@@ -204,6 +227,7 @@ export declare namespace DB {
     type access_key = k.Updateable<DB['access_key']>
     type account = k.Updateable<DB['account']>
     type account_link_token = k.Updateable<DB['account_link_token']>
+    type bounty = k.Updateable<DB['bounty']>
     type member = k.Updateable<DB['member']>
     type provider_identity = k.Updateable<DB['provider_identity']>
     type reaction_tip = k.Updateable<DB['reaction_tip']>

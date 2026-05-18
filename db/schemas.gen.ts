@@ -40,6 +40,25 @@ export const account_link_token = z.object({
   used_at: z.string().nullable(),
 })
 
+export const bounty = z.object({
+  amount: z.number(),
+  created_at: z.string(),
+  creator_member_id: z.string(),
+  deadline_at: z.string(),
+  id: z.string(),
+  memo: z.string().nullable(),
+  oracle_member_id: z.string(),
+  provider_channel_id: z.string(),
+  provider_thread_id: z.string().nullable(),
+  refunded_at: z.string().nullable(),
+  resolution_batch_id: z.string().nullable(),
+  resolved_at: z.string().nullable(),
+  status: z.enum(['open', 'resolved', 'refunded', 'canceled']),
+  token_address: z.string(),
+  updated_at: z.string(),
+  workspace_id: z.string(),
+})
+
 export const member = z.object({
   created_at: z.string(),
   id: z.string(),
@@ -160,6 +179,7 @@ export const db = {
   access_key: access_key,
   account: account,
   account_link_token: account_link_token,
+  bounty: bounty,
   member: member,
   provider_identity: provider_identity,
   reaction_tip: reaction_tip,
