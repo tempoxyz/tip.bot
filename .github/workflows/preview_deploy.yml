@@ -22,9 +22,9 @@ on:
         required: false
       SECRET_KEY:
         required: true
-      SLACK_CONFIG_REFRESH_TOKEN:
+      SLACK_CONFIG_ACCESS_TOKEN:
         required: false
-      SLACK_CONFIG_TOKEN:
+      SLACK_CONFIG_REFRESH_TOKEN:
         required: false
 
 concurrency:
@@ -90,7 +90,7 @@ jobs:
         with:
           github-token: ${{ secrets.SLACK_GH_TOKEN }}
           slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
-          slack-config-token: ${{ secrets.SLACK_CONFIG_TOKEN }}
+          slack-config-access-token: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
 
       - name: Read preview state
         id: state
@@ -184,7 +184,7 @@ jobs:
         env:
           APP_ID: ${{ steps.state.outputs.slack_app_id }}
           STATE_KEY: ${{ secrets.SECRET_KEY }}
-          SLACK_CONFIG_TOKEN: ${{ steps.slack_token.outputs.token }}
+          SLACK_CONFIG_ACCESS_TOKEN: ${{ steps.slack_token.outputs.token }}
         run: |
           set -euo pipefail
           METHOD="apps.manifest.update"
@@ -196,7 +196,7 @@ jobs:
           BODY=$(jq -nc --rawfile manifest "$MANIFEST" --arg app_id "$APP_ID" 'if $app_id == "" then {manifest: $manifest} else {app_id: $app_id, manifest: $manifest} end')
           for attempt in 1 2 3; do
             RESPONSE=$(curl -fsS -X POST "https://slack.com/api/${METHOD}" \
-              -H "Authorization: Bearer ${SLACK_CONFIG_TOKEN}" \
+              -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
               -H "Content-Type: application/json; charset=utf-8" \
               -d "$BODY")
             OK=$(echo "$RESPONSE" | jq -r '.ok')
@@ -215,7 +215,7 @@ jobs:
               BODY=$(jq -nc --rawfile manifest "$MANIFEST" '{manifest: $manifest}')
               for attempt in 1 2 3; do
                 RESPONSE=$(curl -fsS -X POST "https://slack.com/api/${METHOD}" \
-                  -H "Authorization: Bearer ${SLACK_CONFIG_TOKEN}" \
+                  -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
                   -H "Content-Type: application/json; charset=utf-8" \
                   -d "$BODY")
                 OK=$(echo "$RESPONSE" | jq -r '.ok')
@@ -340,12 +340,12 @@ jobs:
         if: steps.slack.outputs.created == 'true'
         env:
           APP_ID: ${{ steps.slack.outputs.app_id }}
-          SLACK_CONFIG_TOKEN: ${{ steps.slack_token.outputs.token }}
+          SLACK_CONFIG_ACCESS_TOKEN: ${{ steps.slack_token.outputs.token }}
         run: |
           BODY=$(jq -nc --rawfile manifest /tmp/slack-manifest.json --arg app_id "$APP_ID" '{app_id: $app_id, manifest: $manifest}')
           for attempt in 1 2 3; do
             RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.update \
-              -H "Authorization: Bearer ${SLACK_CONFIG_TOKEN}" \
+              -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
               -H "Content-Type: application/json; charset=utf-8" \
               -d "$BODY")
             OK=$(echo "$RESPONSE" | jq -r '.ok')
@@ -362,11 +362,11 @@ jobs:
       - name: Set Slack preview icon
         env:
           APP_ID: ${{ steps.slack.outputs.app_id }}
-          SLACK_CONFIG_TOKEN: ${{ steps.slack_token.outputs.token }}
+          SLACK_CONFIG_ACCESS_TOKEN: ${{ steps.slack_token.outputs.token }}
         run: |
           for attempt in 1 2 3; do
             RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.icon.set \
-              -H "Authorization: Bearer ${SLACK_CONFIG_TOKEN}" \
+              -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
               -H "Content-Type: application/x-www-form-urlencoded" \
               --data-urlencode "app_id=${APP_ID}" \
               --data-urlencode "url=https://${PREVIEW_HOST}/tipbot-preview.png")

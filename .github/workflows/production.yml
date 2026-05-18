@@ -77,10 +77,10 @@ jobs:
         with:
           github-token: ${{ secrets.SLACK_GH_TOKEN }}
           slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
-          slack-config-token: ${{ secrets.SLACK_CONFIG_TOKEN }}
+          slack-config-access-token: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
 
       - name: Update Slack production app
         env:
           SLACK_APP_ID: ${{ vars.SLACK_APP_ID }}
-          SLACK_CONFIG_TOKEN: ${{ steps.slack_token.outputs.token }}
+          SLACK_CONFIG_ACCESS_TOKEN: ${{ steps.slack_token.outputs.token }}
         run: pnpm slack:app update production tip.bot "$SLACK_APP_ID"
