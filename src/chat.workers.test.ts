@@ -1257,6 +1257,7 @@ test('@Tipbot mention explains memo length failures', async () => {
   })
 
   expect(response.status).toBe(200)
+  expect(handleTipRequest).not.toHaveBeenCalled()
   expect(aiRunMock).toHaveBeenCalledOnce()
   await expectSlackMessage('Try: `best pages internet`.')
   await expectSlackAssistantStatusCall(fetchSpy, messageTs, '')
