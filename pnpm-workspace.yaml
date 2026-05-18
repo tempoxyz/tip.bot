@@ -51,6 +51,7 @@ patchedDependencies:
   '@chat-adapter/slack@4.27.0': config/patches/@chat-adapter__slack@4.27.0.patch
   '@slack/web-api@7.15.2': config/patches/@slack__web-api@7.15.2.patch
   # TODO: Remove when TanStack Start server entry no longer eagerly resolves virtual router modules during Worker test startup.
+  # Related: https://github.com/cloudflare/workers-sdk/issues/11100
   '@tanstack/react-start@1.167.65': config/patches/@tanstack__react-start@1.167.65.patch
   accounts@0.10.6: config/patches/accounts@0.10.6.patch
   emulate@0.5.0: config/patches/emulate@0.5.0.patch
