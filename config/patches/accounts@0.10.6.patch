@@ -35,15 +35,6 @@ index 84801ff32d02a40ab61cf30826cc7260352edc8f..d208ca596f365c08301c48778398ad08
  import * as z from 'zod/mini';
  import * as Account from './Account.js';
  import type * as Adapter from './Adapter.js';
-@@ -100,7 +100,7 @@ export declare namespace create {
-          * @example
-          * ```ts
-          * import { http } from 'viem'
--         * import { tempo, tempoModerato } from 'viem/chains'
-+         * import { tempo, tempoModerato } from 'viem/tempo/chains'
-          *
-          * const provider = Provider.create({
-          *   transports: {
 diff --git a/dist/core/Provider.js b/dist/core/Provider.js
 index 0a20e1ceb7e093f78e161b65210d093526d802fe..7a0a0786d5dfd957fe476cd721d6352138e22fe5 100644
 --- a/dist/core/Provider.js
@@ -204,15 +195,6 @@ index d24fb2714d86c976b7a23d1de7b19bc541d70f0a..9afc02492a84565e1c735fc88c2e0050
  import { parseSiweMessage } from 'viem/siwe'
  import { Actions } from 'viem/tempo'
  import * as z from 'zod/mini'
-@@ -988,7 +988,7 @@ export declare namespace create {
-      * @example
-      * ```ts
-      * import { http } from 'viem'
--     * import { tempo, tempoModerato } from 'viem/chains'
-+     * import { tempo, tempoModerato } from 'viem/tempo/chains'
-      *
-      * const provider = Provider.create({
-      *   transports: {
 diff --git a/src/core/adapters/local.test.ts b/src/core/adapters/local.test.ts
 index 4feeb125184efd0466abc4939ad41ed373d3b330..9dc7b57c060ea9d8e032cc0e37e2a78cf1d33f2c 100644
 --- a/src/core/adapters/local.test.ts
