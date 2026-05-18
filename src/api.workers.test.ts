@@ -414,7 +414,6 @@ describe('/api/confirm/:token', () => {
       .selectFrom('access_key')
       .selectAll()
       .where('account_id', '=', confirmation.senderAccount.id)
-      .where('address', '=', confirmation.accessKey.address)
       .execute()
     const history = await slack.conversations.history({ channel: apiChannelId })
 
