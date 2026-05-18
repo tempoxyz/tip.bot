@@ -117,13 +117,16 @@ jobs:
         run: |
           started_at=$(date +%s)
           set +e
-          DEBUG=vite:load,vite:transform pnpm test --project workers --run > workers-test.log 2>&1
+          rm -rf node_modules/.vite
+          DEBUG=vite:transform,vite:load pnpm test --project workers --run > workers-test.log 2>&1
           status=$?
-          grep -vE 'vite:(load|transform)' workers-test.log || true
           node <<'NODE'
           const fs = require('node:fs')
           const log = fs.readFileSync('workers-test.log', 'utf8').replaceAll('\0', '')
           const lines = log.split('\n')
+          for (const line of lines) {
+            if (!/vite:(load|transform)/.test(line)) console.log(line)
+          }
           const timings = []
           for (const line of lines) {
             const match = line.match(/vite:(load|transform) ([0-9.]+)ms(?: \[([^\]]+)\])? (.*)$/)
