@@ -189,5 +189,8 @@ test('encodes transfer memos as bytes32', () => {
 })
 
 test('rejects transfer memos longer than bytes32', () => {
+  expect(Tip.isTransferMemoTooLong('x'.repeat(32))).toBe(false)
+  expect(Tip.isTransferMemoTooLong('x'.repeat(33))).toBe(true)
+  expect(Tip.isTransferMemoTooLong(':wine_glass:'.repeat(11))).toBe(true)
   expect(() => Tip.encodeTransferMemo('x'.repeat(33))).toThrow('Memo must be at most 32 bytes.')
 })

@@ -492,8 +492,12 @@ export function parseTipBatchText(value: string, options: { chainId?: number } =
 export function encodeTransferMemo(memo: string | null) {
   if (!memo) return Hex.padRight('0x', 32)
   const hex = Hex.fromString(replaceEmojiShortcodes(memo))
-  if (Hex.size(hex) > 32) throw new Error('Memo must be at most 32 bytes.')
+  if (isTransferMemoTooLong(memo)) throw new Error('Memo must be at most 32 bytes.')
   return Hex.padRight(hex, 32)
+}
+
+export function isTransferMemoTooLong(memo: string | null) {
+  return Boolean(memo && new TextEncoder().encode(replaceEmojiShortcodes(memo)).length > 32)
 }
 
 export async function verifySponsorshipMemo(
