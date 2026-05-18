@@ -11,11 +11,13 @@ import { Env } from './env.ts'
 import { getAvailablePort } from './utils.ts'
 
 export default async function (project: TestProject) {
+  console.log('workers: starting slack emulator')
   const slack = await createEmulator({
     port: await getAvailablePort(),
     seed: Constants.seed,
     service: 'slack',
   })
+  console.log('workers: started slack emulator')
 
   const rpcPort = await getAvailablePort()
   const tempo = Server.create({
@@ -28,7 +30,9 @@ export default async function (project: TestProject) {
   })
   const restorePullPolicy = useDefaultPullPolicy()
   try {
+    console.log('workers: starting tempo')
     await tempo.start()
+    console.log('workers: started tempo')
   } finally {
     restorePullPolicy()
   }
@@ -38,6 +42,7 @@ export default async function (project: TestProject) {
     SLACK_API_URL: `${slack.url}/api`,
   })
 
+  console.log('workers: minting fee payer')
   await Actions.token.mintSync(
     createClient({
       chain: Tempo.getChain(Tempo.chainLookup.localnet),
@@ -50,6 +55,7 @@ export default async function (project: TestProject) {
       token: Tempo.addressLookup.pathUsd,
     },
   )
+  console.log('workers: minted fee payer')
 
   process.env.FEE_PAYER_PRIVATE_KEY_MAINNET = env.FEE_PAYER_PRIVATE_KEY_MAINNET
   process.env.FEE_PAYER_PRIVATE_KEY_TESTNET = env.FEE_PAYER_PRIVATE_KEY_TESTNET
