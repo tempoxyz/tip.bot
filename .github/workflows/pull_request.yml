@@ -17,8 +17,6 @@ jobs:
 
   preview:
     name: Preview
-    # TEMP: disabled on the worker CI profiling PR so iterations do not deploy previews.
-    if: false
     needs: check
     permissions:
       contents: read
