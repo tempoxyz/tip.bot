@@ -95,6 +95,54 @@ describe('/api/chat/slack', () => {
 
     expect(response.status).toBe(401)
   })
+
+  test('slash command returns invite instructions when Tipbot is not in the channel', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.startsWith(env.SLACK_API_URL) && url.includes('/conversations.info'))
+        return Promise.resolve(Response.json({ error: 'not_in_channel', ok: false }))
+      return originalFetch(input, init)
+    })
+    await Chat.getChat().initialize()
+    await Chat.getSlack().setInstallation(Constants.slack.teamId, {
+      botToken: Constants.slack.botToken,
+      botUserId: Constants.slack.botUserId,
+      teamName: Constants.slack.teamName,
+    })
+    const body = new URLSearchParams({
+      channel_id: Constants.slack.channelId,
+      command: '/tip',
+      team_id: Constants.slack.teamId,
+      text: `<@${Constants.slack.memberUserId}> for coffee`,
+      trigger_id: 'trigger-missing-channel',
+      user_id: Constants.slack.adminUserId,
+    }).toString()
+
+    const response = await client.api.chat.slack.$post(
+      {},
+      {
+        headers: {
+          ...(await createSlackHeaders(body, env.SLACK_SIGNING_SECRET)),
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        init: { body },
+      },
+    )
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      response_type: 'ephemeral',
+      text: [
+        'Tipbot isn’t in this channel, so it can’t send tips here yet.',
+        '',
+        'Run `/invite @Tipbot`, then try this again:',
+        `\`/tip <@${Constants.slack.memberUserId}> for coffee\``,
+      ].join('\n'),
+    })
+    expect(executionCtx.waitUntil).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
 })
 
 describe('/api/chat/slack/install', () => {

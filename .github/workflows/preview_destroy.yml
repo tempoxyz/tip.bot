@@ -53,17 +53,17 @@ jobs:
         with:
           github-token: ${{ secrets.SLACK_GH_TOKEN }}
           slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
-          slack-config-token: ${{ secrets.SLACK_CONFIG_TOKEN }}
+          slack-config-access-token: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
 
       - name: Delete Slack preview app
         if: steps.state.outputs.slack_app_id != ''
         env:
           SLACK_APP_ID: ${{ steps.state.outputs.slack_app_id }}
-          SLACK_CONFIG_TOKEN: ${{ steps.slack_token.outputs.token }}
+          SLACK_CONFIG_ACCESS_TOKEN: ${{ steps.slack_token.outputs.token }}
         run: |
           BODY=$(jq -nc --arg app_id "$SLACK_APP_ID" '{app_id: $app_id}')
           RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.delete \
-            -H "Authorization: Bearer ${SLACK_CONFIG_TOKEN}" \
+            -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
             -H "Content-Type: application/json; charset=utf-8" \
             -d "$BODY")
           OK=$(echo "$RESPONSE" | jq -r '.ok')

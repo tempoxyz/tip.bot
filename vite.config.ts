@@ -167,16 +167,13 @@ export default defineConfig({
         plugins: lazyPlugins(async () => {
           const workers = await import('@cloudflare/vitest-pool-workers')
           const path = await import('node:path')
-          const { tanstackStart } = await import('@tanstack/react-start/plugin/vite')
           const { setupVitestOutputFilter } = await import('./config/vitest.ts')
           const envMod = await import('./test/env.ts')
           setupVitestOutputFilter()
           return [
-            tanstackStart(),
             workers.cloudflareTest(async (config) => {
               const env = envMod.Env.parse(config.inject('env'))
               return {
-                main: 'src/entry-server.ts',
                 remoteBindings: false,
                 wrangler: { configPath: 'wrangler.jsonc' },
                 miniflare: {
@@ -203,7 +200,7 @@ export default defineConfig({
           ]
         }),
         test: {
-          fileParallelism: true,
+          fileParallelism: false,
           include: ['src/**/*.workers.test.ts'],
           name: 'workers',
           globalSetup: ['test/workers.global.setup.ts'],
