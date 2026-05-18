@@ -20,6 +20,7 @@ packageExtensionsChecksum: sha256-+qeowdyxhNxOoPcupUZ6hUvH9lsA69jGqvTwkjD2d+c=
 patchedDependencies:
   '@chat-adapter/slack@4.27.0': f129c43965d79b15a626b2f5e493aee5ae9b5638ff12257bd4cf6cecb048d1dd
   '@slack/web-api@7.15.2': 97b9149f438abff67b083a9f281917a3b7e1d3133ca6b8be85c6e6ba78b591ae
+  '@tanstack/react-start@1.167.65': c2ace716aae8d228b9e34c7f0029a2c2471417d45b6c7823b22943889cfba6a2
   accounts@0.10.6: 9c79d7ca2432a36bc63af3dc4529cc6cacf9a058a19deac222d41ad69007310b
   emulate@0.5.0: 67fe2db5f9c966e113c6d1948ef757e1091bbb5f9169d766f13ee5d421d1c1c5
   mppx@0.6.19: 0fa53098603d42de00c283a80dac02d853d5a2775bea90368f0f29a99acf77c0
@@ -49,7 +50,7 @@ importers:
         version: 1.169.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@tanstack/react-start':
         specifier: 1.167.65
-        version: 1.167.65(@voidzero-dev/vite-plus-core@0.1.20)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+        version: 1.167.65(patch_hash=c2ace716aae8d228b9e34c7f0029a2c2471417d45b6c7823b22943889cfba6a2)(@voidzero-dev/vite-plus-core@0.1.20)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@tanstack/router-plugin':
         specifier: 1.167.35
         version: 1.167.35(@tanstack/react-router@1.169.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(@voidzero-dev/vite-plus-core@0.1.20)
@@ -5194,7 +5195,7 @@ snapshots:
     transitivePeerDependencies:
       - crossws
 
-  '@tanstack/react-start@1.167.65(@voidzero-dev/vite-plus-core@0.1.20)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
+  '@tanstack/react-start@1.167.65(patch_hash=c2ace716aae8d228b9e34c7f0029a2c2471417d45b6c7823b22943889cfba6a2)(@voidzero-dev/vite-plus-core@0.1.20)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:
       '@tanstack/react-router': 1.169.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@tanstack/react-start-client': 1.166.48(react-dom@19.2.5(react@19.2.5))(react@19.2.5)

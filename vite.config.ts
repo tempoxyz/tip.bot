@@ -174,7 +174,6 @@ export default defineConfig({
             workers.cloudflareTest(async (config) => {
               const env = envMod.Env.parse(config.inject('env'))
               return {
-                main: 'test/workers.entry.ts',
                 remoteBindings: false,
                 wrangler: { configPath: 'wrangler.jsonc' },
                 miniflare: {
