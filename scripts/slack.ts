@@ -179,11 +179,11 @@ async function slackApi(method: string, body: Record<string, unknown>) {
   console.error(JSON.stringify(result, null, 2))
   if (result.error === 'token_expired')
     console.error(
-      '\nSLACK_CONFIG_TOKEN expired. Generate a new app configuration token at https://api.slack.com/apps, then rerun with `export SLACK_CONFIG_TOKEN=xoxe...`.',
+      '\nSLACK_CONFIG_ACCESS_TOKEN expired. Generate a new app configuration token at https://api.slack.com/apps, then rerun with `export SLACK_CONFIG_ACCESS_TOKEN=xoxe...`.',
     )
   if (result.error === 'no_permission')
     console.error(
-      '\nSLACK_CONFIG_TOKEN does not have permission to update this app. Generate a new app configuration token at https://api.slack.com/apps while signed into the workspace/account that owns the app, and confirm SLACK_APP_ID points to that app.',
+      '\nSLACK_CONFIG_ACCESS_TOKEN does not have permission to update this app. Generate a new app configuration token at https://api.slack.com/apps while signed into the workspace/account that owns the app, and confirm SLACK_APP_ID points to that app.',
     )
   process.exit(1)
 }
@@ -197,10 +197,12 @@ function requiredEnv(name: string) {
 }
 
 function requiredConfigToken() {
-  const token = requiredEnv('SLACK_CONFIG_TOKEN').trim()
+  const token = requiredEnv('SLACK_CONFIG_ACCESS_TOKEN').trim()
   if (token.startsWith('xoxe.')) return token
 
-  console.error('SLACK_CONFIG_TOKEN must be a Slack app configuration token starting with xoxe.')
+  console.error(
+    'SLACK_CONFIG_ACCESS_TOKEN must be a Slack app configuration token starting with xoxe.',
+  )
   process.exit(1)
 }
 
@@ -220,7 +222,7 @@ Usage:
   pnpm slack:app update <local|preview|production> <host> <appId>
 
 Environment:
-  SLACK_CONFIG_TOKEN     Slack app configuration token from https://api.slack.com/apps
+  SLACK_CONFIG_ACCESS_TOKEN Slack app configuration token from https://api.slack.com/apps
   SLACK_APP_NAME         Optional manifest app name override
   SLACK_BOT_DISPLAY_NAME Optional bot mention display name override
   SLACK_COMMAND          Optional slash command override
