@@ -16,7 +16,7 @@ jobs:
   verify:
     name: Verify
     # TEMP: disabled on the worker CI profiling PR so worker timings are isolated.
-    if: ${{ false }}
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -62,7 +62,7 @@ jobs:
   test-unit:
     name: Test Unit
     # TEMP: disabled on the worker CI profiling PR so worker timings are isolated.
-    if: ${{ false }}
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -123,7 +123,7 @@ jobs:
   e2e:
     name: E2E
     # TEMP: disabled on the worker CI profiling PR so worker timings are isolated.
-    if: ${{ false }}
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
