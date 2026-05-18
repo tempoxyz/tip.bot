@@ -164,14 +164,6 @@ export default defineConfig({
           __PLAYWRIGHT_ACCOUNT_PRIVATE_KEY__: 'undefined',
           __SLACK_APP_ID__: JSON.stringify(''),
         },
-        resolve: {
-          alias: [
-            {
-              find: /^viem\/chains$/,
-              replacement: new URL('./test/viem-chains.ts', import.meta.url).pathname,
-            },
-          ],
-        },
         plugins: lazyPlugins(async () => {
           const workers = await import('@cloudflare/vitest-pool-workers')
           const path = await import('node:path')
