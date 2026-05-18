@@ -8,8 +8,8 @@ inputs:
   slack-config-refresh-token:
     description: Slack app config refresh token
     required: false
-  slack-config-token:
-    description: Slack app config token
+  slack-config-access-token:
+    description: Slack app config access token
     required: false
 
 outputs:
@@ -26,22 +26,25 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         SLACK_CONFIG_REFRESH_TOKEN: ${{ inputs.slack-config-refresh-token }}
-        SLACK_CONFIG_TOKEN: ${{ inputs.slack-config-token }}
+        SLACK_CONFIG_ACCESS_TOKEN: ${{ inputs.slack-config-access-token }}
       run: |
-        if [ -n "$SLACK_CONFIG_TOKEN" ]; then
-          echo "::add-mask::$SLACK_CONFIG_TOKEN"
-          echo "token=$SLACK_CONFIG_TOKEN" >> "$GITHUB_OUTPUT"
+        if [ -n "$SLACK_CONFIG_ACCESS_TOKEN" ]; then
+          echo "::add-mask::$SLACK_CONFIG_ACCESS_TOKEN"
+          echo "token=$SLACK_CONFIG_ACCESS_TOKEN" >> "$GITHUB_OUTPUT"
           exit 0
         fi
         if [ -z "$SLACK_CONFIG_REFRESH_TOKEN" ]; then
-          echo "Missing slack-config-refresh-token or slack-config-token."
+          echo "Missing slack-config-refresh-token or slack-config-access-token."
           exit 1
         fi
         if [ -z "$GH_TOKEN" ]; then
-          echo "Missing github-token. Rotating SLACK_CONFIG_REFRESH_TOKEN requires a repo token with secrets write permission."
+          echo "Missing github-token. Rotating SLACK_CONFIG_REFRESH_TOKEN requires a GitHub token with repository secrets read/write permission."
           exit 1
         fi
-        gh api "repos/${{ github.repository }}/actions/secrets/public-key" > /dev/null
+        gh api "repos/${{ github.repository }}/actions/secrets/public-key" > /dev/null || {
+          echo "github-token cannot read repository Actions secrets. For a fine-grained PAT, grant Repository permissions > Secrets: Read and write. For a classic PAT, grant repo scope."
+          exit 1
+        }
         RESPONSE=$(curl -fsS -X POST https://slack.com/api/tooling.tokens.rotate \
           -H "Content-Type: application/x-www-form-urlencoded" \
           --data-urlencode "refresh_token=${SLACK_CONFIG_REFRESH_TOKEN}")

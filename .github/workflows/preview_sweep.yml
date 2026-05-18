@@ -34,14 +34,14 @@ jobs:
         with:
           github-token: ${{ secrets.SLACK_GH_TOKEN }}
           slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
-          slack-config-token: ${{ secrets.SLACK_CONFIG_TOKEN }}
+          slack-config-access-token: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
 
       - name: Sweep orphaned previews
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           GH_TOKEN: ${{ github.token }}
-          SLACK_CONFIG_TOKEN: ${{ steps.slack_token.outputs.token }}
+          SLACK_CONFIG_ACCESS_TOKEN: ${{ steps.slack_token.outputs.token }}
         run: |
           WORKERS=$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts" \
@@ -63,7 +63,7 @@ jobs:
 
             if [ -n "$SLACK_APP_ID" ]; then
               RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.delete \
-                -H "Authorization: Bearer ${SLACK_CONFIG_TOKEN}" \
+                -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
                 -H "Content-Type: application/json; charset=utf-8" \
                 -d "{\"app_id\":\"${SLACK_APP_ID}\"}" || true)
               OK=$(echo "$RESPONSE" | jq -r '.ok // false')
