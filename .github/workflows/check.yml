@@ -91,15 +91,16 @@ jobs:
           path: /tmp/tempo-image.tar
           key: ${{ runner.os }}-tempo-image-${{ env.VITE_TEMPO_IMAGE }}
 
-      - name: Load cached Tempo image
-        if: steps.docker-cache.outputs.cache-hit == 'true'
-        run: docker load -i /tmp/tempo-image.tar
-
-      - name: Pull and cache Tempo image
-        if: steps.docker-cache.outputs.cache-hit != 'true'
+      - name: Load or pull Tempo image
         run: |
           image="ghcr.io/tempoxyz/tempo:${VITE_TEMPO_IMAGE}"
           if [[ "${VITE_TEMPO_IMAGE}" == sha256:* ]]; then image="ghcr.io/tempoxyz/tempo@${VITE_TEMPO_IMAGE}"; fi
+
+          if [[ "${{ steps.docker-cache.outputs.cache-hit }}" == "true" ]]; then
+            docker load -i /tmp/tempo-image.tar
+            exit 0
+          fi
+
           docker pull "${image}"
           docker save "${image}" -o /tmp/tempo-image.tar
 

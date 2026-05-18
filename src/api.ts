@@ -685,6 +685,58 @@ export const api = new Hono<{
     }
 
     if (params?.has('command') && !params.has('payload')) {
+      const botMissingFromChannel = await (async () => {
+        // Slash-command HTTP responses can render even when bot API posting cannot.
+        // Detect that case before handing off to async chat handling.
+        const channelId = params.get('channel_id')
+        const teamId = params.get('team_id')
+        if (!channelId || !teamId) return false
+        if (channelId.startsWith('D')) return false
+
+        await Chat.getChat().initialize()
+        const installation = await Chat.getSlack().getInstallation(teamId)
+        if (!installation) return false
+
+        const infoBody = new URLSearchParams()
+        infoBody.set('channel', channelId)
+        const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
+          fetch(`${c.env.SLACK_API_URL}/conversations.info`, {
+            body: infoBody,
+            headers: { authorization: `Bearer ${installation.botToken}` },
+            method: 'POST',
+          }),
+        )
+        const json = z.parse(
+          z.object({
+            channel: z.object({ is_member: z.boolean().optional() }).optional(),
+            error: z.string().optional(),
+            ok: z.boolean().optional(),
+          }),
+          await response.json(),
+        )
+        if (json.ok) return json.channel?.is_member === false
+        return ['channel_not_found', 'no_permission', 'not_in_channel'].includes(json.error ?? '')
+      })()
+      if (botMissingFromChannel)
+        return c.json({
+          response_type: 'ephemeral' as const,
+          text: (() => {
+            // Echo the attempted command so the member can retry after inviting Tipbot.
+            const commandText = [
+              params.get('command') || getSlackCommand(c.env.HOST),
+              params.get('text'),
+            ]
+              .filter(Boolean)
+              .join(' ')
+            return [
+              'Tipbot isn’t in this channel, so it can’t send tips here yet.',
+              '',
+              `Run \`/invite @${getSlackBotDisplayName(c.env.HOST)}\`, then try this again:`,
+              `\`${commandText}\``,
+            ].join('\n')
+          })(),
+        })
+
       const tasks: Promise<unknown>[] = []
       const task = (async () => {
         await Chat.getChat().webhooks.slack(
