@@ -96,6 +96,64 @@ describe('/api/chat/slack', () => {
     expect(response.status).toBe(401)
   })
 
+  test('publishes workspace missing Home tab on app_home_opened', async () => {
+    const providerId = `T${Nanoid.generate()}`
+    await Chat.getChat().initialize()
+    await Chat.getSlack().setInstallation(providerId, {
+      botToken: Constants.slack.botToken,
+      botUserId: Constants.slack.botUserId,
+      teamName: Constants.slack.teamName,
+    })
+    const fetchSpy = setupSlackViewsPublishFetchSpy()
+
+    const response = await postSlackAppHomeOpened({
+      providerId,
+      providerUserId: Constants.slack.adminUserId,
+    })
+    await Promise.all(waitUntil)
+    const publish = await expectSlackViewsPublishCall(fetchSpy)
+    const viewText = JSON.stringify(publish.view)
+
+    expect(response.status).toBe(200)
+    expect(publish.user_id).toBe(Constants.slack.adminUserId)
+    expect(publish.view).toMatchObject({ type: 'home' })
+    expect(viewText).toContain("Tipbot isn't installed in this workspace yet")
+    fetchSpy.mockRestore()
+  })
+
+  test('publishes not-connected Home tab on app_home_opened', async () => {
+    const providerId = `T${Nanoid.generate()}`
+    await Chat.getChat().initialize()
+    await Chat.getSlack().setInstallation(providerId, {
+      botToken: Constants.slack.botToken,
+      botUserId: Constants.slack.botUserId,
+      teamName: Constants.slack.teamName,
+    })
+    await factory.workspace.insert({
+      default_amount: 5_000_000,
+      provider_id: providerId,
+      reaction_tip_emoji: 'tip',
+    })
+    const fetchSpy = setupSlackViewsPublishFetchSpy()
+
+    const response = await postSlackAppHomeOpened({
+      providerId,
+      providerUserId: Constants.slack.memberUserId,
+    })
+    await Promise.all(waitUntil)
+    const publish = await expectSlackViewsPublishCall(fetchSpy)
+    const viewText = JSON.stringify(publish.view)
+
+    expect(response.status).toBe(200)
+    expect(publish.user_id).toBe(Constants.slack.memberUserId)
+    expect(publish.view).toMatchObject({ type: 'home' })
+    expect(viewText).toContain("You haven't connected an account yet")
+    expect(viewText).toContain('`/tip connect`')
+    expect(viewText).toContain('*Default amount* 5')
+    expect(viewText).toContain('*Tip reaction* :tip:')
+    fetchSpy.mockRestore()
+  })
+
   test('slash command returns invite instructions when Tipbot is not in the channel', async () => {
     const originalFetch = globalThis.fetch
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
@@ -1025,6 +1083,57 @@ async function deleteSlackOauthWorkspace() {
   await db.deleteFrom('workspace').where('provider_id', '=', Constants.slack.teamId).execute()
 }
 
+async function postSlackAppHomeOpened(input: { providerId: string; providerUserId: string }) {
+  const body = JSON.stringify({
+    event: {
+      tab: 'home',
+      type: 'app_home_opened',
+      user: input.providerUserId,
+    },
+    event_id: `Ev${Nanoid.generate()}`,
+    team_id: input.providerId,
+    type: 'event_callback',
+  })
+  return await client.api.chat.slack.$post(
+    {},
+    {
+      headers: {
+        ...(await createSlackHeaders(body, env.SLACK_SIGNING_SECRET)),
+        'content-type': 'application/json',
+      },
+      init: { body },
+    },
+  )
+}
+
+function setupSlackViewsPublishFetchSpy() {
+  const originalFetch = globalThis.fetch
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  fetchSpy.mockImplementation((input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    if (url.endsWith('/views.publish')) return Promise.resolve(Response.json({ ok: true }))
+    return originalFetch(input, init)
+  })
+  return fetchSpy
+}
+
+async function expectSlackViewsPublishCall(fetchSpy: {
+  mock: { calls: Parameters<typeof fetch>[] }
+}) {
+  const call = fetchSpy.mock.calls.find((call) => {
+    const input = call[0]
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    return url.endsWith('/views.publish')
+  })
+  if (!call) throw new Error('Expected Slack views.publish call.')
+  const json = await slackFetchBodyJson(call)
+  if (typeof json.user_id !== 'string') throw new Error('Expected Slack views.publish user_id.')
+  return {
+    user_id: json.user_id,
+    view: typeof json.view === 'string' ? JSON.parse(json.view) : json.view,
+  } as { user_id: string; view: Record<string, unknown> }
+}
+
 async function expectSlackMessage(channelId: string, text: string) {
   const history = await slack.conversations.history({ channel: channelId })
 
@@ -1062,6 +1171,22 @@ function slackFetchBodyParams(body: BodyInit | null | undefined) {
   if (body instanceof URLSearchParams) return body
   if (typeof body === 'string') return new URLSearchParams(body)
   return new URLSearchParams()
+}
+
+async function slackFetchBodyJson(
+  call: Parameters<typeof fetch>,
+): Promise<Record<string, unknown>> {
+  const input = call[0]
+  const init = call[1]
+  if (input instanceof Request) return slackFetchBodyStringJson(await input.clone().text())
+  return slackFetchBodyStringJson(init?.body)
+}
+
+function slackFetchBodyStringJson(body: BodyInit | null | undefined): Record<string, unknown> {
+  if (body instanceof URLSearchParams) return Object.fromEntries(body.entries())
+  if (typeof body !== 'string') return {}
+  if (body.trim().startsWith('{')) return JSON.parse(body) as Record<string, unknown>
+  return Object.fromEntries(new URLSearchParams(body).entries())
 }
 
 async function signKeyAuthorization(

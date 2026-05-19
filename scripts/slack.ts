@@ -23,6 +23,9 @@ const scopeReasons = {
   'reactions:read': 'Detect configured tip reaction emoji and identify the message being tipped.',
   'users:read': 'Resolve Slack users for mentions, admin checks, and connected account status.',
 } as const
+const eventReasons = {
+  app_home_opened: 'Refresh each member Home tab when they open Tipbot in Slack.',
+} as const
 
 if (!command || !['create', 'export', 'manifest', 'update', 'validate'].includes(command)) usage()
 if (!appEnv || !['local', 'preview', 'production'].includes(appEnv))
@@ -61,7 +64,7 @@ function createManifest() {
     process.env.SLACK_EVENT_SUBSCRIPTIONS === '0'
       ? undefined
       : {
-          bot_events: ['app_mention', 'reaction_added', 'reaction_removed'],
+          bot_events: ['app_home_opened', 'app_mention', 'reaction_added', 'reaction_removed'],
           request_url: `${baseUrl}/api/chat/slack`,
         }
 
@@ -72,6 +75,11 @@ function createManifest() {
       name: appName,
     },
     features: {
+      app_home: {
+        home_tab_enabled: true,
+        messages_tab_enabled: false,
+        messages_tab_read_only_enabled: false,
+      },
       bot_user: {
         always_online: true,
         display_name: botDisplayName,
@@ -160,6 +168,8 @@ function printScopeReasons() {
     '\nSlack OAuth scope reasons to add manually in OAuth & Permissions > Manage Reasons:',
   )
   for (const [scope, reason] of Object.entries(scopeReasons)) console.log(`- ${scope}: ${reason}`)
+  console.log('\nSlack event subscription reasons:')
+  for (const [event, reason] of Object.entries(eventReasons)) console.log(`- ${event}: ${reason}`)
 }
 
 async function slackApi(method: string, body: Record<string, unknown>) {

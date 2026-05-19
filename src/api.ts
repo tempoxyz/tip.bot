@@ -684,6 +684,59 @@ export const api = new Hono<{
       if (!inserted) return params ? new Response('', { status: 200 }) : c.json({ ok: true })
     }
 
+    // Republish the Home tab when a user opens it. We intercept here because the
+    // chat-adapter/slack AppHomeOpenedEvent does not expose team_id, so we can't
+    // reliably resolve the workspace from inside bot.onAppHomeOpened.
+    if (!params) {
+      const payload = (() => {
+        try {
+          return JSON.parse(body)
+        } catch {
+          return null
+        }
+      })()
+      const homeOpened = (() => {
+        const parsed = z.safeParse(
+          z.object({
+            event: z
+              .object({
+                channel: z.string().min(1).optional(),
+                tab: z.string().optional(),
+                type: z.string().min(1),
+                user: z.string().min(1),
+              })
+              .optional(),
+            team_id: z.string().min(1).optional(),
+            type: z.string().min(1).optional(),
+          }),
+          payload,
+        )
+        if (!parsed.success) return null
+        if (parsed.data.type !== 'event_callback') return null
+        if (parsed.data.event?.type !== 'app_home_opened') return null
+        if (parsed.data.event.tab && parsed.data.event.tab !== 'home') return null
+        if (!parsed.data.team_id) return null
+        return { slackUserId: parsed.data.event.user, teamId: parsed.data.team_id }
+      })()
+      if (homeOpened) {
+        c.executionCtx.waitUntil(
+          Slack.publishHome({
+            env: c.env,
+            getInstallation: (teamId) => Chat.getSlack().getInstallation(teamId),
+            initializeChat: () => Chat.getChat().initialize(),
+            publishHomeView: (slackUserId, view) =>
+              Chat.getSlack().publishHomeView(slackUserId, view),
+            slackUserId: homeOpened.slackUserId,
+            teamId: homeOpened.teamId,
+            withBotToken: (botToken, fn) => Chat.getSlack().withBotToken(botToken, fn),
+          }).catch((error) => {
+            console.error('publishHome failed', error)
+          }),
+        )
+        return new Response('', { status: 200 })
+      }
+    }
+
     if (params?.has('command') && !params.has('payload')) {
       const botMissingFromChannel = await (async () => {
         // Slash-command HTTP responses can render even when bot API posting cannot.
