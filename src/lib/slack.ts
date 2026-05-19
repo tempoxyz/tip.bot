@@ -1,6 +1,7 @@
 import { sql } from 'kysely'
 import { Address, Hex } from 'ox'
 import { createClient, http } from 'viem'
+import { multicall } from 'viem/actions'
 import { Actions } from 'viem/tempo'
 import { formatAmount, formatCurrencyAmount } from '#/lib/format.ts'
 import * as Tempo from '#/lib/tempo.ts'
@@ -300,19 +301,28 @@ async function buildHomeView(input: {
           timeout: 1_500, // 1.5 seconds
         }),
       })
-      return await Promise.all(
-        tokens.map(async (token) => {
-          try {
-            const balance = await Actions.token.getBalance(client, {
+      try {
+        const results = await multicall(client, {
+          allowFailure: true,
+          contracts: tokens.map((token) =>
+            Actions.token.getBalance.call({
               account: member.account_address as Address.Address,
               token: token.address as Address.Address,
-            })
-            return { address: token.address, balance, label: token.label }
-          } catch {
-            return { address: token.address, balance: 0n, label: token.label }
+            }),
+          ),
+          deployless: true,
+        })
+        return tokens.map((token, index) => {
+          const result = results[index]
+          return {
+            address: token.address,
+            balance: result?.status === 'success' ? result.result : 0n,
+            label: token.label,
           }
-        }),
-      )
+        })
+      } catch {
+        return tokens.map((token) => ({ address: token.address, balance: 0n, label: token.label }))
+      }
     })(),
     db
       .selectFrom('tip')
