@@ -533,40 +533,49 @@ describe('/api/confirm/:token', () => {
   }, 20_000) // 20 seconds
 
   test('posts confirmed mention payment receipts in the source thread and clears status', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch')
-    const parent = await slack.chat.postMessage({
-      channel: apiChannelId,
-      text: 'thread confirmation parent',
-    })
-    if (!parent.ts) throw new Error('Expected Slack parent message timestamp.')
-    const confirmation = await createConfirmationToken({
-      amount: 1,
-      memo: `thread-${Nanoid.generate()}`,
-      providerThreadId: parent.ts,
-    })
-    await Chat.getChat().initialize()
-    await Chat.getSlack().setInstallation(confirmation.payload.providerId, {
-      botToken: Constants.slack.botToken,
-      botUserId: Constants.slack.botUserId,
-      teamName: Constants.slack.teamName,
-    })
-    const signedTransaction = await signConfirmationTransaction(confirmation)
+    const originalFetch = globalThis.fetch
+    const fetchCalls: Parameters<typeof fetch>[] = []
+    globalThis.fetch = ((input, init) => {
+      fetchCalls.push([input, init])
+      return originalFetch(input, init)
+    }) as typeof fetch
+    const fetchSpy = { mock: { calls: fetchCalls } }
+    try {
+      const parent = await slack.chat.postMessage({
+        channel: apiChannelId,
+        text: 'thread confirmation parent',
+      })
+      if (!parent.ts) throw new Error('Expected Slack parent message timestamp.')
+      const confirmation = await createConfirmationToken({
+        amount: 1,
+        memo: `thread-${Nanoid.generate()}`,
+        providerThreadId: parent.ts,
+      })
+      await Chat.getChat().initialize()
+      await Chat.getSlack().setInstallation(confirmation.payload.providerId, {
+        botToken: Constants.slack.botToken,
+        botUserId: Constants.slack.botUserId,
+        teamName: Constants.slack.teamName,
+      })
+      const signedTransaction = await signConfirmationTransaction(confirmation)
 
-    const response = await client.api.confirm[':token'].$post({
-      json: { address: confirmation.senderRoot.address, signedTransaction },
-      param: { token: confirmation.token },
-    })
-    await Promise.all(waitUntil)
-    const replies = await slack.conversations.replies({ channel: apiChannelId, ts: parent.ts })
+      const response = await client.api.confirm[':token'].$post({
+        json: { address: confirmation.senderRoot.address, signedTransaction },
+        param: { token: confirmation.token },
+      })
+      await Promise.all(waitUntil)
+      const replies = await slack.conversations.replies({ channel: apiChannelId, ts: parent.ts })
 
-    expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toMatchObject({ ok: true })
-    expect(
-      replies.messages?.some((message) => message.text?.includes(confirmation.payload.memo!)),
-      JSON.stringify(replies.messages),
-    ).toBe(true)
-    await expectSlackAssistantStatusCall(fetchSpy, apiChannelId, parent.ts, '')
-    fetchSpy.mockRestore()
+      expect(response.status).toBe(200)
+      await expect(response.json()).resolves.toMatchObject({ ok: true })
+      expect(
+        replies.messages?.some((message) => message.text?.includes(confirmation.payload.memo!)),
+        JSON.stringify(replies.messages),
+      ).toBe(true)
+      await expectSlackAssistantStatusCall(fetchSpy, apiChannelId, parent.ts, '')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   }, 20_000) // 20 seconds
 
   test('updates reaction tip aggregate after confirmed payment', async () => {
