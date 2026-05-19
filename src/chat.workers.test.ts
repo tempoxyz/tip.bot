@@ -2450,6 +2450,7 @@ describe('/tip leaderboard', () => {
     const now = new Date().toISOString()
     const tips = [
       {
+        amount: 1000,
         confirmed_at: now,
         recipient_id: memberAccount.id,
         recipient_member_id: memberMember.id,
@@ -2458,6 +2459,7 @@ describe('/tip leaderboard', () => {
         workspace_id: workspace.id,
       },
       {
+        amount: 1000,
         confirmed_at: now,
         recipient_id: memberAccount.id,
         recipient_member_id: memberMember.id,
@@ -2466,6 +2468,7 @@ describe('/tip leaderboard', () => {
         workspace_id: workspace.id,
       },
       {
+        amount: 1000,
         confirmed_at: now,
         recipient_id: memberAccount.id,
         recipient_member_id: memberMember.id,
@@ -2474,6 +2477,7 @@ describe('/tip leaderboard', () => {
         workspace_id: workspace.id,
       },
       {
+        amount: 5000,
         confirmed_at: now,
         recipient_id: adminAccount.id,
         recipient_member_id: adminMember.id,
@@ -2482,6 +2486,7 @@ describe('/tip leaderboard', () => {
         workspace_id: workspace.id,
       },
       {
+        amount: 9000,
         confirmed_at: null,
         recipient_id: thirdAccount.id,
         recipient_member_id: thirdMember.id,
@@ -2490,6 +2495,7 @@ describe('/tip leaderboard', () => {
         workspace_id: workspace.id,
       },
       {
+        amount: 1000000,
         confirmed_at: now,
         recipient_id: thirdAccount.id,
         recipient_member_id: otherMember.id,
@@ -2505,12 +2511,12 @@ describe('/tip leaderboard', () => {
     expect(response.status).toBe(200)
     await expectSlackPublicMessage('Tips received')
     await expectSlackMessage('Tips received')
-    await expectSlackMessage(`1 <@${Constants.slack.memberUserId}> 3`)
-    await expectSlackMessage(`2 <@${Constants.slack.adminUserId}> 1`)
+    await expectSlackMessage(`1 <@${Constants.slack.adminUserId}> $0.005 1`)
+    await expectSlackMessage(`2 <@${Constants.slack.memberUserId}> $0.003 3`)
     await expectSlackMessage('Tips sent')
-    await expectSlackMessage(`1 <@${Constants.slack.adminUserId}> 2`)
-    await expectSlackMessage(`2 <@${Constants.slack.memberUserId}> 1`)
-    await expectSlackMessage('3 <@U000000003> 1')
+    await expectSlackMessage(`1 <@${Constants.slack.memberUserId}> $0.005 1`)
+    await expectSlackMessage(`2 <@${Constants.slack.adminUserId}> $0.002 2`)
+    await expectSlackMessage('3 <@U000000003> $0.001 1')
     await expectSlackMessageNotContaining('U000000004')
   })
 

@@ -635,17 +635,27 @@ const handlers = {
       [
         'Tips received',
         [
-          'Rank Account Tips',
+          'Rank Account Amount Tips',
           ...received.map((row, index) =>
-            [String(index + 1), `<@${row.providerUserId}>`, String(row.tipCount)].join(' '),
+            [
+              String(index + 1),
+              `<@${row.providerUserId}>`,
+              formatCurrencyAmount(formatAmount(row.amount), 'USD'),
+              String(row.tipCount),
+            ].join(' '),
           ),
         ].join('\n'),
         '',
         'Tips sent',
         [
-          'Rank Account Tips',
+          'Rank Account Amount Tips',
           ...sent.map((row, index) =>
-            [String(index + 1), `<@${row.providerUserId}>`, String(row.tipCount)].join(' '),
+            [
+              String(index + 1),
+              `<@${row.providerUserId}>`,
+              formatCurrencyAmount(formatAmount(row.amount), 'USD'),
+              String(row.tipCount),
+            ].join(' '),
           ),
         ].join('\n'),
       ].join('\n'),
@@ -659,10 +669,16 @@ const handlers = {
         },
         {
           rows: [
-            [slackTableCell('Rank'), slackTableCell('Account'), slackTableCell('Tips')],
+            [
+              slackTableCell('Rank'),
+              slackTableCell('Account'),
+              slackTableCell('Amount'),
+              slackTableCell('Tips'),
+            ],
             ...received.map((row, index) => [
               slackTableCell(String(index + 1)),
               slackTableUserCell(row.providerUserId),
+              slackTableCell(formatCurrencyAmount(formatAmount(row.amount), 'USD')),
               slackTableCell(String(row.tipCount)),
             ]),
           ],
@@ -674,10 +690,16 @@ const handlers = {
         },
         {
           rows: [
-            [slackTableCell('Rank'), slackTableCell('Account'), slackTableCell('Tips')],
+            [
+              slackTableCell('Rank'),
+              slackTableCell('Account'),
+              slackTableCell('Amount'),
+              slackTableCell('Tips'),
+            ],
             ...sent.map((row, index) => [
               slackTableCell(String(index + 1)),
               slackTableUserCell(row.providerUserId),
+              slackTableCell(formatCurrencyAmount(formatAmount(row.amount), 'USD')),
               slackTableCell(String(row.tipCount)),
             ]),
           ],
@@ -901,6 +923,7 @@ type ReactionHandlerContext = {
 }
 
 type LeaderboardRow = {
+  amount: number
   providerUserId: string
   tipCount: number
 }
@@ -1982,10 +2005,15 @@ async function getLeaderboardRows(
   const rows = await ctx.db
     .selectFrom('tip')
     .innerJoin('member', 'member.id', options.memberIdColumn)
-    .select(['member.provider_user_id', sql<number>`count("tip"."id")`.as('tip_count')])
+    .select([
+      'member.provider_user_id',
+      sql<number>`coalesce(sum("tip"."amount"), 0)`.as('amount'),
+      sql<number>`count("tip"."id")`.as('tip_count'),
+    ])
     .where('tip.workspace_id', '=', options.workspaceId)
     .where('tip.confirmed_at', 'is not', null)
     .groupBy(['member.id', 'member.provider_user_id'])
+    .orderBy('amount', 'desc')
     .orderBy('tip_count', 'desc')
     .orderBy('member.provider_user_id', 'asc')
     .limit(10)
@@ -1994,6 +2022,7 @@ async function getLeaderboardRows(
   return rows.map(
     (row) =>
       ({
+        amount: Number(row.amount),
         providerUserId: row.provider_user_id,
         tipCount: Number(row.tip_count),
       }) satisfies LeaderboardRow,
