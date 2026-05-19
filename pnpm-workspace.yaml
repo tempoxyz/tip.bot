@@ -4,7 +4,7 @@ allowBuilds:
   esbuild@0.27.3: true
   lightningcss@1.32.0: true
   msw: true
-  protobufjs@7.5.7: true
+  protobufjs@7.5.8: true
   sharp@0.34.5: true
   ssh2@1.17.0: true
   workerd@1.20260426.1: true
@@ -32,6 +32,7 @@ minimumReleaseAgeExclude:
   - viem
 minimumReleaseAgeStrict: true
 overrides:
+  protobufjs: 7.5.8
   tar: 7.5.11
   vite: 'catalog:'
   vitest: 'catalog:'
