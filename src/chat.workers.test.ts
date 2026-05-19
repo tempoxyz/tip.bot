@@ -2386,6 +2386,9 @@ describe('/tip help', () => {
     await expectSlackMessage('/tip @account 0.005 for coffee')
     await expectSlackMessage('/tip @account 0.005 USDC')
     await expectSlackMessage('/tip @account 0.005 USDC for coffee')
+    await expectSlackMessage(
+      'Slack does not support app slash commands in threads. Use `@Tipbot @account for coffee` instead.',
+    )
     await expectSlackMessage('@Tipbot @account')
     await expectSlackMessage('@Tipbot @account for coffee')
     await expectSlackMessage('@Tipbot @account 0.005 for coffee')

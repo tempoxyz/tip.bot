@@ -547,6 +547,8 @@ const handlers = {
         '',
         paymentExampleRows.map((row) => `${row[0]} ${row[1]}`).join('\n'),
         '',
+        `Thread tip: Slack does not support app slash commands in threads. Use @${getSlackBotDisplayName(env.HOST)} instead.`,
+        '',
         mentionExampleRows.map((row) => `${row[0]} ${row[1]}`).join('\n'),
       ].join('\n'),
     )
@@ -572,6 +574,13 @@ const handlers = {
             ]),
           ],
           type: 'table',
+        },
+        {
+          text: {
+            text: `Slack does not support app slash commands in threads. Use \`@${getSlackBotDisplayName(env.HOST)} @account for coffee\` instead.`,
+            type: 'mrkdwn',
+          },
+          type: 'section',
         },
         {
           rows: [
