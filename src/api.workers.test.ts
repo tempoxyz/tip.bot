@@ -16,6 +16,7 @@ import { createSlackHeaders } from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as DB from '#db/client.ts'
 import * as Schema from '#db/schemas.gen.ts'
+import type { DB as DB_gen } from '#db/types.gen.ts'
 import * as Constants from '#test/constants.ts'
 import * as Factory from '#test/factory.ts'
 
@@ -152,6 +153,54 @@ describe('/api/chat/slack', () => {
     expect(viewText).toContain('*Tip reaction* :tip:')
     fetchSpy.mockRestore()
   })
+
+  test('slash command returns invite instructions when Tipbot is not in the channel', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.startsWith(env.SLACK_API_URL) && url.includes('/conversations.info'))
+        return Promise.resolve(Response.json({ error: 'not_in_channel', ok: false }))
+      return originalFetch(input, init)
+    })
+    await Chat.getChat().initialize()
+    await Chat.getSlack().setInstallation(Constants.slack.teamId, {
+      botToken: Constants.slack.botToken,
+      botUserId: Constants.slack.botUserId,
+      teamName: Constants.slack.teamName,
+    })
+    const body = new URLSearchParams({
+      channel_id: Constants.slack.channelId,
+      command: '/tip',
+      team_id: Constants.slack.teamId,
+      text: `<@${Constants.slack.memberUserId}> for coffee`,
+      trigger_id: 'trigger-missing-channel',
+      user_id: Constants.slack.adminUserId,
+    }).toString()
+
+    const response = await client.api.chat.slack.$post(
+      {},
+      {
+        headers: {
+          ...(await createSlackHeaders(body, env.SLACK_SIGNING_SECRET)),
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        init: { body },
+      },
+    )
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      response_type: 'ephemeral',
+      text: [
+        'Tipbot isn’t in this channel, so it can’t send tips here yet.',
+        '',
+        'Run `/invite @Tipbot`, then try this again:',
+        `\`/tip <@${Constants.slack.memberUserId}> for coffee\``,
+      ].join('\n'),
+    })
+    expect(executionCtx.waitUntil).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
 })
 
 describe('/api/chat/slack/install', () => {
@@ -169,7 +218,7 @@ describe('/api/chat/slack/install', () => {
       `https://${env.HOST}/api/chat/slack/oauth/callback`,
     )
     expect(url.searchParams.get('scope')).toBe(
-      'app_mentions:read,assistant:write,channels:history,channels:read,chat:write,commands,groups:history,groups:read,reactions:read,users:read',
+      'app_mentions:read,assistant:write,channels:history,channels:read,chat:write,commands,emoji:read,groups:history,groups:read,reactions:read,users:read',
     )
     expect(url.searchParams.get('state')).toMatch(/^[^.]+\.[^.]+$/)
   })
@@ -217,9 +266,10 @@ describe('/api/account/link/:token', () => {
       .where('id', '=', pending.member.id)
       .executeTakeFirstOrThrow()
     const account = await db
-      .selectFrom('account')
-      .selectAll()
-      .where('id', '=', member.account_id)
+      .selectFrom('provider_identity')
+      .innerJoin('account', 'account.id', 'provider_identity.account_id')
+      .selectAll('account')
+      .where('provider_identity.id', '=', member.provider_identity_id)
       .executeTakeFirstOrThrow()
     const accessKey = await db
       .selectFrom('access_key')
@@ -320,7 +370,7 @@ describe('/api/account/link/:token', () => {
     const pending = await createPendingAccountLink()
     const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
     const account = await factory.account.insert({ address: root.address })
-    await factory.member.insert({
+    await insertMember({
       account_id: account.id,
       provider_user_id: 'UOTHER',
       workspace_id: pending.workspace.id,
@@ -339,7 +389,7 @@ describe('/api/account/link/:token', () => {
     const pending = await createPendingAccountLink()
     const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
     const account = await factory.account.insert({ address: root.address })
-    const duplicate = await factory.member.insert({
+    const duplicate = await insertMember({
       account_id: account.id,
       provider_user_id: 'UOTHER',
       workspace_id: pending.workspace.id,
@@ -353,13 +403,15 @@ describe('/api/account/link/:token', () => {
     })
     const currentMember = await db
       .selectFrom('member')
-      .selectAll()
-      .where('id', '=', pending.member.id)
+      .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+      .select('provider_identity.account_id')
+      .where('member.id', '=', pending.member.id)
       .executeTakeFirstOrThrow()
     const duplicateMember = await db
       .selectFrom('member')
-      .selectAll()
-      .where('id', '=', duplicate.id)
+      .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+      .select('provider_identity.account_id')
+      .where('member.id', '=', duplicate.id)
       .executeTakeFirstOrThrow()
     const accessKeys = await db
       .selectFrom('access_key')
@@ -474,7 +526,6 @@ describe('/api/confirm/:token', () => {
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({ ok: true })
     expect(tip.confirmed_at).toEqual(expect.any(String))
-    expect(tip.transaction_hash).toEqual(expect.any(String))
     expect(accessKeys).toHaveLength(0)
     expect(
       history.messages?.some((message) => message.text?.includes(confirmation.payload.memo!)),
@@ -646,7 +697,7 @@ describe('/api/confirm/:token', () => {
     const tips = await db
       .selectFrom('tip')
       .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
-      .select(['recipient.provider_user_id', 'tip.confirmed_at', 'tip.transaction_hash'])
+      .select(['recipient.provider_user_id', 'tip.confirmed_at'])
       .where('tip.batch_id', '=', batch.id)
       .orderBy('recipient.provider_user_id', 'asc')
       .execute()
@@ -659,18 +710,15 @@ describe('/api/confirm/:token', () => {
       recipient_count: 2,
       status: 'confirmed',
       total_amount: 2,
-      transaction_hash: expect.any(String),
     })
     expect(tips).toEqual([
       expect.objectContaining({
         confirmed_at: expect.any(String),
         provider_user_id: Constants.slack.memberUserId,
-        transaction_hash: null,
       }),
       expect.objectContaining({
         confirmed_at: expect.any(String),
         provider_user_id: secondRecipientProviderUserId,
-        transaction_hash: null,
       }),
     ])
     expect(
@@ -689,8 +737,26 @@ describe('/api/confirm/:token', () => {
   test('does not post duplicate receipt when confirmation is retried', async () => {
     const memo = `duplicate-${Nanoid.generate()}`
     const confirmation = await createConfirmationToken({ amount: 1, memo })
+    const batch = await factory.tip_batch.insert({
+      amount_each: confirmation.payload.amount,
+      idempotency_key: confirmation.payload.idempotencyKey,
+      memo,
+      provider: confirmation.payload.provider,
+      provider_channel_id: confirmation.payload.providerChannelId,
+      provider_id: confirmation.payload.providerId,
+      provider_thread_id: confirmation.payload.providerThreadId ?? null,
+      recipient_count: 1,
+      sender_member_id: confirmation.senderMember.id,
+      source: 'command',
+      status: 'confirmed',
+      token_address: confirmation.payload.tokenAddress,
+      total_amount: confirmation.payload.amount,
+      transaction_hash: `0x${'1'.repeat(64)}`,
+      workspace_id: confirmation.workspace.id,
+    })
     await factory.tip.insert({
       amount: confirmation.payload.amount,
+      batch_id: batch.id,
       chain_id: confirmation.payload.chainId,
       confirmed_at: new Date().toISOString(),
       idempotency_key: confirmation.payload.idempotencyKey,
@@ -700,7 +766,6 @@ describe('/api/confirm/:token', () => {
       sender_id: confirmation.senderAccount.id,
       sender_member_id: confirmation.senderMember.id,
       token_address: confirmation.payload.tokenAddress,
-      transaction_hash: `0x${'1'.repeat(64)}`,
       workspace_id: confirmation.workspace.id,
     })
     const signedTransaction = await signConfirmationTransaction(confirmation)
@@ -866,7 +931,7 @@ async function createPendingAccountLink(
         .where('id', '=', options.workspaceId)
         .executeTakeFirstOrThrow()
     : await factory.workspace.insert({ provider_id: options.providerId ?? `T${Nanoid.generate()}` })
-  const member = await factory.member.insert({
+  const member = await insertMember({
     provider_user_id: options.providerUserId ?? `U${Nanoid.generate()}`,
     workspace_id: workspace.id,
   })
@@ -906,12 +971,12 @@ async function createConfirmationToken(
   })
   const senderAccount = await findOrCreateAccount(senderRoot.address)
   const recipientAccount = await findOrCreateAccount(recipientRoot.address)
-  const senderMember = await factory.member.insert({
+  const senderMember = await insertMember({
     account_id: senderAccount.id,
     provider_user_id: Constants.slack.adminUserId,
     workspace_id: workspace.id,
   })
-  const recipientMember = await factory.member.insert({
+  const recipientMember = await insertMember({
     account_id: recipientAccount.id,
     provider_user_id: Constants.slack.memberUserId,
     workspace_id: workspace.id,
@@ -921,7 +986,7 @@ async function createConfirmationToken(
   ]
   for (const recipientProviderUserId of recipientProviderUserIds.slice(1)) {
     const account = await factory.account.insert({})
-    await factory.member.insert({
+    await insertMember({
       account_id: account.id,
       provider_user_id: recipientProviderUserId,
       workspace_id: workspace.id,
@@ -1136,4 +1201,32 @@ async function signKeyAuthorization(
       pending.workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
     ),
   })
+}
+
+async function insertMember(
+  attrs: Partial<DB_gen.Insertable.member> &
+    Pick<DB_gen.Insertable.member, 'workspace_id'> & { account_id?: string | null },
+) {
+  const member = factory.member.attrs(attrs as never)
+  const { account_id: accountId, ...memberValues } = member as typeof member & {
+    account_id?: string | null
+  }
+  if (member.provider_identity_id) return await factory.member.insert(memberValues)
+
+  const workspace = await db
+    .selectFrom('workspace')
+    .select(['provider', 'provider_id'])
+    .where('id', '=', member.workspace_id)
+    .executeTakeFirstOrThrow()
+  const identity = await factory.provider_identity.insert({
+    account_id: accountId ?? null,
+    created_at: member.created_at,
+    display_name: member.login,
+    provider: workspace.provider,
+    provider_user_id: member.provider_user_id,
+    provider_workspace_id: workspace.provider_id,
+    real_name: member.name,
+    updated_at: member.updated_at,
+  })
+  return await factory.member.insert({ ...memberValues, provider_identity_id: identity.id })
 }

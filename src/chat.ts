@@ -3,6 +3,7 @@ import type { DB as DB_gen } from '#db/types.gen.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as AccessKey from '#/lib/accessKey.ts'
 import { getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
+import * as Emoji from '#/lib/emoji.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Slack from '#/lib/slack.ts'
@@ -301,6 +302,31 @@ const modalSubmits = {
       errors.default_amount = 'Enter a positive amount with up to 6 decimal places. Example: 0.005'
     if (!reactionTipEmoji)
       errors.reaction_tip_emoji = 'Enter a Slack emoji name. Example: money_with_wings'
+    else if (
+      !(await (async () => {
+        // Standard emoji are known locally; custom workspace emoji require Slack lookup.
+        if (Emoji.replaceEmojiShortcodes(`:${reactionTipEmoji}:`) !== `:${reactionTipEmoji}:`)
+          return true
+
+        const installation = await getSlack().getInstallation(metadata.providerId)
+        if (!installation) return false
+        const response = await getSlack().withBotToken(installation.botToken, () =>
+          fetch(`${env.SLACK_API_URL}/emoji.list`, {
+            headers: { authorization: `Bearer ${installation.botToken}` },
+            method: 'GET',
+          }),
+        )
+        const json = z.parse(
+          z.object({
+            emoji: z.record(z.string(), z.string()).optional(),
+            ok: z.boolean().optional(),
+          }),
+          await response.json(),
+        )
+        return Boolean(json.ok && json.emoji?.[reactionTipEmoji])
+      })())
+    )
+      errors.reaction_tip_emoji = 'Choose an emoji that exists in this Slack workspace.'
     if (chainId !== null && tokenAddress !== null && !Tempo.isAllowedToken(chainId, tokenAddress))
       errors.default_token = 'This token isn’t available on the selected network.'
     if (Object.keys(errors).length > 0) return { action: 'errors' as const, errors }
@@ -357,7 +383,8 @@ const handlers = {
 
     const member = await ctx.db
       .selectFrom('member')
-      .innerJoin('account', 'account.id', 'member.account_id')
+      .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+      .innerJoin('account', 'account.id', 'provider_identity.account_id')
       .select('account.address as account_address')
       .where('member.workspace_id', '=', workspace.id)
       .where('member.provider_user_id', '=', event.user.userId)
@@ -447,20 +474,25 @@ const handlers = {
 
     const member = await ctx.db
       .selectFrom('member')
-      .selectAll()
-      .where('workspace_id', '=', workspace.id)
-      .where('provider_user_id', '=', event.user.userId)
+      .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+      .select(['member.id', 'member.provider_identity_id', 'provider_identity.account_id'])
+      .where('member.workspace_id', '=', workspace.id)
+      .where('member.provider_user_id', '=', event.user.userId)
       .executeTakeFirst()
-    if (!member?.account_id) {
+    if (!member) {
+      await postPrivateReply(event, event.user, 'No account connected.')
+      return
+    }
+    if (!member.account_id) {
       await postPrivateReply(event, event.user, 'No account connected.')
       return
     }
 
     await ctx.db.deleteFrom('access_key').where('account_id', '=', member.account_id).execute()
     await ctx.db
-      .updateTable('member')
+      .updateTable('provider_identity')
       .set({ account_id: null, updated_at: new Date().toISOString() })
-      .where('id', '=', member.id)
+      .where('id', '=', member.provider_identity_id)
       .execute()
     await postPrivateReply(event, event.user, 'Disconnected')
   },
@@ -689,7 +721,8 @@ const handlers = {
 
     const member = await ctx.db
       .selectFrom('member')
-      .innerJoin('account', 'account.id', 'member.account_id')
+      .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+      .innerJoin('account', 'account.id', 'provider_identity.account_id')
       .select('account.address as account_address')
       .where('member.workspace_id', '=', workspace.id)
       .where('member.provider_user_id', '=', event.user.userId)
@@ -743,7 +776,6 @@ const handlers = {
         sql<number>`coalesce(sum("tip"."amount"), 0)`.as('amount'),
         sql<number>`count("tip"."id")`.as('tip_count'),
       ])
-      .where('tip.workspace_id', '=', workspace.id)
       .where('tip.recipient_member_id', '=', member.id)
       .where('tip.confirmed_at', 'is not', null)
       .executeTakeFirstOrThrow()
@@ -753,7 +785,6 @@ const handlers = {
         sql<number>`coalesce(sum("tip"."amount"), 0)`.as('amount'),
         sql<number>`count("tip"."id")`.as('tip_count'),
       ])
-      .where('tip.workspace_id', '=', workspace.id)
       .where('tip.sender_member_id', '=', member.id)
       .where('tip.confirmed_at', 'is not', null)
       .executeTakeFirstOrThrow()
@@ -765,7 +796,6 @@ const handlers = {
         sql<number>`coalesce(sum("tip"."amount"), 0)`.as('amount'),
         sql<number>`count("tip"."id")`.as('tip_count'),
       ])
-      .where('tip.workspace_id', '=', workspace.id)
       .where('tip.sender_member_id', '=', member.id)
       .where('tip.confirmed_at', 'is not', null)
       .groupBy(['member.id', 'member.provider_user_id'])
@@ -781,7 +811,6 @@ const handlers = {
         sql<number>`coalesce(sum("tip"."amount"), 0)`.as('amount'),
         sql<number>`count("tip"."id")`.as('tip_count'),
       ])
-      .where('tip.workspace_id', '=', workspace.id)
       .where('tip.recipient_member_id', '=', member.id)
       .where('tip.confirmed_at', 'is not', null)
       .groupBy(['member.id', 'member.provider_user_id'])
@@ -938,6 +967,189 @@ async function handleTipText(
     )
     return
   }
+  if (Tip.isTransferMemoTooLong(parsed.memo)) {
+    const suggestion = await (async () => {
+      // Best-effort UX sugar: the hard requirement is returning the length error.
+      if (!parsed.memo) return null
+      try {
+        const value = z
+          .parse(
+            z.object({ response: z.string().default('') }),
+            await env.AI.run('@cf/meta/llama-3.2-1b-instruct', {
+              max_tokens: 24,
+              messages: [
+                {
+                  content:
+                    'Shorten this payment memo to at most 32 UTF-8 bytes. Preserve the meaning. Return only the shortened memo text, no quotes, no explanation, no punctuation unless needed.',
+                  role: 'system',
+                },
+                { content: parsed.memo, role: 'user' },
+              ],
+            }),
+          )
+          .response.replace(/[\r\n]+/g, ' ')
+          .trim()
+          .replace(/^['"]|['"]$/g, '')
+        if (!value || Tip.isTransferMemoTooLong(value)) return null
+        if (/[`\r\n]|<@[A-Z0-9_]+/i.test(value)) return null
+        const memoWords = new Set(parsed.memo.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
+        const suggestionWords = value.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
+        if (!suggestionWords.length) return null
+        if (suggestionWords.some((word) => !memoWords.has(word))) return null
+        return value
+      } catch (error) {
+        console.error('Failed to generate short memo suggestion:', error)
+      }
+      return null
+    })()
+    await postPrivateReply(
+      event,
+      event.user,
+      `Payment not sent. Memo must be at most 32 bytes; shorten the text after \`for\`.${suggestion ? ` Try: \`${suggestion}\`.` : ''}`,
+    )
+    if (options.threadTs)
+      await setSlackAssistantThreadStatus(event, ctx, options.threadTs, '').catch(() => {
+        // Best effort only. Payment/error flow must not depend on Slack assistant UI cleanup.
+      })
+    return
+  }
+  const recipients = await (async (): Promise<
+    { ok: true; value: Tip.TipRecipientInput[] } | { message: string; ok: false }
+  > => {
+    if (ctx.provider.type !== 'slack') return { ok: true, value: parsed.recipients }
+    const installation = await getSlack().getInstallation(ctx.provider.id)
+    if (!installation) return { ok: true, value: parsed.recipients }
+
+    const body = new URLSearchParams()
+    body.set('channel', event.channel.id.replace(/^slack:/, ''))
+    const response = await getSlack().withBotToken(installation.botToken, () =>
+      fetch(`${env.SLACK_API_URL}/conversations.info`, {
+        body,
+        headers: { authorization: `Bearer ${installation.botToken}` },
+        method: 'POST',
+      }),
+    )
+    const conversation = z.parse(
+      z.object({
+        channel: z
+          .object({
+            context_team_id: z.string().optional(),
+            is_ext_shared: z.boolean().optional(),
+            is_shared: z.boolean().optional(),
+            shared_team_ids: z.array(z.string()).optional(),
+          })
+          .optional(),
+        ok: z.boolean().optional(),
+      }),
+      await response.json(),
+    )
+    const isSharedChannel =
+      conversation.channel?.is_ext_shared ||
+      conversation.channel?.is_shared ||
+      conversation.channel?.shared_team_ids?.some(
+        (teamId) => teamId !== conversation.channel?.context_team_id,
+      )
+    if (!conversation.ok || !conversation.channel || !isSharedChannel)
+      return { ok: true, value: parsed.recipients }
+
+    const tokenTeamIds = new Set(
+      [
+        ctx.provider.id,
+        conversation.channel.context_team_id,
+        ...(conversation.channel.shared_team_ids ?? []),
+      ].filter((teamId) => teamId !== undefined),
+    )
+    const value = [] as Tip.TipRecipientInput[]
+    for (const recipient of parsed.recipients) {
+      const candidates = [...tokenTeamIds].map((tokenTeamId) => ({
+        providerUserId: recipient.recipientProviderUserId,
+        providerWorkspaceId: tokenTeamId,
+      }))
+      for (const tokenTeamId of tokenTeamIds) {
+        const tokenInstallation = await getSlack().getInstallation(tokenTeamId)
+        if (!tokenInstallation) continue
+        const userBody = new URLSearchParams()
+        userBody.set('user', recipient.recipientProviderUserId)
+        const userResponse = await getSlack().withBotToken(tokenInstallation.botToken, () =>
+          fetch(`${env.SLACK_API_URL}/users.info`, {
+            body: userBody,
+            headers: { authorization: `Bearer ${tokenInstallation.botToken}` },
+            method: 'POST',
+          }),
+        )
+        const info = z.parse(
+          z.object({
+            ok: z.boolean().optional(),
+            user: z
+              .object({
+                id: z.string().optional(),
+                team_id: z.string().optional(),
+              })
+              .optional(),
+          }),
+          await userResponse.json(),
+        )
+        if (!info.ok || !info.user?.id || !info.user.team_id) continue
+        candidates.push({
+          providerUserId: info.user.id,
+          providerWorkspaceId: info.user.team_id,
+        })
+      }
+
+      const seen = new Set<string>()
+      const matches = [] as Array<{ providerUserId: string; providerWorkspaceId: string }>
+      for (const candidate of candidates) {
+        const key = `${candidate.providerWorkspaceId}:${candidate.providerUserId}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        const candidateWorkspace = await ctx.db
+          .selectFrom('workspace')
+          .select('id')
+          .where('provider', '=', 'slack')
+          .where('provider_id', '=', candidate.providerWorkspaceId)
+          .executeTakeFirst()
+        if (!candidateWorkspace) continue
+        const candidateMember = await ctx.db
+          .selectFrom('member')
+          .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+          .innerJoin('account', 'account.id', 'provider_identity.account_id')
+          .select('member.id')
+          .where('member.provider_user_id', '=', candidate.providerUserId)
+          .where('member.workspace_id', '=', candidateWorkspace.id)
+          .executeTakeFirst()
+        if (candidateMember) matches.push(candidate)
+      }
+      if (matches.length === 0) {
+        const connectedMembers = await ctx.db
+          .selectFrom('member')
+          .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+          .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+          .innerJoin('account', 'account.id', 'provider_identity.account_id')
+          .select([
+            'member.provider_user_id as providerUserId',
+            'workspace.provider_id as providerWorkspaceId',
+          ])
+          .where('member.provider_user_id', '=', recipient.recipientProviderUserId)
+          .where('workspace.provider', '=', 'slack')
+          .execute()
+        if (connectedMembers.length === 1) matches.push(connectedMembers[0]!)
+      }
+      if (matches.length !== 1)
+        return {
+          message:
+            matches.length === 0
+              ? `Payment not sent. <@${recipient.recipientProviderUserId}> needs to install or connect Tipbot in their Slack workspace before receiving Slack Connect payments.`
+              : `Payment not sent. <@${recipient.recipientProviderUserId}> could not be resolved safely across Slack workspaces.`,
+          ok: false,
+        }
+      value.push({ ...recipient, recipientProviderWorkspaceId: matches[0]!.providerWorkspaceId })
+    }
+    return { ok: true, value }
+  })()
+  if (!recipients.ok) {
+    await postPrivateReply(event, event.user, recipients.message)
+    return
+  }
 
   if (options.threadTs)
     void setSlackAssistantThreadStatus(event, ctx, options.threadTs, 'is sending a tip', {
@@ -956,8 +1168,9 @@ async function handleTipText(
             providerChannelId: event.channel.id,
             providerId: ctx.provider.id,
             providerThreadId: options.threadTs,
-            recipientProviderLabel: parsed.recipients[0]?.recipientProviderLabel,
-            recipientProviderUserId: parsed.recipients[0]!.recipientProviderUserId,
+            recipientProviderLabel: recipients.value[0]?.recipientProviderLabel,
+            recipientProviderUserId: recipients.value[0]!.recipientProviderUserId,
+            recipientProviderWorkspaceId: recipients.value[0]?.recipientProviderWorkspaceId,
             senderProviderUserId: event.user.userId,
             tokenAddress: tokenAddress ?? undefined,
           })
@@ -969,7 +1182,7 @@ async function handleTipText(
             providerChannelId: event.channel.id,
             providerId: ctx.provider.id,
             providerThreadId: options.threadTs,
-            recipients: parsed.recipients,
+            recipients: recipients.value,
             senderProviderUserId: event.user.userId,
             source: options.mention ? 'mention' : 'command',
             tokenAddress: tokenAddress ?? undefined,
@@ -1064,46 +1277,10 @@ async function handleTipText(
         if (result.code === 'self_tip')
           return 'Payment not sent. Cannot send a payment to yourself.'
         if (result.code === 'recipient_unconnected')
-          return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? parsed.recipients[0]!.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
+          return `Payment not sent. ${event.channel.mentionUser(result.recipientProviderUserId ?? recipients.value[0]!.recipientProviderUserId)} needs to connect Tipbot before receiving payments.`
         if (result.code === 'pending') return 'Payment still sending.'
         if (result.code === 'insufficient_funds')
           return 'Payment not sent. Your wallet has insufficient funds.'
-        if (result.code === 'failed' && result.message === 'Memo must be at most 32 bytes.') {
-          const suggestion = await (async () => {
-            if (!parsed.memo) return null
-            try {
-              const value = z
-                .parse(
-                  z.object({ response: z.string().default('') }),
-                  await env.AI.run('@cf/meta/llama-3.2-1b-instruct', {
-                    max_tokens: 24,
-                    messages: [
-                      {
-                        content:
-                          'Shorten this payment memo to at most 32 UTF-8 bytes. Preserve the meaning. Return only the shortened memo text, no quotes, no explanation, no punctuation unless needed.',
-                        role: 'system',
-                      },
-                      { content: parsed.memo, role: 'user' },
-                    ],
-                  }),
-                )
-                .response.replace(/[\r\n]+/g, ' ')
-                .trim()
-                .replace(/^['"]|['"]$/g, '')
-              if (!value || new TextEncoder().encode(value).length > 32) return null
-              if (/[`\r\n]|<@[A-Z0-9_]+/i.test(value)) return null
-              const memoWords = new Set(parsed.memo.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
-              const suggestionWords = value.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
-              if (!suggestionWords.length) return null
-              if (suggestionWords.some((word) => !memoWords.has(word))) return null
-              return value
-            } catch (error) {
-              console.error('Failed to generate short memo suggestion:', error)
-            }
-            return null
-          })()
-          return `Payment not sent. Memo must be at most 32 bytes; shorten the text after \`for\`.${suggestion ? ` Try: \`${suggestion}\`.` : ''}`
-        }
         return 'Payment failed.'
       })()
       if (result.code === 'insufficient_funds') {
@@ -1574,10 +1751,11 @@ function getProvider(event: chat.SlashCommandEvent): ProviderContext {
 async function getConnectedSlackMember(db: DB.Type, workspaceId: string, providerUserId: string) {
   const member = await db
     .selectFrom('member')
-    .select(['id', 'provider_user_id'])
+    .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .select(['member.id', 'member.provider_user_id'])
     .where('workspace_id', '=', workspaceId)
-    .where('provider_user_id', '=', providerUserId)
-    .where('account_id', 'is not', null)
+    .where('member.provider_user_id', '=', providerUserId)
+    .where('provider_identity.account_id', 'is not', null)
     .executeTakeFirst()
   if (!member) return null
   return { memberId: member.id, providerUserId: member.provider_user_id }
@@ -2027,14 +2205,31 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
   if (!member) {
     const id = Nanoid.generate()
     const createdAt = new Date().toISOString()
+    const providerIdentityId = Nanoid.generate()
+    await ctx.db
+      .insertInto('provider_identity')
+      .values({
+        account_id: null,
+        created_at: createdAt,
+        display_name: null,
+        id: providerIdentityId,
+        metadata: null,
+        provider: workspace.provider,
+        provider_global_user_id: null,
+        provider_user_id: event.user.userId,
+        provider_workspace_id: workspace.provider_id,
+        real_name: null,
+        updated_at: createdAt,
+      })
+      .execute()
     await ctx.db
       .insertInto('member')
       .values({
-        account_id: null,
         created_at: createdAt,
         id,
         login: null,
         name: null,
+        provider_identity_id: providerIdentityId,
         provider_user_id: event.user.userId,
         updated_at: createdAt,
         workspace_id: workspace.id,
@@ -2047,11 +2242,21 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
       .executeTakeFirstOrThrow()
   }
 
-  if (member.account_id) {
+  const accountId = member.provider_identity_id
+    ? (
+        await ctx.db
+          .selectFrom('provider_identity')
+          .select('account_id')
+          .where('id', '=', member.provider_identity_id)
+          .executeTakeFirstOrThrow()
+      ).account_id
+    : null
+
+  if (accountId) {
     const accessKeys = await ctx.db
       .selectFrom('access_key')
       .select(['id', 'token_address'])
-      .where('account_id', '=', member.account_id)
+      .where('account_id', '=', accountId)
       .where('chain_id', '=', workspace.chain_id)
       .where('expires_at', '>', new Date().toISOString())
       .where('revoked_at', 'is', null)
@@ -2071,10 +2276,10 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
   const now = new Date()
   const token = Nanoid.generate()
   const accessKey = AccessKey.generate()
-  const linkButtonLabel = member.account_id ? 'Refresh connection' : 'Connect to Tipbot'
+  const linkButtonLabel = accountId ? 'Refresh connection' : 'Connect to Tipbot'
   const linkDescription = 'Link expires in 10 minutes.'
   const linkUrl = `https://${env.HOST}/connect/${token}`
-  const linkText = `${member.account_id ? 'Refresh Tipbot connection' : 'Connect to Tipbot'}: ${linkUrl}\n${linkDescription}`
+  const linkText = `${accountId ? 'Refresh Tipbot connection' : 'Connect to Tipbot'}: ${linkUrl}\n${linkDescription}`
   const linkExpiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString() // 10 minutes
   const accessKeyExpiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
   await ctx.db
@@ -2309,7 +2514,8 @@ async function canManageSlackWorkspaceSettings(providerId: string, providerUserI
   const member = await DB.create(env.DB)
     .selectFrom('workspace')
     .innerJoin('member', 'member.workspace_id', 'workspace.id')
-    .innerJoin('account', 'account.id', 'member.account_id')
+    .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .innerJoin('account', 'account.id', 'provider_identity.account_id')
     .select('member.id')
     .where('workspace.provider', '=', 'slack')
     .where('workspace.provider_id', '=', providerId)

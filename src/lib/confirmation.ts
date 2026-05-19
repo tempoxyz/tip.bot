@@ -17,11 +17,13 @@ export const payloadSchema = z.object({
   providerThreadId: z.string().min(1).optional(),
   recipientProviderLabel: z.string().min(1).optional(),
   recipientProviderUserId: z.string().min(1),
+  recipientProviderWorkspaceId: z.string().min(1).optional(),
   recipients: z
     .array(
       z.object({
         recipientProviderLabel: z.string().min(1).optional(),
         recipientProviderUserId: z.string().min(1),
+        recipientProviderWorkspaceId: z.string().min(1).optional(),
       }),
     )
     .optional(),

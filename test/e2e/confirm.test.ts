@@ -1,6 +1,9 @@
+import type { Kysely } from 'kysely'
 import * as Confirmation from '#/lib/confirmation.ts'
 import * as Tempo from '#/lib/tempo.ts'
+import type { DB } from '#db/types.gen.ts'
 import { Account } from 'viem/tempo'
+import type * as Factory from '../factory.ts'
 import { expect, test } from './fixture.ts'
 
 test('visitor opens an expired confirmation link', async ({ app, page }) => {
@@ -144,24 +147,48 @@ test('slack member confirms one-time payment with wallet signature', async ({
     chain_id: Tempo.chainLookup.testnet,
     provider_id: `T${crypto.randomUUID().replaceAll('-', '')}`,
   })
-  const senderAccount =
-    (await db
+  const senderAccount = await (async () => {
+    const existing = await db
       .selectFrom('account')
       .selectAll()
       .where('address', '=', senderRoot.address)
-      .executeTakeFirst()) ?? (await factory.account.insert({ address: senderRoot.address }))
-  const recipientAccount =
-    (await db
+      .executeTakeFirst()
+    if (existing) return existing
+    try {
+      return await factory.account.insert({ address: senderRoot.address })
+    } catch (error) {
+      if (!(error instanceof Error && /unique constraint/i.test(error.message))) throw error
+      return await db
+        .selectFrom('account')
+        .selectAll()
+        .where('address', '=', senderRoot.address)
+        .executeTakeFirstOrThrow()
+    }
+  })()
+  const recipientAccount = await (async () => {
+    const existing = await db
       .selectFrom('account')
       .selectAll()
       .where('address', '=', recipientRoot.address)
-      .executeTakeFirst()) ?? (await factory.account.insert({ address: recipientRoot.address }))
-  await factory.member.insert({
+      .executeTakeFirst()
+    if (existing) return existing
+    try {
+      return await factory.account.insert({ address: recipientRoot.address })
+    } catch (error) {
+      if (!(error instanceof Error && /unique constraint/i.test(error.message))) throw error
+      return await db
+        .selectFrom('account')
+        .selectAll()
+        .where('address', '=', recipientRoot.address)
+        .executeTakeFirstOrThrow()
+    }
+  })()
+  await insertMember(db, factory, {
     account_id: senderAccount.id,
     provider_user_id: 'U000000001',
     workspace_id: workspace.id,
   })
-  await factory.member.insert({
+  await insertMember(db, factory, {
     account_id: recipientAccount.id,
     provider_user_id: 'U000000002',
     workspace_id: workspace.id,
@@ -226,25 +253,37 @@ test('slack member confirms multi-recipient one-time payment with wallet signatu
     chain_id: Tempo.chainLookup.testnet,
     provider_id: `T${crypto.randomUUID().replaceAll('-', '')}`,
   })
-  const senderAccount =
-    (await db
+  const senderAccount = await (async () => {
+    const existing = await db
       .selectFrom('account')
       .selectAll()
       .where('address', '=', senderRoot.address)
-      .executeTakeFirst()) ?? (await factory.account.insert({ address: senderRoot.address }))
+      .executeTakeFirst()
+    if (existing) return existing
+    try {
+      return await factory.account.insert({ address: senderRoot.address })
+    } catch (error) {
+      if (!(error instanceof Error && /unique constraint/i.test(error.message))) throw error
+      return await db
+        .selectFrom('account')
+        .selectAll()
+        .where('address', '=', senderRoot.address)
+        .executeTakeFirstOrThrow()
+    }
+  })()
   const firstRecipientAccount = await factory.account.insert({})
   const secondRecipientAccount = await factory.account.insert({})
-  await factory.member.insert({
+  await insertMember(db, factory, {
     account_id: senderAccount.id,
     provider_user_id: 'U000000001',
     workspace_id: workspace.id,
   })
-  await factory.member.insert({
+  await insertMember(db, factory, {
     account_id: firstRecipientAccount.id,
     provider_user_id: 'U000000002',
     workspace_id: workspace.id,
   })
-  await factory.member.insert({
+  await insertMember(db, factory, {
     account_id: secondRecipientAccount.id,
     provider_user_id: 'U000000003',
     workspace_id: workspace.id,
@@ -303,3 +342,33 @@ test('slack member confirms multi-recipient one-time payment with wallet signatu
     Tempo.formatTxLink(Tempo.chainLookup.testnet, `0x${'3'.repeat(64)}`),
   )
 })
+
+async function insertMember(
+  db: Kysely<DB>,
+  factory: ReturnType<typeof Factory.create>,
+  attrs: Partial<DB.Insertable.member> &
+    Pick<DB.Insertable.member, 'workspace_id'> & { account_id?: string | null },
+) {
+  const member = factory.member.attrs(attrs as never)
+  const { account_id: accountId, ...memberValues } = member as typeof member & {
+    account_id?: string | null
+  }
+  if (member.provider_identity_id) return await factory.member.insert(memberValues)
+
+  const workspace = await db
+    .selectFrom('workspace')
+    .select(['provider', 'provider_id'])
+    .where('id', '=', member.workspace_id)
+    .executeTakeFirstOrThrow()
+  const identity = await factory.provider_identity.insert({
+    account_id: accountId ?? null,
+    created_at: member.created_at,
+    display_name: member.login,
+    provider: workspace.provider,
+    provider_user_id: member.provider_user_id,
+    provider_workspace_id: workspace.provider_id,
+    real_name: member.name,
+    updated_at: member.updated_at,
+  })
+  return await factory.member.insert({ ...memberValues, provider_identity_id: identity.id })
+}

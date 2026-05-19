@@ -96,6 +96,7 @@ export const api = new Hono<{
           'account_link_token.member_id',
           'account_link_token.provider_channel_id',
           'account_link_token.used_at',
+          'member.provider_identity_id as member_provider_identity_id',
           'member.provider_user_id as member_provider_user_id',
           'workspace.chain_id',
           'workspace.default_token_address',
@@ -164,10 +165,11 @@ export const api = new Hono<{
 
         const duplicate = await c.var.db
           .selectFrom('member')
-          .select(['id'])
-          .where('workspace_id', '=', link.workspace_id)
-          .where('account_id', '=', account.id)
-          .where('id', '!=', link.member_id)
+          .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+          .select(['member.id', 'member.provider_identity_id'])
+          .where('member.workspace_id', '=', link.workspace_id)
+          .where('member.id', '!=', link.member_id)
+          .where('provider_identity.account_id', '=', account.id)
           .executeTakeFirst()
         if (duplicate && !body.disconnectExistingAccount)
           return c.json(
@@ -178,14 +180,22 @@ export const api = new Hono<{
             },
             409,
           )
-        if (duplicate && body.disconnectExistingAccount)
-          await c.var.db
-            .updateTable('member')
-            .set({ account_id: null, updated_at: now })
-            .where('workspace_id', '=', link.workspace_id)
-            .where('account_id', '=', account.id)
-            .where('id', '!=', link.member_id)
+        if (duplicate && body.disconnectExistingAccount) {
+          const duplicateIdentities = await c.var.db
+            .selectFrom('member')
+            .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+            .select('member.provider_identity_id')
+            .where('member.workspace_id', '=', link.workspace_id)
+            .where('member.id', '!=', link.member_id)
+            .where('provider_identity.account_id', '=', account.id)
             .execute()
+          const duplicateIdentityIds = duplicateIdentities.map((row) => row.provider_identity_id)
+          await c.var.db
+            .updateTable('provider_identity')
+            .set({ account_id: null, updated_at: now })
+            .where('id', 'in', duplicateIdentityIds)
+            .execute()
+        }
 
         await c.var.db
           .deleteFrom('access_key')
@@ -221,11 +231,12 @@ export const api = new Hono<{
             updated_at: now,
           })
           .execute()
-        await c.var.db
-          .updateTable('member')
-          .set({ account_id: account.id, updated_at: now })
-          .where('id', '=', link.member_id)
-          .execute()
+        if (link.member_provider_identity_id)
+          await c.var.db
+            .updateTable('provider_identity')
+            .set({ account_id: account.id, updated_at: now })
+            .where('id', '=', link.member_provider_identity_id)
+            .execute()
         await c.var.db
           .updateTable('account_link_token')
           .set({
@@ -727,6 +738,58 @@ export const api = new Hono<{
     }
 
     if (params?.has('command') && !params.has('payload')) {
+      const botMissingFromChannel = await (async () => {
+        // Slash-command HTTP responses can render even when bot API posting cannot.
+        // Detect that case before handing off to async chat handling.
+        const channelId = params.get('channel_id')
+        const teamId = params.get('team_id')
+        if (!channelId || !teamId) return false
+        if (channelId.startsWith('D')) return false
+
+        await Chat.getChat().initialize()
+        const installation = await Chat.getSlack().getInstallation(teamId)
+        if (!installation) return false
+
+        const infoBody = new URLSearchParams()
+        infoBody.set('channel', channelId)
+        const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
+          fetch(`${c.env.SLACK_API_URL}/conversations.info`, {
+            body: infoBody,
+            headers: { authorization: `Bearer ${installation.botToken}` },
+            method: 'POST',
+          }),
+        )
+        const json = z.parse(
+          z.object({
+            channel: z.object({ is_member: z.boolean().optional() }).optional(),
+            error: z.string().optional(),
+            ok: z.boolean().optional(),
+          }),
+          await response.json(),
+        )
+        if (json.ok) return json.channel?.is_member === false
+        return ['channel_not_found', 'no_permission', 'not_in_channel'].includes(json.error ?? '')
+      })()
+      if (botMissingFromChannel)
+        return c.json({
+          response_type: 'ephemeral' as const,
+          text: (() => {
+            // Echo the attempted command so the member can retry after inviting Tipbot.
+            const commandText = [
+              params.get('command') || getSlackCommand(c.env.HOST),
+              params.get('text'),
+            ]
+              .filter(Boolean)
+              .join(' ')
+            return [
+              'Tipbot isn’t in this channel, so it can’t send tips here yet.',
+              '',
+              `Run \`/invite @${getSlackBotDisplayName(c.env.HOST)}\`, then try this again:`,
+              `\`${commandText}\``,
+            ].join('\n')
+          })(),
+        })
+
       const tasks: Promise<unknown>[] = []
       const task = (async () => {
         await Chat.getChat().webhooks.slack(
@@ -792,6 +855,7 @@ export const api = new Hono<{
         'channels:read',
         'chat:write',
         'commands',
+        'emoji:read',
         'groups:history',
         'groups:read',
         'reactions:read',

@@ -236,7 +236,8 @@ async function buildHomeView(input: {
 
   const member = await db
     .selectFrom('member')
-    .leftJoin('account', 'account.id', 'member.account_id')
+    .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .leftJoin('account', 'account.id', 'provider_identity.account_id')
     .select(['member.id as id', 'account.address as account_address'])
     .where('member.workspace_id', '=', workspace.id)
     .where('member.provider_user_id', '=', input.slackUserId)

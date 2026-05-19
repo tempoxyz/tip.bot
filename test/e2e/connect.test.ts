@@ -1,11 +1,14 @@
 import type { APIRequestContext } from '@playwright/test'
+import type { Kysely } from 'kysely'
 import { WebClient } from '@slack/web-api'
 import * as AccessKey from '#/lib/accessKey.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import { createSlackHeaders } from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
+import type { DB } from '#db/types.gen.ts'
 import { Account } from 'viem/tempo'
 import * as Constants from '../constants.ts'
+import type * as Factory from '../factory.ts'
 import { expect, test } from './fixture.ts'
 
 test('visitor opens an expired connection link', async ({ app, page }) => {
@@ -16,10 +19,10 @@ test('visitor opens an expired connection link', async ({ app, page }) => {
   await expect(page.getByRole('button', { name: 'Connect' })).toBeHidden()
 })
 
-test('slack member opens valid connection link', async ({ app, factory, page }) => {
+test('slack member opens valid connection link', async ({ app, db, factory, page }) => {
   const token = crypto.randomUUID()
   const workspace = await factory.workspace.insert({ provider_id: `T${crypto.randomUUID()}` })
-  const member = await factory.member.insert({
+  const member = await insertMember(db, factory, {
     provider_user_id: `U${crypto.randomUUID()}`,
     workspace_id: workspace.id,
   })
@@ -58,7 +61,8 @@ test('slack member connects wallet from slack', async ({ app, db, page, request 
   const link = await db
     .selectFrom('account_link_token')
     .innerJoin('member', 'member.id', 'account_link_token.member_id')
-    .innerJoin('account', 'account.id', 'member.account_id')
+    .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .innerJoin('account', 'account.id', 'provider_identity.account_id')
     .select([
       'account.address as account_address',
       'account.id as account_id',
@@ -66,15 +70,15 @@ test('slack member connects wallet from slack', async ({ app, db, page, request 
       'account_link_token.access_key_authorization',
       'account_link_token.account_id as link_account_id',
       'account_link_token.used_at',
-      'member.account_id as member_account_id',
+      'provider_identity.account_id as identity_account_id',
     ])
     .where('account_link_token.token_hash', '=', await AccountLink.hashToken(app.env, token))
     .executeTakeFirstOrThrow()
 
   expect(link.account_address).toBe(root.address)
   expect(link.access_key_authorization).toEqual(expect.any(String))
+  expect(link.identity_account_id).toBe(link.account_id)
   expect(link.link_account_id).toBe(link.account_id)
-  expect(link.member_account_id).toBe(link.account_id)
   expect(link.used_at).toEqual(expect.any(String))
 
   await page.goto(app.url({ params: { token }, to: '/connect/$token' }))
@@ -100,7 +104,7 @@ test('slack member connects another link while wallet is already connected', asy
     chain_id: Tempo.chainLookup.localnet,
     provider_id: `T${crypto.randomUUID()}`,
   })
-  const member = await factory.member.insert({
+  const member = await insertMember(db, factory, {
     provider_user_id: `U${crypto.randomUUID()}`,
     workspace_id: workspace.id,
   })
@@ -175,7 +179,7 @@ test('slack member can disconnect an existing member and connect wallet', async 
     chain_id: Tempo.chainLookup.localnet,
     provider_id: `T${crypto.randomUUID()}`,
   })
-  const currentMember = await factory.member.insert({
+  const currentMember = await insertMember(db, factory, {
     provider_user_id: `U${crypto.randomUUID()}`,
     workspace_id: workspace.id,
   })
@@ -185,7 +189,7 @@ test('slack member can disconnect an existing member and connect wallet', async 
     .where('address', '=', root.address)
     .executeTakeFirst()
   const account = existingAccount ?? (await factory.account.insert({ address: root.address }))
-  const duplicateMember = await factory.member.insert({
+  const duplicateMember = await insertMember(db, factory, {
     account_id: account.id,
     provider_user_id: `U${crypto.randomUUID()}`,
     workspace_id: workspace.id,
@@ -214,13 +218,15 @@ test('slack member can disconnect an existing member and connect wallet', async 
 
   const updatedCurrentMember = await db
     .selectFrom('member')
-    .selectAll()
-    .where('id', '=', currentMember.id)
+    .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .select('provider_identity.account_id')
+    .where('member.id', '=', currentMember.id)
     .executeTakeFirstOrThrow()
   const updatedDuplicateMember = await db
     .selectFrom('member')
-    .selectAll()
-    .where('id', '=', duplicateMember.id)
+    .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .select('provider_identity.account_id')
+    .where('member.id', '=', duplicateMember.id)
     .executeTakeFirstOrThrow()
   const link = await db
     .selectFrom('account_link_token')
@@ -306,4 +312,34 @@ async function postSlashCommand(app: { url: (path: `/api/${string}`) => string }
   })
   const responseText = await response.text()
   expect(response.status, responseText).toBe(200)
+}
+
+async function insertMember(
+  db: Kysely<DB>,
+  factory: ReturnType<typeof Factory.create>,
+  attrs: Partial<DB.Insertable.member> &
+    Pick<DB.Insertable.member, 'workspace_id'> & { account_id?: string | null },
+) {
+  const member = factory.member.attrs(attrs as never)
+  const { account_id: accountId, ...memberValues } = member as typeof member & {
+    account_id?: string | null
+  }
+  if (member.provider_identity_id) return await factory.member.insert(memberValues)
+
+  const workspace = await db
+    .selectFrom('workspace')
+    .select(['provider', 'provider_id'])
+    .where('id', '=', member.workspace_id)
+    .executeTakeFirstOrThrow()
+  const identity = await factory.provider_identity.insert({
+    account_id: accountId ?? null,
+    created_at: member.created_at,
+    display_name: member.login,
+    provider: workspace.provider,
+    provider_user_id: member.provider_user_id,
+    provider_workspace_id: workspace.provider_id,
+    real_name: member.name,
+    updated_at: member.updated_at,
+  })
+  return await factory.member.insert({ ...memberValues, provider_identity_id: identity.id })
 }
