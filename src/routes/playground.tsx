@@ -620,7 +620,12 @@ const installEmulateWorkspace = createServerFn({ method: 'POST' })
     if (workspace)
       await db
         .updateTable('workspace')
-        .set({ name: slackDefaults.teamName, updated_at: now })
+        .set({
+          installed_at: now,
+          name: slackDefaults.teamName,
+          uninstalled_at: null,
+          updated_at: now,
+        })
         .where('id', '=', workspace.id)
         .execute()
     else
@@ -630,9 +635,11 @@ const installEmulateWorkspace = createServerFn({ method: 'POST' })
           created_at: now,
           default_amount: 1000,
           id: crypto.randomUUID(),
+          installed_at: now,
           name: slackDefaults.teamName,
           provider: data.provider,
           provider_id: data.workspace,
+          uninstalled_at: null,
           updated_at: now,
         })
         .execute()

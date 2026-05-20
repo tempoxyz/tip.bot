@@ -155,10 +155,12 @@ type workspace = {
   default_amount: k.Generated<number>
   default_token_address: string | null
   id: string
+  installed_at: string | null
   name: string | null
   provider: k.Generated<'slack'>
   provider_id: string
   reaction_tip_emoji: k.Generated<string>
+  uninstalled_at: string | null
   updated_at: k.Generated<string>
 }
 

@@ -980,7 +980,12 @@ export const api = new Hono<{
         if (workspace)
           await c.var.db
             .updateTable('workspace')
-            .set({ name: result.installation.teamName ?? null, updated_at: now })
+            .set({
+              installed_at: now,
+              name: result.installation.teamName ?? null,
+              uninstalled_at: null,
+              updated_at: now,
+            })
             .where('id', '=', workspace.id)
             .execute()
         else
@@ -990,9 +995,11 @@ export const api = new Hono<{
               created_at: now,
               default_amount: 1000,
               id: Nanoid.generate(),
+              installed_at: now,
               name: result.installation.teamName ?? null,
               provider: 'slack',
               provider_id: result.teamId,
+              uninstalled_at: null,
               updated_at: now,
             })
             .execute()

@@ -870,22 +870,31 @@ describe('/api/chat/slack/oauth/callback', () => {
     })
     const workspace = await db
       .selectFrom('workspace')
-      .select(['name', 'provider', 'provider_id'])
+      .select(['installed_at', 'name', 'provider', 'provider_id', 'uninstalled_at'])
       .where('provider_id', '=', Constants.slack.teamId)
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(302)
     expect(response.headers.get('location')).toBe('http://localhost/?slack=installed&team=Emulate')
     expect(workspace).toEqual({
+      installed_at: expect.any(String),
       name: 'Emulate',
       provider: 'slack',
       provider_id: Constants.slack.teamId,
+      uninstalled_at: null,
     })
   })
 
   test('updates existing workspace and redirects', async () => {
     await deleteSlackOauthWorkspace()
-    await factory.workspace.insert({ name: 'Old Name', provider_id: Constants.slack.teamId })
+    await factory.workspace.insert({
+      chain_id: Tempo.chainLookup.localnet,
+      default_amount: 1234,
+      installed_at: null,
+      name: 'Old Name',
+      provider_id: Constants.slack.teamId,
+      uninstalled_at: new Date().toISOString(),
+    })
     const installResponse = await client.api.chat.slack.install.$get()
     const location = installResponse.headers.get('location')
     if (!location) throw new Error('Expected Slack install redirect location.')
@@ -914,13 +923,29 @@ describe('/api/chat/slack/oauth/callback', () => {
     })
     const workspaces = await db
       .selectFrom('workspace')
-      .select(['name', 'provider', 'provider_id'])
+      .select([
+        'chain_id',
+        'default_amount',
+        'installed_at',
+        'name',
+        'provider',
+        'provider_id',
+        'uninstalled_at',
+      ])
       .where('provider_id', '=', Constants.slack.teamId)
       .execute()
 
     expect(response.status).toBe(302)
     expect(workspaces).toEqual([
-      { name: 'Emulate', provider: 'slack', provider_id: Constants.slack.teamId },
+      {
+        chain_id: Tempo.chainLookup.localnet,
+        default_amount: 1234,
+        installed_at: expect.any(String),
+        name: 'Emulate',
+        provider: 'slack',
+        provider_id: Constants.slack.teamId,
+        uninstalled_at: null,
+      },
     ])
   })
 })

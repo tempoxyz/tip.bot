@@ -149,10 +149,12 @@ export const workspace = z.object({
   default_amount: z.number(),
   default_token_address: z.string().nullable(),
   id: z.string(),
+  installed_at: z.string().nullable(),
   name: z.string().nullable(),
   provider: z.literal('slack'),
   provider_id: z.string(),
   reaction_tip_emoji: z.string(),
+  uninstalled_at: z.string().nullable(),
   updated_at: z.string(),
 })
 

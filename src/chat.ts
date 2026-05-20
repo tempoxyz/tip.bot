@@ -75,16 +75,32 @@ export function getChat() {
 
     const threadTs = raw.thread_ts ?? raw.ts
     const event = { channel: thread.channel, threadTs, user: message.author } satisfies TipEvent
-    if (await isExternalSlackConnectActor(providerId, raw.channel, raw.user)) {
+    const mentionText = normalizeSlackMentionText(raw.text, installation.botUserId)
+    const match = mentionText.match(commandPattern)
+    const slackConnectActor = await resolveSlackConnectActor(providerId, raw.channel, raw.user)
+    if (slackConnectActor.blocked || slackConnectActor.external) {
+      if (slackConnectActor.external && match && isSlackConnectExternalCommand(match[1])) {
+        const name = match[1]
+        await handlers[name](event, {
+          allowUninstalledWorkspaceCreate: name === 'connect',
+          db: DB.create(env.DB),
+          externalSlackConnect: true,
+          provider: { id: slackConnectActor.providerId, type: 'slack' },
+          text: match[2]?.trim() ?? '',
+          threadTs,
+        })
+        return
+      }
       await postPrivateReply(
         event,
         event.user,
-        `Tipbot isn't installed in your Slack workspace yet. Ask an admin to install Tipbot there, then try again.`,
+        match
+          ? `Tipbot is not installed in your Slack workspace yet. You can use \`@${getSlackBotDisplayName(env.HOST)} connect\`, \`@${getSlackBotDisplayName(env.HOST)} disconnect\`, or \`@${getSlackBotDisplayName(env.HOST)} status\` here, or ask an admin to install Tipbot for full support.`
+          : `Tipbot can connect your account here, but payments in Slack Connect channels aren’t supported yet unless you install the Tipbot app to your workspace.`,
       )
       return
     }
 
-    const mentionText = normalizeSlackMentionText(raw.text, installation.botUserId)
     const context = {
       db: DB.create(env.DB),
       provider: { id: providerId, type: 'slack' },
@@ -124,7 +140,6 @@ export function getChat() {
       return
     }
 
-    const match = mentionText.match(commandPattern)
     if (match) {
       const name = z.parse(z.enum(commandNames), match[1])
       await handlers[name](event, { ...context, text: match[2]?.trim() ?? '' })
@@ -602,7 +617,9 @@ const handlers = {
       await postPrivateReply(
         event,
         event.user,
-        'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+        ctx.externalSlackConnect
+          ? 'No account connected.'
+          : 'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
       )
       return
     }
@@ -750,7 +767,9 @@ const handlers = {
       await postPrivateReply(
         event,
         event.user,
-        'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+        ctx.externalSlackConnect
+          ? 'No account connected.'
+          : 'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
       )
       return
     }
@@ -861,7 +880,9 @@ const handlers = {
       await postPrivateReply(
         event,
         event.user,
-        'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+        ctx.externalSlackConnect
+          ? 'No account connected.'
+          : 'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
       )
       return
     }
@@ -1297,6 +1318,7 @@ const commandNames = [
   'status',
 ] as const
 const commandPattern = new RegExp(`^(${commandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
+const slackConnectExternalCommandNames = ['connect', 'disconnect', 'status'] as const
 const actionNames = ['config_edit', 'connect_cancel', 'confirm_cancel', 'confirm_tip'] as const
 const modalSubmitNames = ['config_edit'] as const
 const tokenOptions = [
@@ -1311,13 +1333,23 @@ const workspaceSettingsAccountAddressAllowlist = [
   '0x00ec0495bb6d03a32d75c460ca2f2a9e53654348',
 ] as const
 
+function isSlackConnectExternalCommand(
+  value: string,
+): value is (typeof slackConnectExternalCommandNames)[number] {
+  return slackConnectExternalCommandNames.includes(
+    value as (typeof slackConnectExternalCommandNames)[number],
+  )
+}
+
 type HandlerContext = {
+  allowUninstalledWorkspaceCreate?: boolean
   defaultTip?: {
     idempotencyKey: string
     insufficientFundsThreadTs?: string
     mention?: boolean
   }
   db: DB.Type
+  externalSlackConnect?: boolean
   provider: ProviderContext
   text: string
   threadTs?: string
@@ -1703,7 +1735,7 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
       provider.id,
       event.item.channel,
       event.user,
-      `Tipbot isn't installed in your Slack workspace yet. Ask an admin to install Tipbot there, then try again.`,
+      `Tipbot can connect your account here, but payments in Slack Connect channels aren’t supported yet unless you install the Tipbot app to your workspace.`,
     )
     return
   }
@@ -2102,8 +2134,17 @@ async function isExternalSlackConnectActor(
   channelId: string,
   providerUserId: string,
 ) {
+  const actor = await resolveSlackConnectActor(providerId, channelId, providerUserId)
+  return actor.blocked || actor.external
+}
+
+async function resolveSlackConnectActor(
+  providerId: string,
+  channelId: string,
+  providerUserId: string,
+) {
   const installation = await getSlack().getInstallation(providerId)
-  if (!installation) return false
+  if (!installation) return { blocked: false as const, external: false as const }
 
   const channelBody = new URLSearchParams()
   channelBody.set('channel', channelId)
@@ -2132,7 +2173,8 @@ async function isExternalSlackConnectActor(
     channel.channel?.is_ext_shared ||
     channel.channel?.is_shared ||
     channel.channel?.shared_team_ids?.some((teamId) => teamId !== channel.channel?.context_team_id)
-  if (!channel.ok || !channel.channel || !isSharedChannel) return false
+  if (!channel.ok || !channel.channel || !isSharedChannel)
+    return { blocked: false as const, external: false as const }
 
   const userBody = new URLSearchParams()
   userBody.set('user', providerUserId)
@@ -2154,10 +2196,12 @@ async function isExternalSlackConnectActor(
     }),
     await userResponse.json(),
   )
-  if (!info.ok || !info.user?.team_id) return false
+  if (!info.ok || !info.user?.team_id) return { blocked: true as const, external: false as const }
 
   const localTeamIds = new Set([providerId, channel.channel.context_team_id].filter(Boolean))
-  return !localTeamIds.has(info.user.team_id)
+  if (localTeamIds.has(info.user.team_id))
+    return { blocked: false as const, external: false as const }
+  return { blocked: false as const, external: true as const, providerId: info.user.team_id }
 }
 
 function getProvider(event: chat.SlashCommandEvent): ProviderContext {
@@ -2570,12 +2614,38 @@ async function postSlackInsufficientFunds(event: TipEvent, ctx: HandlerContext, 
 }
 
 async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
-  const workspace = await ctx.db
-    .selectFrom('workspace')
-    .selectAll()
-    .where('provider', '=', ctx.provider.type)
-    .where('provider_id', '=', ctx.provider.id)
-    .executeTakeFirst()
+  const workspace =
+    (await ctx.db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', ctx.provider.type)
+      .where('provider_id', '=', ctx.provider.id)
+      .executeTakeFirst()) ??
+    (ctx.allowUninstalledWorkspaceCreate
+      ? await (async () => {
+          const now = new Date().toISOString()
+          await ctx.db
+            .insertInto('workspace')
+            .values({
+              created_at: now,
+              default_amount: 1000,
+              id: Nanoid.generate(),
+              installed_at: null,
+              provider: ctx.provider.type,
+              provider_id: ctx.provider.id,
+              uninstalled_at: null,
+              updated_at: now,
+            })
+            .onConflict((oc) => oc.columns(['provider', 'provider_id']).doNothing())
+            .execute()
+          return await ctx.db
+            .selectFrom('workspace')
+            .selectAll()
+            .where('provider', '=', ctx.provider.type)
+            .where('provider_id', '=', ctx.provider.id)
+            .executeTakeFirst()
+        })()
+      : null)
   if (!workspace) {
     await postPrivateReply(
       event,
@@ -2611,6 +2681,16 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
         updated_at: createdAt,
       })
       .execute()
+      .catch((error) => {
+        if (!isUniqueConstraintError(error)) throw error
+      })
+    const identity = await ctx.db
+      .selectFrom('provider_identity')
+      .select('id')
+      .where('provider', '=', workspace.provider)
+      .where('provider_workspace_id', '=', workspace.provider_id)
+      .where('provider_user_id', '=', event.user.userId)
+      .executeTakeFirstOrThrow()
     await ctx.db
       .insertInto('member')
       .values({
@@ -2618,16 +2698,18 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
         id,
         login: null,
         name: null,
-        provider_identity_id: providerIdentityId,
+        provider_identity_id: identity.id,
         provider_user_id: event.user.userId,
         updated_at: createdAt,
         workspace_id: workspace.id,
       })
+      .onConflict((oc) => oc.columns(['workspace_id', 'provider_user_id']).doNothing())
       .execute()
     member = await ctx.db
       .selectFrom('member')
       .selectAll()
-      .where('id', '=', id)
+      .where('workspace_id', '=', workspace.id)
+      .where('provider_user_id', '=', event.user.userId)
       .executeTakeFirstOrThrow()
   }
 
