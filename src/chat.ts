@@ -73,7 +73,8 @@ export function getChat() {
     const installation = await getSlack().getInstallation(providerId)
     if (!installation?.botUserId) throw new Error('Slack app installation missing bot user id.')
 
-    const event = { channel: thread.channel, user: message.author } satisfies TipEvent
+    const threadTs = raw.thread_ts ?? raw.ts
+    const event = { channel: thread.channel, threadTs, user: message.author } satisfies TipEvent
     if (await isExternalSlackConnectActor(providerId, raw.channel, raw.user)) {
       await postPrivateReply(
         event,
@@ -83,12 +84,12 @@ export function getChat() {
       return
     }
 
-    const threadTs = raw.thread_ts ?? raw.ts
     const mentionText = normalizeSlackMentionText(raw.text, installation.botUserId)
     const context = {
       db: DB.create(env.DB),
       provider: { id: providerId, type: 'slack' },
       text: parseSlackMentionTipText(mentionText) ?? '',
+      threadTs,
     } satisfies HandlerContext
 
     if (mentionText.toLowerCase() === 'introduce yourself') {
@@ -126,7 +127,7 @@ export function getChat() {
     const match = mentionText.match(commandPattern)
     if (match) {
       const name = z.parse(z.enum(commandNames), match[1])
-      await handlers[name](event, { ...context, text: match[2]?.trim() ?? '', threadTs })
+      await handlers[name](event, { ...context, text: match[2]?.trim() ?? '' })
       return
     }
 
@@ -153,7 +154,6 @@ export function getChat() {
         insufficientFundsThreadTs: raw.thread_ts,
         mention: true,
       },
-      threadTs,
     })
   })
   bot.onReaction(async (event) => {
@@ -657,6 +657,7 @@ const handlers = {
       event.channel.id.replace(/^slack:/, ''),
       event.user.userId,
       body,
+      { threadTs: ctx.threadTs },
     )
   },
   async leaderboard(event, ctx) {
@@ -688,7 +689,10 @@ const handlers = {
       workspaceId: workspace.id,
     })
     if (received.length === 0 && sent.length === 0) {
-      await event.channel.post('No confirmed tips yet.')
+      const channel = ctx.threadTs
+        ? getChat().channel(`slack:${getSlackChannelId(event.channel.id)}:${ctx.threadTs}`)
+        : event.channel
+      await channel.post('No confirmed tips yet.')
       return
     }
 
@@ -754,6 +758,7 @@ const handlers = {
     )
     body.set('unfurl_links', 'false')
     body.set('unfurl_media', 'false')
+    if (ctx.threadTs) body.set('thread_ts', ctx.threadTs)
     const response = await getSlack().withBotToken(installation.botToken, () =>
       fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
         body,
@@ -1347,6 +1352,7 @@ type ProviderContext = { id: string; type: 'slack' }
 
 type TipEvent = {
   channel: chat.Channel
+  threadTs?: string
   user: chat.Author
 }
 
@@ -1784,12 +1790,14 @@ async function postSlackPrivateReply(
   channelId: string,
   userId: string,
   body: URLSearchParams,
+  options: { threadTs?: string } = {},
 ) {
   const installation = await getSlack().getInstallation(providerId)
   if (!installation) return
 
   const method = isSlackDMChannelId(channelId) ? 'chat.postMessage' : 'chat.postEphemeral'
   if (method === 'chat.postEphemeral') body.set('user', userId)
+  if (options.threadTs && method === 'chat.postEphemeral') body.set('thread_ts', options.threadTs)
   const response = await getSlack().withBotToken(installation.botToken, () =>
     fetch(`${env.SLACK_API_URL}/${method}`, {
       body,
@@ -2146,6 +2154,7 @@ async function postInvalidUsage(
     event.channel.id.replace(/^slack:/, ''),
     event.user.userId,
     body,
+    { threadTs: options.threadTs ?? event.threadTs },
   )
 }
 
@@ -2274,6 +2283,7 @@ async function postSlackInsufficientFunds(event: TipEvent, ctx: HandlerContext, 
     event.channel.id.replace(/^slack:/, ''),
     event.user.userId,
     body,
+    { threadTs: ctx.threadTs },
   )
 }
 
@@ -2365,7 +2375,7 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
           (workspace.default_token_address ?? Tempo.addressLookup.pathUsd).toLowerCase(),
     )
     if (accessKey) {
-      await postPrivateReply(event, event.user, 'Already connected')
+      await postPrivateReply(event, event.user, 'Already connected', { threadTs: ctx.threadTs })
       return
     }
   }
@@ -2403,35 +2413,49 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
     })
     .execute()
 
-  await postPrivateReply(event, event.user, {
-    card: chat.Card({
-      children: [
-        chat.Actions([
-          chat.LinkButton({ label: linkButtonLabel, style: 'primary', url: linkUrl }),
-          chat.Button({ id: 'connect_cancel', label: 'Cancel' }),
-        ]),
-        chat.CardText(`${linkDescription} ${linkUrl}`, { style: 'muted' }),
-      ],
-    }),
-    fallbackText: linkText,
-  })
+  await postPrivateReply(
+    event,
+    event.user,
+    {
+      card: chat.Card({
+        children: [
+          chat.Actions([
+            chat.LinkButton({ label: linkButtonLabel, style: 'primary', url: linkUrl }),
+            chat.Button({ id: 'connect_cancel', label: 'Cancel' }),
+          ]),
+          chat.CardText(`${linkDescription} ${linkUrl}`, { style: 'muted' }),
+        ],
+      }),
+      fallbackText: linkText,
+    },
+    { threadTs: ctx.threadTs },
+  )
 }
 
 async function postPrivateReply(
   event: TipEvent,
   user: chat.Author,
   message: Parameters<TipEvent['channel']['postEphemeral']>[1],
+  options: { threadTs?: string } = {},
 ) {
+  const threadTs = options.threadTs ?? event.threadTs
   if (isSlackDMChannelId(event.channel.id)) {
     await event.channel.post(message)
     return
   }
 
-  await event.channel.postEphemeral(user, message, { fallbackToDM: false })
+  const channel = threadTs
+    ? getChat().channel(`slack:${getSlackChannelId(event.channel.id)}:${threadTs}`)
+    : event.channel
+  await channel.postEphemeral(user, message, { fallbackToDM: false })
 }
 
 function isSlackDMChannelId(channelId: string) {
-  return channelId.replace(/^slack:/, '').startsWith('D')
+  return getSlackChannelId(channelId).startsWith('D')
+}
+
+function getSlackChannelId(channelId: string) {
+  return channelId.replace(/^slack:/, '').split(':')[0] ?? ''
 }
 
 async function postSlackReceiptMessage(
@@ -2706,6 +2730,7 @@ async function postConfigEphemeral(
     event.channel.id.replace(/^slack:/, ''),
     event.user.userId,
     body,
+    { threadTs: ctx.threadTs },
   )
 }
 

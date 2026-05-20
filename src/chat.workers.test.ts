@@ -758,7 +758,26 @@ test('@Tipbot mention supports connect command for local workspace accounts', as
 
   expect(response.status).toBe(200)
   expect(token).toEqual(expect.any(Object))
-  await expectSlackMessage('Link expires in 10 minutes.')
+  await expectSlackThreadMessage(messageTs, 'Link expires in 10 minutes.', { wait: true })
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention supports connect command from thread', async () => {
+  const parent = await memberSlack.chat.postMessage({
+    channel: Constants.slack.channelId,
+    text: 'connect from this thread',
+  })
+  if (!parent.ts) throw new Error('Expected Slack parent message timestamp.')
+  const messageTs = `1700000020.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> connect`,
+    threadTs: parent.ts,
+    userId: unconnectedProviderUserId,
+  })
+
+  expect(response.status).toBe(200)
+  await expectSlackThreadMessage(parent.ts, 'Link expires in 10 minutes.', { wait: true })
 }, 20_000) // 20 seconds
 
 test('@Tipbot mention supports connect command for single channel guests', async () => {
@@ -784,7 +803,7 @@ test('@Tipbot mention supports connect command for single channel guests', async
   })
   expect(response.status).toBe(200)
   expect(token).toEqual(expect.any(Object))
-  await expectSlackMessage('Link expires in 10 minutes.')
+  await expectSlackThreadMessage(messageTs, 'Link expires in 10 minutes.', { wait: true })
 }, 20_000) // 20 seconds
 
 test('@Tipbot mention connect link completion connects local workspace account', async () => {
@@ -795,7 +814,7 @@ test('@Tipbot mention connect link completion connects local workspace account',
     text: `<@${Constants.slack.botUserId}> connect`,
     userId: unconnectedProviderUserId,
   })
-  const token = await getLatestConnectToken()
+  const token = await getLatestConnectToken(messageTs)
   const link = await db
     .selectFrom('account_link_token')
     .innerJoin('member', 'member.id', 'account_link_token.member_id')
@@ -851,13 +870,13 @@ test('@Tipbot mention supports help command', async () => {
   })
 
   expect(response.status).toBe(200)
-  await expectSlackMessage('@Tipbot balance')
-  await expectSlackMessage('@Tipbot connect')
-  await expectSlackMessage('@Tipbot disconnect')
-  await expectSlackMessage('@Tipbot leaderboard')
-  await expectSlackMessage('@Tipbot stats')
-  await expectSlackMessage('@Tipbot status')
-  await expectSlackMessage('@Tipbot @account for coffee')
+  await expectSlackThreadMessage(messageTs, '@Tipbot balance', { wait: true })
+  await expectSlackThreadMessage(messageTs, '@Tipbot connect')
+  await expectSlackThreadMessage(messageTs, '@Tipbot disconnect')
+  await expectSlackThreadMessage(messageTs, '@Tipbot leaderboard')
+  await expectSlackThreadMessage(messageTs, '@Tipbot stats')
+  await expectSlackThreadMessage(messageTs, '@Tipbot status')
+  await expectSlackThreadMessage(messageTs, '@Tipbot @account for coffee')
 })
 
 test('@Tipbot mention supports disconnect command for local workspace accounts', async () => {
@@ -879,7 +898,7 @@ test('@Tipbot mention supports disconnect command for local workspace accounts',
 
   expect(response.status).toBe(200)
   expect(member.account_id).toBeNull()
-  await expectSlackMessage('Disconnected')
+  await expectSlackThreadMessage(messageTs, 'Disconnected', { wait: true })
 })
 
 test.each([
@@ -926,7 +945,14 @@ test.each([
     expect(accountLinkTokens).toEqual([])
     expect(members).toEqual([])
     expect(tips).toEqual([])
-    await expectSlackMessage("Tipbot isn't installed in your Slack workspace yet.", { channelId })
+    await expectSlackThreadMessage(
+      messageTs,
+      "Tipbot isn't installed in your Slack workspace yet.",
+      {
+        channelId,
+        wait: true,
+      },
+    )
   },
   20_000,
 )
@@ -1372,7 +1398,9 @@ test('@Tipbot mention shows confirmation action when approval is required', asyn
   })
 
   expect(response.status).toBe(200)
-  await expectSlackMessage('Tipbot needs your approval to send this payment.')
+  await expectSlackThreadMessage(messageTs, 'Tipbot needs your approval to send this payment.', {
+    wait: true,
+  })
   await expectSlackThreadMessageNotContaining(messageTs, 'Receipt')
 }, 20_000) // 20 seconds
 
@@ -1402,7 +1430,7 @@ test('@Tipbot mention shows add funds action when sender has insufficient funds'
       return (
         url.endsWith('/chat.postEphemeral') &&
         params.get('text')?.includes('Payment not sent. Your wallet has insufficient funds.') &&
-        !params.has('thread_ts')
+        params.get('thread_ts') === messageTs
       )
     }),
   ).toBe(true)
@@ -1464,7 +1492,7 @@ test('@Tipbot mention clears assistant status after payment failure', async () =
   })
 
   expect(response.status).toBe(200)
-  await expectSlackMessage('Payment failed.')
+  await expectSlackThreadMessage(messageTs, 'Payment failed.', { wait: true })
   await expectSlackAssistantStatusCall(fetchSpy, messageTs, '')
   handleTipRequest.mockRestore()
   fetchSpy.mockRestore()
@@ -1488,7 +1516,7 @@ test('@Tipbot mention explains memo length failures', async () => {
   expect(response.status).toBe(200)
   expect(handleTipRequest).not.toHaveBeenCalled()
   expect(aiRunMock).toHaveBeenCalledOnce()
-  await expectSlackMessage('Try: `best pages internet`.')
+  await expectSlackThreadMessage(messageTs, 'Try: `best pages internet`.', { wait: true })
   await expectSlackAssistantStatusCall(fetchSpy, messageTs, '')
   handleTipRequest.mockRestore()
   fetchSpy.mockRestore()
@@ -1511,8 +1539,10 @@ test('@Tipbot mention omits memo suggestion when AI returns an invalid memo', as
 
   expect(response.status).toBe(200)
   expect(aiRunMock).toHaveBeenCalledOnce()
-  await expectSlackMessage('Payment not sent. Memo must be at most 32 bytes')
-  await expectSlackMessageNotContaining('Try:')
+  await expectSlackThreadMessage(messageTs, 'Payment not sent. Memo must be at most 32 bytes', {
+    wait: true,
+  })
+  await expectSlackThreadMessageNotContaining(messageTs, 'Try:')
   await expectSlackAssistantStatusCall(fetchSpy, messageTs, '')
   handleTipRequest.mockRestore()
   fetchSpy.mockRestore()
@@ -3617,8 +3647,10 @@ async function getLatestConfirmToken() {
   return token
 }
 
-async function getLatestConnectToken() {
-  const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+async function getLatestConnectToken(threadTs?: string) {
+  const history = threadTs
+    ? await slack.conversations.replies({ channel: Constants.slack.channelId, ts: threadTs })
+    : await slack.conversations.history({ channel: Constants.slack.channelId })
   const message = history.messages?.find((message) => message.text?.includes('/connect/'))
   const token = message?.text?.match(/\/connect\/([A-Za-z0-9_-]+)/)?.[1]
   if (!token) throw new Error('Expected connection token in Slack message.')
