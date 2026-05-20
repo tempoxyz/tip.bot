@@ -90,7 +90,10 @@ function ConnectPanel(props: {
       }
 
       const result = (await connect.connectAsync({
-        capabilities: { authorizeAccessKey: getAuthorizeAccessKey(data) },
+        capabilities: {
+          authorizeAccessKey: getAuthorizeAccessKey(data),
+          showDeposit: { amount: '1', token: 'USDC.e' },
+        },
         chainId: data.chainId,
         connector,
         withCapabilities: true,

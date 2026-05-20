@@ -99,8 +99,11 @@ function ConfirmPanel(props: {
         const result = (await connect.connectAsync({
           capabilities:
             data.kind === 'reusable_access_key'
-              ? { authorizeAccessKey: getAuthorizeAccessKey(data) }
-              : { method: 'register' },
+              ? {
+                  authorizeAccessKey: getAuthorizeAccessKey(data),
+                  showDeposit: { amount: '1', token: 'USDC.e' },
+                }
+              : { method: 'register', showDeposit: { amount: '1', token: 'USDC.e' } },
           chainId: data.chainId,
           connector,
           withCapabilities: true,
