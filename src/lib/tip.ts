@@ -236,6 +236,7 @@ export async function handleTipBatchRequest(
     skippedRecipients?: TipSkippedRecipient[]
     source: 'command' | 'mention' | 'reaction'
     tokenAddress?: string
+    usergroupId?: string
     usergroupLabel?: string
   },
 ): Promise<TipBatchResult> {
@@ -366,6 +367,7 @@ export async function handleTipBatchRequest(
         recipients,
         senderProviderUserId: input.senderProviderUserId,
         skippedRecipients: input.skippedRecipients,
+        usergroupId: input.usergroupId,
         usergroupLabel: input.usergroupLabel,
       },
       workspace,
@@ -396,6 +398,7 @@ export async function handleTipBatchRequest(
     skippedRecipients: input.skippedRecipients,
     source: input.source,
     tokenAddress,
+    usergroupId: input.usergroupId,
     usergroupLabel: input.usergroupLabel,
     workspace,
   })
@@ -737,6 +740,7 @@ export async function confirmTipRequest(
       skippedRecipients: payload.skippedRecipients,
       source: 'command',
       tokenAddress: Address.checksum(payload.tokenAddress),
+      usergroupId: payload.groupId,
       usergroupLabel: payload.groupLabel,
       workspace,
     })
@@ -984,6 +988,7 @@ async function createConfirmationRequired(
     recipients?: TipRecipientInput[]
     senderProviderUserId: string
     skippedRecipients?: TipSkippedRecipient[]
+    usergroupId?: string
     usergroupLabel?: string
   },
   workspace: Database.Selectable.workspace,
@@ -1006,6 +1011,7 @@ async function createConfirmationRequired(
       : {}),
     ...(input.recipients ? { recipients: input.recipients } : {}),
     ...(input.skippedRecipients?.length ? { skippedRecipients: input.skippedRecipients } : {}),
+    ...(input.usergroupId ? { groupId: input.usergroupId } : {}),
     ...(input.usergroupLabel ? { groupLabel: input.usergroupLabel } : {}),
     amount,
     chainId: workspace.chain_id,
@@ -1056,6 +1062,7 @@ async function submitTipBatch(
     skippedRecipients?: TipSkippedRecipient[]
     source: 'command' | 'mention' | 'reaction'
     tokenAddress: string
+    usergroupId?: string
     usergroupLabel?: string
     workspace: Database.Selectable.workspace
   },

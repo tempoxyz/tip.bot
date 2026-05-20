@@ -367,6 +367,7 @@ const actions = {
       skippedRecipients: pending.skippedRecipients,
       source: pending.source,
       tokenAddress: pending.tokenAddress,
+      usergroupId: pending.usergroupId,
       usergroupLabel: pending.usergroupLabel,
     }).catch(
       (error) =>
@@ -1116,6 +1117,7 @@ const handlers = {
         skippedRecipients: plan.skippedRecipients,
         source: options.mention ? 'mention' : 'command',
         tokenAddress: tokenAddress ?? undefined,
+        usergroupId: plan.usergroupId,
         usergroupLabel: plan.usergroupLabel,
       })
       return
@@ -1129,7 +1131,7 @@ const handlers = {
       })
     try {
       const result = await (
-        plan.recipients.length === 1 && !plan.usergroupLabel
+        plan.recipients.length === 1 && !plan.usergroupId
           ? Tip.handleTipRequest(env, {
               amount: parsed.amount,
               idempotencyKey: options.idempotencyKey,
@@ -1157,6 +1159,7 @@ const handlers = {
               skippedRecipients: plan.skippedRecipients,
               source: options.mention ? 'mention' : 'command',
               tokenAddress: tokenAddress ?? undefined,
+              usergroupId: plan.usergroupId,
               usergroupLabel: plan.usergroupLabel,
             })
       ).catch(
@@ -1171,6 +1174,7 @@ const handlers = {
       if (result.ok && result.status === 'sent' && 'recipients' in result) {
         await postTipResult(event, ctx, result, {
           skippedRecipients: plan.skippedRecipients,
+          usergroupId: plan.usergroupId,
           usergroupLabel: plan.usergroupLabel,
         })
       } else if (result.ok && result.status === 'sent' && !('recipients' in result)) {
@@ -1350,6 +1354,7 @@ type PendingSlackTip = {
   skippedRecipients?: Tip.TipSkippedRecipient[]
   source: 'command' | 'mention' | 'reaction'
   tokenAddress?: string
+  usergroupId?: string
   usergroupLabel?: string
 }
 
@@ -1412,6 +1417,7 @@ async function resolveSlackTipPlan(
       previewRequired: boolean
       recipients: Tip.TipRecipientInput[]
       skippedRecipients: Tip.TipSkippedRecipient[]
+      usergroupId?: string
       usergroupLabel?: string
     }
   | { message: string; ok: false }
@@ -1513,11 +1519,10 @@ async function resolveSlackTipPlan(
   }
 
   if (recipients.length === 0) {
-    const usergroupLabel =
-      parsed.usergroups?.[0]?.providerUsergroupLabel ?? parsed.usergroups?.[0]?.providerUsergroupId
+    const usergroup = parsed.usergroups?.[0]
     return {
-      message: usergroupLabel
-        ? `Payment not sent. None of the members of @${usergroupLabel} are connected to Tipbot yet.`
+      message: usergroup
+        ? `Payment not sent. None of the members of ${formatSlackUsergroupMention(usergroup.providerUsergroupId, usergroup.providerUsergroupLabel)} are connected to Tipbot yet.`
         : 'Payment not sent. None of the mentioned accounts are connected to Tipbot yet.',
       ok: false,
     }
@@ -1539,8 +1544,8 @@ async function resolveSlackTipPlan(
       groupPreviewRequired || (!parsed.usergroups?.length && skippedRecipients.length > 0),
     recipients,
     skippedRecipients,
-    usergroupLabel:
-      parsed.usergroups?.[0]?.providerUsergroupLabel ?? parsed.usergroups?.[0]?.providerUsergroupId,
+    usergroupId: parsed.usergroups?.[0]?.providerUsergroupId,
+    usergroupLabel: parsed.usergroups?.[0]?.providerUsergroupLabel,
   }
 }
 
@@ -2374,6 +2379,10 @@ function parseSlackMentionTipText(text: string) {
   return text.slice(target.index).trim()
 }
 
+function formatSlackUsergroupMention(usergroupId: string, usergroupLabel?: string) {
+  return `<!subteam^${usergroupId}${usergroupLabel ? `|@${usergroupLabel}` : ''}>`
+}
+
 function hasInvalidMentionIntent(text: string) {
   return /\b(connect|configure|get started|install|link|mine|set ?up|start|tip|send|pay|sent|paid|for|thank you|thanks|ty|thx|thank u|creature|creatures|dragon|dragons|elf|elves|fae|fairy|goblin|goblins|gnome|gnomes|gremlin|gremlins|kobold|kobolds|monster|monsters|orc|orcs|troll|trolls)\b/i.test(
     text,
@@ -2759,7 +2768,7 @@ async function postSlackTipPreview(
       children: [
         chat.CardText(
           [
-            `You’re about to tip ${pending.usergroupLabel ? `@${pending.usergroupLabel} ` : ''}${pending.recipients.length} accounts ${pending.amountText} each${pending.memo ? ` for ${pending.memo}` : ''}.`,
+            `You’re about to tip ${pending.usergroupId ? `${formatSlackUsergroupMention(pending.usergroupId, pending.usergroupLabel)} ` : ''}${pending.recipients.length} accounts ${pending.amountText} each${pending.memo ? ` for ${pending.memo}` : ''}.`,
             ...(totalAmount ? [`Total: ${totalAmount}`] : []),
             '',
             '*Recipients:*',
@@ -2783,7 +2792,11 @@ async function postTipResult(
   event: TipEvent,
   ctx: HandlerContext,
   result: Tip.TipBatchResult,
-  options: { skippedRecipients?: Tip.TipSkippedRecipient[]; usergroupLabel?: string } = {},
+  options: {
+    skippedRecipients?: Tip.TipSkippedRecipient[]
+    usergroupId?: string
+    usergroupLabel?: string
+  } = {},
 ) {
   if (!result.ok) {
     if (result.code === 'confirmation_required' && result.confirmUrl) {
@@ -2842,7 +2855,7 @@ async function postTipResult(
     await postSlackReceiptMessage(
       event,
       ctx,
-      `${event.channel.mentionUser(result.senderProviderUserId)} ${result.memo ? 'sent' : 'tipped'} ${options.usergroupLabel ? `@${options.usergroupLabel} ` : ''}${result.recipients.length} accounts ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${[
+      `${event.channel.mentionUser(result.senderProviderUserId)} ${result.memo ? 'sent' : 'tipped'} ${options.usergroupId ? `${formatSlackUsergroupMention(options.usergroupId, options.usergroupLabel)} ` : ''}${result.recipients.length} accounts ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${[
         ...result.recipients.map(
           (recipient) => `• ${event.channel.mentionUser(recipient.recipientProviderUserId)}`,
         ),

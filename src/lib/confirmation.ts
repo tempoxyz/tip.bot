@@ -7,6 +7,7 @@ export const payloadSchema = z.object({
   amount: z.number().int().positive(),
   chainId: z.number().int().positive(),
   expiresAt: z.string().min(1),
+  groupId: z.string().min(1).optional(),
   groupLabel: z.string().min(1).optional(),
   idempotencyKey: z.string().min(1),
   kind: z.enum(['reusable_access_key', 'onetime_payment']),
