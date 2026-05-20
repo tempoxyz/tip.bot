@@ -60,6 +60,7 @@ export type TipBatchResult =
       ok: true
       recipients: Array<{ recipientProviderLabel?: string; recipientProviderUserId: string }>
       senderProviderUserId: string
+      skippedRecipients?: TipSkippedRecipient[]
       status: 'duplicate' | 'sent'
       tokenCurrency: string
       tokenSymbol: string
@@ -72,6 +73,19 @@ export type TipRecipientInput = {
   recipientProviderUserId: string
   recipientProviderWorkspaceId?: string
 }
+
+export type TipSkippedRecipient = {
+  reason: 'not_connected' | 'you'
+  recipientProviderLabel?: string
+  recipientProviderUserId: string
+}
+
+export type TipUsergroupInput = {
+  providerUsergroupId: string
+  providerUsergroupLabel?: string
+}
+
+export const maxTipBatchRecipients = 100
 
 export async function handleTipRequest(
   env: Env,
@@ -219,8 +233,11 @@ export async function handleTipBatchRequest(
     providerThreadId?: string
     recipients: TipRecipientInput[]
     senderProviderUserId: string
+    skippedRecipients?: TipSkippedRecipient[]
     source: 'command' | 'mention' | 'reaction'
     tokenAddress?: string
+    usergroupId?: string
+    usergroupLabel?: string
   },
 ): Promise<TipBatchResult> {
   const db = DB.create(env.DB)
@@ -252,11 +269,15 @@ export async function handleTipBatchRequest(
         .where('id', '=', id)
         .executeTakeFirstOrThrow()
     })())
-  const recipients = input.recipients.slice(0, 20)
+  const recipients = input.recipients.slice(0, maxTipBatchRecipients)
   if (input.recipients.length === 0)
     return { code: 'failed', message: 'Payment must have at least one recipient.', ok: false }
-  if (input.recipients.length > 20)
-    return { code: 'failed', message: 'Multi-tip supports up to 20 recipients.', ok: false }
+  if (input.recipients.length > maxTipBatchRecipients)
+    return {
+      code: 'failed',
+      message: `Multi-tip supports up to ${maxTipBatchRecipients} recipients.`,
+      ok: false,
+    }
   if (
     recipients.some(
       (recipient) =>
@@ -345,6 +366,9 @@ export async function handleTipBatchRequest(
         recipientProviderWorkspaceId: recipients[0]?.recipientProviderWorkspaceId,
         recipients,
         senderProviderUserId: input.senderProviderUserId,
+        skippedRecipients: input.skippedRecipients,
+        usergroupId: input.usergroupId,
+        usergroupLabel: input.usergroupLabel,
       },
       workspace,
       amount,
@@ -371,8 +395,11 @@ export async function handleTipBatchRequest(
     recipients,
     sender,
     senderProviderUserId: input.senderProviderUserId,
+    skippedRecipients: input.skippedRecipients,
     source: input.source,
     tokenAddress,
+    usergroupId: input.usergroupId,
+    usergroupLabel: input.usergroupLabel,
     workspace,
   })
 }
@@ -462,22 +489,36 @@ export function parseTipText(value: string, options: { chainId?: number } = {}) 
 export function parseTipBatchText(value: string, options: { chainId?: number } = {}) {
   const text = value.trim()
   const recipients: TipRecipientInput[] = []
+  const usergroups: TipUsergroupInput[] = []
   let remaining = text
   for (;;) {
     const mention = remaining.match(/^<@([A-Z0-9_]+)(?:\|([^>]+))?>\s*/)
-    if (!mention) break
-    if (!recipients.some((recipient) => recipient.recipientProviderUserId === mention[1]))
-      recipients.push({
-        ...(mention[2]?.trim() ? { recipientProviderLabel: mention[2].trim() } : {}),
-        recipientProviderUserId: mention[1]!,
+    if (mention) {
+      if (!recipients.some((recipient) => recipient.recipientProviderUserId === mention[1]))
+        recipients.push({
+          ...(mention[2]?.trim() ? { recipientProviderLabel: mention[2].trim() } : {}),
+          recipientProviderUserId: mention[1]!,
+        })
+      remaining = remaining.slice(mention[0].length)
+      continue
+    }
+
+    const usergroup = remaining.match(/^<!subteam\^([A-Z0-9_]+)(?:\|([^>]+))?>\s*/)
+    if (!usergroup) break
+    if (!usergroups.some((item) => item.providerUsergroupId === usergroup[1]))
+      usergroups.push({
+        ...(usergroup[2]?.trim()
+          ? { providerUsergroupLabel: usergroup[2].trim().replace(/^@+/, '') }
+          : {}),
+        providerUsergroupId: usergroup[1]!,
       })
-    remaining = remaining.slice(mention[0].length)
+    remaining = remaining.slice(usergroup[0].length)
   }
-  if (recipients.length === 0) return null
-  if (/<@[A-Z0-9_]+(?:\|[^>]+)?>/.test(remaining)) return null
+  if (recipients.length === 0 && usergroups.length === 0) return null
+  if (/<@[A-Z0-9_]+(?:\|[^>]+)?>|<!subteam\^[A-Z0-9_]+(?:\|[^>]+)?>/.test(remaining)) return null
 
   const parsed = parseTipText(
-    `<@${recipients[0]!.recipientProviderUserId}${recipients[0]!.recipientProviderLabel ? `|${recipients[0]!.recipientProviderLabel}` : ''}> ${remaining}`,
+    `<@${recipients[0]?.recipientProviderUserId ?? 'U000000000'}${recipients[0]?.recipientProviderLabel ? `|${recipients[0].recipientProviderLabel}` : ''}> ${remaining}`,
     options,
   )
   if (!parsed) return null
@@ -486,6 +527,7 @@ export function parseTipBatchText(value: string, options: { chainId?: number } =
     memo: parsed.memo,
     recipients,
     token: parsed.token,
+    ...(usergroups.length ? { usergroups } : {}),
   }
 }
 
@@ -695,8 +737,11 @@ export async function confirmTipRequest(
       recipients,
       sender,
       senderProviderUserId: payload.senderProviderUserId,
+      skippedRecipients: payload.skippedRecipients,
       source: 'command',
       tokenAddress: Address.checksum(payload.tokenAddress),
+      usergroupId: payload.groupId,
+      usergroupLabel: payload.groupLabel,
       workspace,
     })
 
@@ -942,6 +987,9 @@ async function createConfirmationRequired(
     recipientProviderWorkspaceId?: string
     recipients?: TipRecipientInput[]
     senderProviderUserId: string
+    skippedRecipients?: TipSkippedRecipient[]
+    usergroupId?: string
+    usergroupLabel?: string
   },
   workspace: Database.Selectable.workspace,
   amount: number,
@@ -962,6 +1010,9 @@ async function createConfirmationRequired(
         }
       : {}),
     ...(input.recipients ? { recipients: input.recipients } : {}),
+    ...(input.skippedRecipients?.length ? { skippedRecipients: input.skippedRecipients } : {}),
+    ...(input.usergroupId ? { groupId: input.usergroupId } : {}),
+    ...(input.usergroupLabel ? { groupLabel: input.usergroupLabel } : {}),
     amount,
     chainId: workspace.chain_id,
     expiresAt,
@@ -1008,8 +1059,11 @@ async function submitTipBatch(
     recipients: TipRecipientInput[]
     sender: ConnectedMember
     senderProviderUserId: string
+    skippedRecipients?: TipSkippedRecipient[]
     source: 'command' | 'mention' | 'reaction'
     tokenAddress: string
+    usergroupId?: string
+    usergroupLabel?: string
     workspace: Database.Selectable.workspace
   },
 ): Promise<TipBatchResult> {
@@ -1081,7 +1135,14 @@ async function submitTipBatch(
         workspace_id: input.workspace.id,
       })
       .execute()
-    if (tipRows.length) await db.insertInto('tip').values(tipRows).execute()
+    for (let index = 0; index < tipRows.length; index += 4) {
+      // D1 has a low SQL variable limit; each tip row has many columns, so keep multi-row inserts
+      // small even when a group tip has up to 100 paid recipients.
+      await db
+        .insertInto('tip')
+        .values(tipRows.slice(index, index + 4))
+        .execute()
+    }
   } catch (error) {
     if (!isUniqueConstraintError(error)) throw error
     const existing = await getExistingTipBatchResult(env, db, input, input.tokenAddress)
@@ -1197,6 +1258,7 @@ async function submitTipBatch(
       ok: true,
       recipients: input.recipients,
       senderProviderUserId: input.senderProviderUserId,
+      skippedRecipients: input.skippedRecipients,
       status: 'sent',
       tokenCurrency: tokenMetadata.currency,
       tokenSymbol: tokenMetadata.symbol,
@@ -1439,6 +1501,7 @@ async function submitSignedTipBatch(
       ok: true,
       recipients: input.recipients,
       senderProviderUserId: input.payload.senderProviderUserId,
+      skippedRecipients: input.payload.skippedRecipients,
       status: 'sent',
       tokenCurrency: tokenMetadata.currency,
       tokenSymbol: tokenMetadata.symbol,

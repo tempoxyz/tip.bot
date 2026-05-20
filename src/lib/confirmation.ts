@@ -7,6 +7,8 @@ export const payloadSchema = z.object({
   amount: z.number().int().positive(),
   chainId: z.number().int().positive(),
   expiresAt: z.string().min(1),
+  groupId: z.string().min(1).optional(),
+  groupLabel: z.string().min(1).optional(),
   idempotencyKey: z.string().min(1),
   kind: z.enum(['reusable_access_key', 'onetime_payment']),
   memo: z.string().nullable(),
@@ -28,6 +30,15 @@ export const payloadSchema = z.object({
     )
     .optional(),
   senderProviderUserId: z.string().min(1),
+  skippedRecipients: z
+    .array(
+      z.object({
+        reason: z.enum(['not_connected', 'you']),
+        recipientProviderLabel: z.string().min(1).optional(),
+        recipientProviderUserId: z.string().min(1),
+      }),
+    )
+    .optional(),
   tokenAddress: z.string().min(1),
   workspaceId: z.string().min(1),
 })

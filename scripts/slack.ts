@@ -21,6 +21,7 @@ const scopeReasons = {
     'Read messages Tipbot is asked to act on in private channels where Tipbot has been added.',
   'groups:read': 'Check private channel metadata where Tipbot has been added.',
   'reactions:read': 'Detect configured tip reaction emoji and identify the message being tipped.',
+  'usergroups:read': 'Expand Slack user groups like @engineering into eligible tip recipients.',
   'users:read': 'Resolve Slack users for mentions, admin checks, and connected account status.',
 } as const
 const eventReasons = {
@@ -108,6 +109,7 @@ function createManifest() {
           'groups:history',
           'groups:read',
           'reactions:read',
+          'usergroups:read',
           'users:read',
         ],
       },

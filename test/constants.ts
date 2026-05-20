@@ -23,9 +23,17 @@ export const slack = {
   teamDomain: 'emulate',
   teamId: 'T000000001',
   teamName: 'Emulate',
+  usergroupEngineeringId: 'SENGINEERING',
+  usergroupEngineeringName: 'engineering',
   unconnectedUserEmail: 'unconnected@example.com',
+  unconnectedUserId: 'U000000004',
   unconnectedUserName: 'unconnected',
 } as const
+
+export const slackBigUserIds = Array.from(
+  { length: 101 },
+  (_value, index) => `UGROUP${String(index).padStart(3, '0')}`,
+)
 
 export const slackConnect = {
   channelId: 'C0000000SC',
@@ -52,6 +60,7 @@ const slackScopes = [
   'groups:history',
   'groups:read',
   'reactions:read',
+  'usergroups:read',
   'users:read',
 ]
 
@@ -84,6 +93,7 @@ export const seed = {
       {
         email: slack.memberUserEmail,
         name: slack.memberUserName,
+        user_id: slack.memberUserId,
       },
       {
         email: slack.singleChannelGuestUserEmail,
@@ -102,6 +112,38 @@ export const seed = {
       {
         email: slack.unconnectedUserEmail,
         name: slack.unconnectedUserName,
+        user_id: slack.unconnectedUserId,
+      },
+      ...slackBigUserIds.map((providerUserId) => ({
+        email: `${providerUserId.toLowerCase()}@example.com`,
+        name: providerUserId.toLowerCase(),
+        user_id: providerUserId,
+      })),
+    ],
+    usergroups: [
+      {
+        handle: slack.usergroupEngineeringName,
+        name: slack.usergroupEngineeringName,
+        usergroup_id: slack.usergroupEngineeringId,
+        users: [slack.memberUserId, slack.unconnectedUserId, slack.adminUserId],
+      },
+      {
+        handle: 'bigteam',
+        name: 'bigteam',
+        usergroup_id: 'SBIGTEAM',
+        users: slackBigUserIds,
+      },
+      {
+        handle: 'reviewteam',
+        name: 'reviewteam',
+        usergroup_id: 'SREVIEWTEAM',
+        users: slackBigUserIds.slice(0, 11),
+      },
+      {
+        handle: 'smallteam',
+        name: 'smallteam',
+        usergroup_id: 'SSMALLTEAM',
+        users: slackBigUserIds.slice(0, 10),
       },
     ],
   },

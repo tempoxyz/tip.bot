@@ -25,3 +25,10 @@ test('classifies oversized Slack payloads as non-retryable payload errors', () =
     retryable: false,
   })
 })
+
+test('normalizes Slack adapter channel ids', () => {
+  expect(Slack.getChannelId('slack:C123:1700000000.000100')).toBe('C123')
+  expect(Slack.getChannelId('D123')).toBe('D123')
+  expect(Slack.isDMChannelId('slack:D123:1700000000.000100')).toBe(true)
+  expect(Slack.isDMChannelId('slack:C123')).toBe(false)
+})

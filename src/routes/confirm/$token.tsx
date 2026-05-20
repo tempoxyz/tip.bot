@@ -72,6 +72,11 @@ function ConfirmPanel(props: {
       recipientProviderUserId: data.recipientProviderUserId,
     },
   ]
+  const skippedRecipients: Array<{
+    reason: 'not_connected' | 'you'
+    recipientProviderLabel?: string | null
+    recipientProviderUserId: string
+  }> = data.skippedRecipients ?? []
   const totalAmount = String(Number(data.amount) * recipients.length)
 
   async function confirm() {
@@ -204,6 +209,14 @@ function ConfirmPanel(props: {
               <div className="space-y-5 border-b border-gray5 py-6">
                 <h3 className="text-lg font-bold text-gray10">Payment details</h3>
                 <div className="divide-y divide-gray5 rounded-xl border border-gray5 bg-bg1">
+                  {data.groupLabel ? (
+                    <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
+                      <span className="text-base font-bold text-gray8 sm:text-lg">Group</span>
+                      <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
+                        @{data.groupLabel}
+                      </span>
+                    </div>
+                  ) : null}
                   <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
                     <span className="text-base font-bold text-gray8 sm:text-lg">Amount</span>
                     <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
@@ -237,6 +250,23 @@ function ConfirmPanel(props: {
                       <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
                         {data.memo}
                       </span>
+                    </div>
+                  ) : null}
+                  {skippedRecipients.length ? (
+                    <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6 sm:p-5">
+                      <span className="text-base font-bold text-gray8 sm:text-lg">Skipped</span>
+                      <div className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
+                        {skippedRecipients.map((recipient) => (
+                          <div key={recipient.recipientProviderUserId}>
+                            {recipient.recipientProviderLabel
+                              ? `@${recipient.recipientProviderLabel}`
+                              : recipient.recipientProviderUserId}{' '}
+                            <span className="text-gray8">
+                              ({recipient.reason === 'you' ? 'you' : 'not connected yet'})
+                            </span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ) : null}
                 </div>

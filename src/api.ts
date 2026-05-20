@@ -390,6 +390,8 @@ export const api = new Hono<{
         accessKeyPublicKey: data.accessKey.publicKey as `0x${string}`,
         amount: formatAmount(data.payload.amount),
         chainId: data.payload.chainId,
+        groupId: data.payload.groupId,
+        groupLabel: data.payload.groupLabel,
         kind: data.payload.kind,
         memo: data.payload.memo,
         ok: true as const,
@@ -401,6 +403,7 @@ export const api = new Hono<{
             recipientProviderUserId: data.payload.recipientProviderUserId,
           },
         ],
+        skippedRecipients: data.payload.skippedRecipients ?? [],
         tokenAddress: Address.checksum(data.payload.tokenAddress),
         tokenCurrency: metadata.currency,
         tokenSymbol: metadata.symbol,
@@ -506,7 +509,22 @@ export const api = new Hono<{
                 : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
               const text =
                 'recipients' in result
-                  ? `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} ${result.recipients.length} accounts ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${result.recipients.map((recipient) => `• <@${recipient.recipientProviderUserId}>`).join('\n')}`
+                  ? `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} ${data.payload.groupId ? `<!subteam^${data.payload.groupId}${data.payload.groupLabel ? `|@${data.payload.groupLabel}` : ''}> ` : ''}${result.recipients.length} accounts ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${[
+                      ...result.recipients.map(
+                        (recipient) => `• <@${recipient.recipientProviderUserId}>`,
+                      ),
+                      ...(data.payload.skippedRecipients ?? [])
+                        .slice(0, 10)
+                        .map(
+                          (recipient) =>
+                            `• <@${recipient.recipientProviderUserId}> (${recipient.reason === 'you' ? 'you' : 'not connected yet'})`,
+                        ),
+                      ...((data.payload.skippedRecipients?.length ?? 0) > 10
+                        ? [
+                            `…and ${(data.payload.skippedRecipients?.length ?? 0) - 10} more not connected yet`,
+                          ]
+                        : []),
+                    ].join('\n')}`
                   : `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} <@${result.recipientProviderUserId}> ${amount}${result.memo ? ` for ${result.memo}` : ''}.`
               const receiptText = text.replace(/\.$/, '')
               const receiptLink = `<${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`
@@ -859,6 +877,7 @@ export const api = new Hono<{
         'groups:history',
         'groups:read',
         'reactions:read',
+        'usergroups:read',
         'users:read',
       ].join(','),
     )

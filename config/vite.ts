@@ -78,6 +78,7 @@ const slackScopes = [
   'groups:read',
   'reactions:read',
   'reactions:write',
+  'usergroups:read',
   'users:read',
 ]
 
@@ -94,6 +95,20 @@ const emulatorConfig = {
           {
             email: 'member@example.com',
             name: 'member',
+            user_id: 'U000000002',
+          },
+          {
+            email: 'unconnected@example.com',
+            name: 'unconnected',
+            user_id: 'U000000003',
+          },
+        ],
+        usergroups: [
+          {
+            handle: 'engineering',
+            name: 'engineering',
+            usergroup_id: 'SENGINEERING',
+            users: ['U000000001', 'U000000002', 'U000000003'],
           },
         ],
       },
