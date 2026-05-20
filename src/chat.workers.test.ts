@@ -213,7 +213,7 @@ describe('/tip @account', () => {
     )
     await expectSlackMessage(`• <@${Constants.slack.memberUserId}>`)
     await expectSlackMessage(`• <@${unconnectedProviderUserId}> (not connected yet)`)
-    await expectSlackMessage(`• <@${Constants.slack.adminUserId}> (you)`)
+    await expectSlackMessageNotContaining(`• <@${Constants.slack.adminUserId}> (you)`)
     await expectSlackMessageNotContaining('You’re about to tip')
     expect(batch).toMatchObject({ recipient_count: 1, status: 'confirmed' })
   }, 20_000) // 20 seconds
@@ -265,13 +265,14 @@ describe('/tip @account', () => {
   test('previews small group tip when total is more than $10', async () => {
     await connectTipAccounts()
 
-    const response = await postSlashCommand('<!subteam^SENGINEERING|engineering> $11 for coffee')
+    const response = await postSlashCommand('<!subteam^SENGINEERING|@engineering> $11 for coffee')
 
     expect(response.status).toBe(200)
     await expectSlackMessage('You’re about to tip @engineering 1 accounts $11.00 each for coffee.')
+    await expectSlackMessageNotContaining('@@engineering')
     await expectSlackMessage(`• <@${Constants.slack.memberUserId}>`)
     await expectSlackMessage(`• <@${unconnectedProviderUserId}> (not connected yet)`)
-    await expectSlackMessage(`• <@${Constants.slack.adminUserId}> (you)`)
+    await expectSlackMessageNotContaining(`• <@${Constants.slack.adminUserId}> (you)`)
     await expectSlackMessageNotContaining('Receipt')
   })
 
@@ -874,7 +875,10 @@ test('@Tipbot mention sends small group tip in thread', async () => {
   )
   await expectSlackThreadMessage(messageTs, `• <@${Constants.slack.memberUserId}>`)
   await expectSlackThreadMessage(messageTs, `• <@${unconnectedProviderUserId}> (not connected yet)`)
-  await expectSlackThreadMessage(messageTs, `• <@${Constants.slack.adminUserId}> (you)`)
+  await expectSlackThreadMessageNotContaining(
+    messageTs,
+    `• <@${Constants.slack.adminUserId}> (you)`,
+  )
   expect(batch).toMatchObject({ recipient_count: 1, status: 'confirmed' })
 }, 20_000) // 20 seconds
 

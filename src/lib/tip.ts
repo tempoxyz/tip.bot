@@ -504,7 +504,9 @@ export function parseTipBatchText(value: string, options: { chainId?: number } =
     if (!usergroup) break
     if (!usergroups.some((item) => item.providerUsergroupId === usergroup[1]))
       usergroups.push({
-        ...(usergroup[2]?.trim() ? { providerUsergroupLabel: usergroup[2].trim() } : {}),
+        ...(usergroup[2]?.trim()
+          ? { providerUsergroupLabel: usergroup[2].trim().replace(/^@+/, '') }
+          : {}),
         providerUsergroupId: usergroup[1]!,
       })
     remaining = remaining.slice(usergroup[0].length)

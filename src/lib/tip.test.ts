@@ -174,6 +174,13 @@ test('parses multi-recipient tip mentions', () => {
     token: null,
     usergroups: [{ providerUsergroupId: 'SENGINEERING', providerUsergroupLabel: 'engineering' }],
   })
+  expect(Tip.parseTipBatchText('<!subteam^SENGINEERING|@engineering>')).toEqual({
+    amount: undefined,
+    memo: null,
+    recipients: [],
+    token: null,
+    usergroups: [{ providerUsergroupId: 'SENGINEERING', providerUsergroupLabel: 'engineering' }],
+  })
   expect(Tip.parseTipBatchText('<@UFOO> for <@UBAR>')).toBe(null)
 })
 

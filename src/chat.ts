@@ -1494,11 +1494,6 @@ async function resolveSlackTipPlan(
     if (target.recipient.recipientProviderUserId === event.user.userId) {
       if (target.source === 'explicit')
         return { message: 'Payment not sent. Cannot send a payment to yourself.', ok: false }
-      skippedRecipients.push({
-        reason: 'you',
-        recipientProviderLabel: target.recipient.recipientProviderLabel,
-        recipientProviderUserId: target.recipient.recipientProviderUserId,
-      })
       continue
     }
 
