@@ -247,7 +247,7 @@ describe('/tip @account', () => {
 
   test('previews large group tip', async () => {
     const accounts = await connectTipAccounts()
-    for (const providerUserId of Constants.slackBigUserIds.slice(0, 11)) {
+    for (const providerUserId of Constants.slackBigUserIds.slice(0, 51)) {
       await insertMember({
         account_id: (await factory.account.insert({})).id,
         provider_user_id: providerUserId,
@@ -259,7 +259,7 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      'You’re about to tip <!subteam^SREVIEWTEAM|@reviewteam> 11 accounts $0.001 each for coffee.',
+      'You’re about to tip <!subteam^SREVIEWTEAM|@reviewteam> 51 accounts $0.001 each for coffee.',
     )
     await expectSlackMessageNotContaining('Receipt')
   }, 20_000) // 20 seconds

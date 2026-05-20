@@ -1536,7 +1536,7 @@ async function resolveSlackTipPlan(
     // Small group tips send immediately; require Slack confirmation only for larger groups or
     // more expensive total sends.
     parsed.usergroups?.length &&
-    (recipients.length > 10 || (options.amountEach ?? 0) * recipients.length > 10_000_000),
+    (recipients.length > 50 || (options.amountEach ?? 0) * recipients.length > 10_000_000),
   )
   return {
     ok: true,

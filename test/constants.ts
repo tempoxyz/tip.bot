@@ -137,7 +137,7 @@ export const seed = {
         handle: 'reviewteam',
         name: 'reviewteam',
         usergroup_id: 'SREVIEWTEAM',
-        users: slackBigUserIds.slice(0, 11),
+        users: slackBigUserIds.slice(0, 51),
       },
       {
         handle: 'smallteam',
