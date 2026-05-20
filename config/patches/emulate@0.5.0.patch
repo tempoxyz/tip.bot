@@ -57,7 +57,16 @@ index 6876d0e..57d3549 100644
      topic: ch.topic,
      purpose: ch.purpose,
      creator: ch.creator,
-@@ -1322,16 +1363,44 @@ function seedFromConfig(store, _baseUrl, config) {
+@@ -415,6 +456,8 @@ function formatUser(u) {
+     name: u.name,
+     real_name: u.real_name,
+     is_admin: u.is_admin,
++    is_restricted: u.is_restricted,
++    is_ultra_restricted: u.is_ultra_restricted,
+     is_bot: u.is_bot,
+     deleted: u.deleted,
+     profile: u.profile
+@@ -1322,16 +1365,48 @@ function seedFromConfig(store, _baseUrl, config) {
    const teamId = team?.team_id ?? "T000000001";
    if (config.users) {
      for (const u of config.users) {
@@ -76,6 +85,8 @@ index 6876d0e..57d3549 100644
 +          enterprise_team_id: u.enterprise_team_id ?? existing.enterprise_team_id,
 +          enterprise_user_id: u.enterprise_user_id ?? existing.enterprise_user_id,
 +          is_admin: u.is_admin ?? existing.is_admin,
++          is_restricted: u.is_restricted ?? existing.is_restricted,
++          is_ultra_restricted: u.is_ultra_restricted ?? existing.is_ultra_restricted,
 +          name: u.name ?? existing.name,
 +          profile: {
 +            ...existing.profile,
@@ -104,9 +115,11 @@ index 6876d0e..57d3549 100644
 +        enterprise_team_id: u.enterprise_team_id,
 +        enterprise_user_id: u.enterprise_user_id,
          is_admin: u.is_admin ?? false,
++        is_restricted: u.is_restricted ?? false,
++        is_ultra_restricted: u.is_ultra_restricted ?? false,
          is_bot: false,
          deleted: false,
-@@ -1347,18 +1416,42 @@ function seedFromConfig(store, _baseUrl, config) {
+@@ -1347,18 +1420,42 @@ function seedFromConfig(store, _baseUrl, config) {
    }
    if (config.channels) {
      for (const ch of config.channels) {

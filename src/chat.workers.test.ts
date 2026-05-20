@@ -8,7 +8,7 @@ import * as Tip from '#/lib/tip.ts'
 import { WebClient } from '@slack/web-api'
 import { env } from 'cloudflare:workers'
 import { testClient } from 'hono/testing'
-import { AbiFunction } from 'ox'
+import { AbiFunction, Address } from 'ox'
 import { KeyAuthorization } from 'ox/tempo'
 import { createClient, http, parseUnits } from 'viem'
 import { Account, Actions } from 'viem/tempo'
@@ -702,6 +702,261 @@ test('@Tipbot mention sends tip in thread', async () => {
   fetchSpy.mockRestore()
 }, 20_000) // 20 seconds
 
+test('@Tipbot mention sends tip from single channel guest', async () => {
+  await connectTipAccounts({ senderProviderUserId: Constants.slack.singleChannelGuestUserId })
+  const messageTs = `1700000017.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}>`,
+    userId: Constants.slack.singleChannelGuestUserId,
+  })
+  const tip = await db
+    .selectFrom('tip')
+    .innerJoin('member as sender', 'sender.id', 'tip.sender_member_id')
+    .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
+    .innerJoin('workspace', 'workspace.id', 'tip.workspace_id')
+    .select([
+      'recipient.provider_user_id as recipient_provider_user_id',
+      'sender.provider_user_id as sender_provider_user_id',
+      'tip.confirmed_at',
+    ])
+    .where('workspace.provider_id', '=', providerId)
+    .where(
+      'tip.idempotency_key',
+      '=',
+      `mention:${providerId}:${Constants.slack.channelId}:${messageTs}`,
+    )
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(tip).toMatchObject({
+    recipient_provider_user_id: Constants.slack.memberUserId,
+    sender_provider_user_id: Constants.slack.singleChannelGuestUserId,
+  })
+  expect(tip.confirmed_at).toEqual(expect.any(String))
+  await expectSlackThreadMessage(
+    messageTs,
+    `<@${Constants.slack.singleChannelGuestUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 · Receipt`,
+  )
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention supports connect command for local workspace accounts', async () => {
+  const messageTs = `1700000012.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> connect`,
+    userId: unconnectedProviderUserId,
+  })
+  const token = await db
+    .selectFrom('account_link_token')
+    .innerJoin('member', 'member.id', 'account_link_token.member_id')
+    .select(['account_link_token.id', 'member.provider_user_id'])
+    .where('member.provider_user_id', '=', unconnectedProviderUserId)
+    .executeTakeFirst()
+
+  expect(response.status).toBe(200)
+  expect(token).toEqual(expect.any(Object))
+  await expectSlackThreadMessage(messageTs, 'Link expires in 10 minutes.', { wait: true })
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention supports connect command from thread', async () => {
+  const parent = await memberSlack.chat.postMessage({
+    channel: Constants.slack.channelId,
+    text: 'connect from this thread',
+  })
+  if (!parent.ts) throw new Error('Expected Slack parent message timestamp.')
+  const messageTs = `1700000020.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> connect`,
+    threadTs: parent.ts,
+    userId: unconnectedProviderUserId,
+  })
+
+  expect(response.status).toBe(200)
+  await expectSlackThreadMessage(parent.ts, 'Link expires in 10 minutes.', { wait: true })
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention supports connect command for single channel guests', async () => {
+  const messageTs = `1700000018.${Nanoid.generate().slice(0, 6)}`
+  const guest = await slack.users.info({ user: Constants.slack.singleChannelGuestUserId })
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> connect`,
+    userId: Constants.slack.singleChannelGuestUserId,
+  })
+  const token = await db
+    .selectFrom('account_link_token')
+    .innerJoin('member', 'member.id', 'account_link_token.member_id')
+    .select(['account_link_token.id', 'member.provider_user_id'])
+    .where('member.provider_user_id', '=', Constants.slack.singleChannelGuestUserId)
+    .executeTakeFirst()
+
+  expect(guest.user).toMatchObject({
+    id: Constants.slack.singleChannelGuestUserId,
+    is_restricted: true,
+    is_ultra_restricted: true,
+  })
+  expect(response.status).toBe(200)
+  expect(token).toEqual(expect.any(Object))
+  await expectSlackThreadMessage(messageTs, 'Link expires in 10 minutes.', { wait: true })
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention connect link completion connects local workspace account', async () => {
+  const messageTs = `1700000016.${Nanoid.generate().slice(0, 6)}`
+
+  const connectResponse = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> connect`,
+    userId: unconnectedProviderUserId,
+  })
+  const token = await getLatestConnectToken(messageTs)
+  const link = await db
+    .selectFrom('account_link_token')
+    .innerJoin('member', 'member.id', 'account_link_token.member_id')
+    .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+    .select([
+      'account_link_token.id',
+      'account_link_token.access_key_address',
+      'account_link_token.access_key_expires_at',
+      'member.provider_identity_id',
+      'workspace.chain_id',
+      'workspace.default_token_address',
+    ])
+    .where('member.provider_user_id', '=', unconnectedProviderUserId)
+    .where('workspace.provider_id', '=', providerId)
+    .executeTakeFirstOrThrow()
+  const root = Account.fromSecp256k1(
+    '0x3333333333333333333333333333333333333333333333333333333333333333',
+  )
+  const keyAuthorization = await AccountLink.signKeyAuthorization(root, {
+    accessKeyAddress: link.access_key_address,
+    chainId: link.chain_id,
+    expiresAt: link.access_key_expires_at,
+    tokenAddress: Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
+  })
+
+  const completeResponse = await client.api.account.link[':token'].$post({
+    json: { address: root.address, keyAuthorization },
+    param: { token },
+  })
+  await drainWaitUntil()
+  const identity = await db
+    .selectFrom('provider_identity')
+    .innerJoin('account', 'account.id', 'provider_identity.account_id')
+    .select(['account.address', 'provider_identity.provider_user_id'])
+    .where('provider_identity.id', '=', link.provider_identity_id)
+    .executeTakeFirstOrThrow()
+
+  expect(connectResponse.status).toBe(200)
+  expect(completeResponse.status).toBe(200)
+  expect(identity).toMatchObject({
+    address: root.address,
+    provider_user_id: unconnectedProviderUserId,
+  })
+  await expectSlackMessage('Connected')
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention supports help command', async () => {
+  const messageTs = `1700000013.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> help`,
+  })
+
+  expect(response.status).toBe(200)
+  await expectSlackThreadMessage(messageTs, '@Tipbot balance', { wait: true })
+  await expectSlackThreadMessage(messageTs, '@Tipbot connect')
+  await expectSlackThreadMessage(messageTs, '@Tipbot disconnect')
+  await expectSlackThreadMessage(messageTs, '@Tipbot leaderboard')
+  await expectSlackThreadMessage(messageTs, '@Tipbot stats')
+  await expectSlackThreadMessage(messageTs, '@Tipbot status')
+  await expectSlackThreadMessage(messageTs, '@Tipbot @account for coffee')
+})
+
+test('@Tipbot mention supports disconnect command for local workspace accounts', async () => {
+  await connectTipAccounts()
+  const messageTs = `1700000014.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> disconnect`,
+  })
+  const member = await db
+    .selectFrom('member')
+    .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+    .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .select('provider_identity.account_id')
+    .where('workspace.provider_id', '=', providerId)
+    .where('member.provider_user_id', '=', Constants.slack.adminUserId)
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(member.account_id).toBeNull()
+  await expectSlackThreadMessage(messageTs, 'Disconnected', { wait: true })
+})
+
+test.each([
+  { name: 'connect command', text: `<@${Constants.slack.botUserId}> connect` },
+  { name: 'balance command', text: `<@${Constants.slack.botUserId}> balance` },
+  { name: 'disconnect command', text: `<@${Constants.slack.botUserId}> disconnect` },
+  { name: 'status command', text: `<@${Constants.slack.botUserId}> status` },
+  { name: 'tip text', text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}>` },
+])(
+  '@Tipbot mention blocks Slack Connect external actor $name',
+  async (input) => {
+    const channelId = await getSlackConnectChannelId()
+    const messageTs = `1700000015.${Nanoid.generate().slice(0, 6)}`
+
+    const response = await postSlackAppMention({
+      channelId,
+      messageTs,
+      text: input.text,
+      userId: Constants.slackConnect.userId,
+    })
+    const members = await db
+      .selectFrom('member')
+      .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+      .select(['member.id', 'workspace.provider_id'])
+      .where('workspace.provider_id', '=', providerId)
+      .where('member.provider_user_id', '=', Constants.slackConnect.userId)
+      .execute()
+    const tips = await db
+      .selectFrom('tip')
+      .innerJoin('workspace', 'workspace.id', 'tip.workspace_id')
+      .select('tip.id')
+      .where('workspace.provider_id', '=', providerId)
+      .execute()
+    const accountLinkTokens = await db
+      .selectFrom('account_link_token')
+      .innerJoin('member', 'member.id', 'account_link_token.member_id')
+      .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+      .select('account_link_token.id')
+      .where('workspace.provider_id', '=', providerId)
+      .where('member.provider_user_id', '=', Constants.slackConnect.userId)
+      .execute()
+
+    expect(response.status).toBe(200)
+    expect(accountLinkTokens).toEqual([])
+    expect(members).toEqual([])
+    expect(tips).toEqual([])
+    await expectSlackThreadMessage(
+      messageTs,
+      "Tipbot isn't installed in your Slack workspace yet.",
+      {
+        channelId,
+        wait: true,
+      },
+    )
+  },
+  20_000,
+)
+
 test('@Tipbot mention sends Slack Connect tip to recipient home workspace member', async () => {
   await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
     botToken: Constants.slackConnect.teamBotToken,
@@ -895,7 +1150,7 @@ test('@Tipbot mention introduces itself', async () => {
   )
   await expectSlackThreadMessage(
     messageTs,
-    'Connect with `/tip connect`, then send stablecoins with `@Tipbot @account for coffee`, `@Tipbot @account 0.005 for coffee`, `/tip @account for coffee`, or a 💸 reaction.',
+    'Connect with `@Tipbot connect` or `/tip connect`, then send stablecoins with `@Tipbot @account for coffee`, `@Tipbot @account 0.005 for coffee`, `/tip @account for coffee`, or a 💸 reaction.',
   )
   expect(tips).toHaveLength(0)
 })
@@ -1143,7 +1398,9 @@ test('@Tipbot mention shows confirmation action when approval is required', asyn
   })
 
   expect(response.status).toBe(200)
-  await expectSlackMessage('Tipbot needs your approval to send this payment.')
+  await expectSlackThreadMessage(messageTs, 'Tipbot needs your approval to send this payment.', {
+    wait: true,
+  })
   await expectSlackThreadMessageNotContaining(messageTs, 'Receipt')
 }, 20_000) // 20 seconds
 
@@ -1173,7 +1430,7 @@ test('@Tipbot mention shows add funds action when sender has insufficient funds'
       return (
         url.endsWith('/chat.postEphemeral') &&
         params.get('text')?.includes('Payment not sent. Your wallet has insufficient funds.') &&
-        !params.has('thread_ts')
+        params.get('thread_ts') === messageTs
       )
     }),
   ).toBe(true)
@@ -1235,7 +1492,7 @@ test('@Tipbot mention clears assistant status after payment failure', async () =
   })
 
   expect(response.status).toBe(200)
-  await expectSlackMessage('Payment failed.')
+  await expectSlackThreadMessage(messageTs, 'Payment failed.', { wait: true })
   await expectSlackAssistantStatusCall(fetchSpy, messageTs, '')
   handleTipRequest.mockRestore()
   fetchSpy.mockRestore()
@@ -1259,7 +1516,7 @@ test('@Tipbot mention explains memo length failures', async () => {
   expect(response.status).toBe(200)
   expect(handleTipRequest).not.toHaveBeenCalled()
   expect(aiRunMock).toHaveBeenCalledOnce()
-  await expectSlackMessage('Try: `best pages internet`.')
+  await expectSlackThreadMessage(messageTs, 'Try: `best pages internet`.', { wait: true })
   await expectSlackAssistantStatusCall(fetchSpy, messageTs, '')
   handleTipRequest.mockRestore()
   fetchSpy.mockRestore()
@@ -1282,8 +1539,10 @@ test('@Tipbot mention omits memo suggestion when AI returns an invalid memo', as
 
   expect(response.status).toBe(200)
   expect(aiRunMock).toHaveBeenCalledOnce()
-  await expectSlackMessage('Payment not sent. Memo must be at most 32 bytes')
-  await expectSlackMessageNotContaining('Try:')
+  await expectSlackThreadMessage(messageTs, 'Payment not sent. Memo must be at most 32 bytes', {
+    wait: true,
+  })
+  await expectSlackThreadMessageNotContaining(messageTs, 'Try:')
   await expectSlackAssistantStatusCall(fetchSpy, messageTs, '')
   handleTipRequest.mockRestore()
   fetchSpy.mockRestore()
@@ -1685,7 +1944,83 @@ test('reaction tipping reports unconnected sender', async () => {
   expect(reactionTips).toHaveLength(0)
   await expectSlackPostEphemeralCall(
     fetchSpy,
-    'Payment not sent. Connect to Tipbot with `/tip connect` and try again.',
+    'Payment not sent. Connect to Tipbot with `@Tipbot connect` or `/tip connect` and try again.',
+  )
+  await expectSlackThreadMessageNotContaining(message.ts, 'tipped', { channelId })
+  fetchSpy.mockRestore()
+})
+
+test('reaction tipping sends tip from single channel guest', async () => {
+  await connectTipAccounts({ senderProviderUserId: Constants.slack.singleChannelGuestUserId })
+  const channelId = await createSlackTestChannel('rt')
+  const message = await memberSlack.chat.postMessage({
+    channel: channelId,
+    text: 'single channel guest should reaction tip',
+  })
+  if (!message.ts) throw new Error('Expected Slack message timestamp.')
+
+  const response = await postSlackReaction({
+    channelId,
+    messageTs: message.ts,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.singleChannelGuestUserId,
+  })
+
+  expect(response.status).toBe(200)
+  await expect
+    .poll(
+      async () =>
+        await db
+          .selectFrom('tip')
+          .innerJoin('member as sender', 'sender.id', 'tip.sender_member_id')
+          .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
+          .innerJoin('workspace', 'workspace.id', 'tip.workspace_id')
+          .select([
+            'recipient.provider_user_id as recipient_provider_user_id',
+            'sender.provider_user_id as sender_provider_user_id',
+            'tip.confirmed_at',
+          ])
+          .where('workspace.provider_id', '=', providerId)
+          .where('tip.idempotency_key', 'like', `${Chat.reactionTipIdempotencyPrefix}%`)
+          .executeTakeFirst(),
+      { timeout: 5_000 }, // 5 seconds
+    )
+    .toMatchObject({
+      confirmed_at: expect.any(String),
+      recipient_provider_user_id: Constants.slack.memberUserId,
+      sender_provider_user_id: Constants.slack.singleChannelGuestUserId,
+    })
+  await expectSlackThreadMessage(message.ts, 'tipped', { channelId, wait: true })
+}, 20_000) // 20 seconds
+
+test('reaction tipping blocks Slack Connect external sender', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  await connectTipAccounts()
+  const channelId = await getSlackConnectChannelId()
+  const message = await memberSlack.chat.postMessage({
+    channel: channelId,
+    text: 'external sender should not reaction tip',
+  })
+  if (!message.ts) throw new Error('Expected Slack message timestamp.')
+
+  const response = await postSlackReaction({
+    channelId,
+    messageTs: message.ts,
+    reaction: 'money_with_wings',
+    userId: Constants.slackConnect.userId,
+  })
+  const reactionTips = await db
+    .selectFrom('reaction_tip')
+    .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
+    .selectAll('reaction_tip')
+    .where('workspace.provider_id', '=', providerId)
+    .execute()
+
+  expect(response.status).toBe(200)
+  expect(reactionTips).toHaveLength(0)
+  await expectSlackPostEphemeralCall(
+    fetchSpy,
+    "Tipbot isn't installed in your Slack workspace yet.",
   )
   await expectSlackThreadMessageNotContaining(message.ts, 'tipped', { channelId })
   fetchSpy.mockRestore()
@@ -2681,7 +3016,9 @@ describe('/tip balance', () => {
     const response = await postSlashCommand('balance')
 
     expect(response.status).toBe(200)
-    await expectSlackMessage('No account connected. Run `/tip connect` first.')
+    await expectSlackMessage(
+      'No account connected. Run `<@Tipbot> connect` or `/tip connect` first.',
+    )
   })
 
   test('handles missing workspace', async () => {
@@ -2871,7 +3208,12 @@ describe('/tip usage', () => {
 ////////////////////////////////////////////////////////////////////////////
 
 async function connectTipAccounts(
-  options: { memoScope?: boolean; recipient?: boolean; tokenAddress?: `0x${string}` } = {},
+  options: {
+    memoScope?: boolean
+    recipient?: boolean
+    senderProviderUserId?: string
+    tokenAddress?: `0x${string}`
+  } = {},
 ) {
   const workspace = await db
     .selectFrom('workspace')
@@ -2889,7 +3231,7 @@ async function connectTipAccounts(
   await db.deleteFrom('access_key').where('account_id', '=', senderAccount.id).execute()
   const senderMember = await insertMember({
     account_id: senderAccount.id,
-    provider_user_id: Constants.slack.adminUserId,
+    provider_user_id: options.senderProviderUserId ?? Constants.slack.adminUserId,
     workspace_id: workspace.id,
   })
   const recipientMember =
@@ -3046,8 +3388,26 @@ async function expectSlackMessage(text: string, options: { channelId?: string } 
 async function expectSlackThreadMessage(
   messageTs: string,
   text: string,
-  options: { channelId?: string } = {},
+  options: { channelId?: string; wait?: boolean } = {},
 ) {
+  if (options.wait) {
+    await expect
+      .poll(
+        async () => {
+          const history = await slack.conversations.replies({
+            channel: options.channelId ?? Constants.slack.channelId,
+            ts: messageTs,
+          })
+          return Boolean(
+            history.ok && history.messages?.some((message) => message.text?.includes(text)),
+          )
+        },
+        { interval: 25, timeout: 5_000 }, // 25 milliseconds, 5 seconds
+      )
+      .toBe(true)
+    return
+  }
+
   const history = await slack.conversations.replies({
     channel: options.channelId ?? Constants.slack.channelId,
     ts: messageTs,
@@ -3092,15 +3452,17 @@ async function expectSlackPostEphemeralCall(
 ) {
   await expect
     .poll(
-      () =>
-        fetchSpy.mock.calls.some((call) => {
+      async () => {
+        for (const call of fetchSpy.mock.calls) {
           const input = call[0]
           const url =
             typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-          const params = slackFetchBodyParams(call[1]?.body)
+          const params = await slackFetchCallBodyParams(...call)
           const callText = `${params.get('text') ?? ''} ${params.get('blocks') ?? ''}`
-          return url.endsWith('/chat.postEphemeral') && callText.includes(text)
-        }),
+          if (url.endsWith('/chat.postEphemeral') && callText.includes(text)) return true
+        }
+        return false
+      },
       {
         message: fetchSpy.mock.calls
           .map((call) => {
@@ -3285,6 +3647,16 @@ async function getLatestConfirmToken() {
   return token
 }
 
+async function getLatestConnectToken(threadTs?: string) {
+  const history = threadTs
+    ? await slack.conversations.replies({ channel: Constants.slack.channelId, ts: threadTs })
+    : await slack.conversations.history({ channel: Constants.slack.channelId })
+  const message = history.messages?.find((message) => message.text?.includes('/connect/'))
+  const token = message?.text?.match(/\/connect\/([A-Za-z0-9_-]+)/)?.[1]
+  if (!token) throw new Error('Expected connection token in Slack message.')
+  return token
+}
+
 async function createSlackTestChannel(prefix: string) {
   const channel = await slack.conversations.create({
     name: `${prefix}${Nanoid.generate()
@@ -3375,6 +3747,7 @@ async function postSlackReaction(options: {
   channelId?: string
   eventId?: string
   eventTs?: string
+  itemUserId?: string
   messageTs: string
   reaction: string
   userId: string
@@ -3387,7 +3760,7 @@ async function postSlackReaction(options: {
         ts: options.messageTs,
         type: 'message',
       },
-      item_user: Constants.slack.memberUserId,
+      item_user: options.itemUserId ?? Constants.slack.memberUserId,
       reaction: options.reaction,
       type: 'reaction_added',
       user: options.userId,

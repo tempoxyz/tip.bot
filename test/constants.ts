@@ -17,6 +17,9 @@ export const slack = {
   memberUserName: 'member',
   missingChannelId: 'C000000404',
   missingUserId: 'U000000404',
+  singleChannelGuestUserEmail: 'single-channel-guest@example.com',
+  singleChannelGuestUserId: 'U000000003',
+  singleChannelGuestUserName: 'singlechannelguest',
   teamDomain: 'emulate',
   teamId: 'T000000001',
   teamName: 'Emulate',
@@ -81,6 +84,13 @@ export const seed = {
       {
         email: slack.memberUserEmail,
         name: slack.memberUserName,
+      },
+      {
+        email: slack.singleChannelGuestUserEmail,
+        is_restricted: true,
+        is_ultra_restricted: true,
+        name: slack.singleChannelGuestUserName,
+        user_id: slack.singleChannelGuestUserId,
       },
       {
         email: slackConnect.userEmail,
