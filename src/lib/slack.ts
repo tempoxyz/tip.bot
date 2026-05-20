@@ -116,6 +116,14 @@ export function slackApiError(method: string, error: string | undefined) {
   return value
 }
 
+export function getChannelId(channelId: string) {
+  return channelId.replace(/^slack:/, '').split(':')[0] ?? ''
+}
+
+export function isDMChannelId(channelId: string) {
+  return getChannelId(channelId).startsWith('D')
+}
+
 function stringValue(value: unknown) {
   if (typeof value === 'string') return value
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)

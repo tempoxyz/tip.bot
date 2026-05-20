@@ -81,6 +81,51 @@ test('slack member opens valid multi-recipient confirmation link', async ({ app,
   await expect(page.getByText('team lunch')).toBeVisible()
 })
 
+test('slack member opens group confirmation link with skipped recipients', async ({
+  app,
+  page,
+}) => {
+  const token = await Confirmation.encrypt(app.env, {
+    accessKeyExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
+    accessKeyLimit: '3000000',
+    amount: 1_000,
+    chainId: Tempo.chainLookup.localnet,
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes
+    groupLabel: 'engineering',
+    idempotencyKey: `confirm:${crypto.randomUUID()}`,
+    kind: 'reusable_access_key',
+    memo: 'coffee',
+    nonce: crypto.randomUUID(),
+    provider: 'slack',
+    providerChannelId: 'C000000001',
+    providerId: 'T000000001',
+    recipientProviderLabel: 'foo',
+    recipientProviderUserId: 'U000000002',
+    recipients: [
+      { recipientProviderLabel: 'foo', recipientProviderUserId: 'U000000002' },
+      { recipientProviderLabel: 'bar', recipientProviderUserId: 'U000000003' },
+    ],
+    senderProviderUserId: 'U000000001',
+    skippedRecipients: [
+      { reason: 'not_connected', recipientProviderLabel: 'boo', recipientProviderUserId: 'UBOO' },
+      { reason: 'you', recipientProviderLabel: 'joshie', recipientProviderUserId: 'UJOSHIE' },
+    ],
+    tokenAddress: Tempo.addressLookup.pathUsd,
+    workspaceId: crypto.randomUUID(),
+  })
+
+  await page.goto(app.url({ params: { token }, to: '/confirm/$token' }))
+
+  await expect(page.getByText('Group')).toBeVisible()
+  await expect(page.getByText('@engineering')).toBeVisible()
+  await expect(page.getByText('Skipped')).toBeVisible()
+  await expect(page.getByText('@boo (not connected yet)')).toBeVisible()
+  await expect(page.getByText('@joshie (you)')).toBeVisible()
+  await expect(page.getByText('$0.001 PathUSD each')).toBeVisible()
+  await expect(page.getByText('$0.002 PathUSD')).toBeVisible()
+  await expect(page.getByText('coffee')).toBeVisible()
+})
+
 test('slack member confirms payment with wallet approval', async ({ app, page }) => {
   const root = Account.fromSecp256k1(
     '0x0000000000000000000000000000000000000000000000000000000000000001',
