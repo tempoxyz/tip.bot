@@ -851,7 +851,12 @@ test('@Tipbot mention supports help command', async () => {
   })
 
   expect(response.status).toBe(200)
+  await expectSlackMessage('@Tipbot balance')
   await expectSlackMessage('@Tipbot connect')
+  await expectSlackMessage('@Tipbot disconnect')
+  await expectSlackMessage('@Tipbot leaderboard')
+  await expectSlackMessage('@Tipbot stats')
+  await expectSlackMessage('@Tipbot status')
   await expectSlackMessage('@Tipbot @account for coffee')
 })
 
@@ -1955,7 +1960,7 @@ test('reaction tipping sends tip from single channel guest', async () => {
       recipient_provider_user_id: Constants.slack.memberUserId,
       sender_provider_user_id: Constants.slack.singleChannelGuestUserId,
     })
-  await expectSlackThreadMessage(message.ts, 'tipped', { channelId })
+  await expectSlackThreadMessage(message.ts, 'tipped', { channelId, wait: true })
 }, 20_000) // 20 seconds
 
 test('reaction tipping blocks Slack Connect external sender', async () => {
@@ -3353,8 +3358,26 @@ async function expectSlackMessage(text: string, options: { channelId?: string } 
 async function expectSlackThreadMessage(
   messageTs: string,
   text: string,
-  options: { channelId?: string } = {},
+  options: { channelId?: string; wait?: boolean } = {},
 ) {
+  if (options.wait) {
+    await expect
+      .poll(
+        async () => {
+          const history = await slack.conversations.replies({
+            channel: options.channelId ?? Constants.slack.channelId,
+            ts: messageTs,
+          })
+          return Boolean(
+            history.ok && history.messages?.some((message) => message.text?.includes(text)),
+          )
+        },
+        { interval: 25, timeout: 5_000 }, // 25 milliseconds, 5 seconds
+      )
+      .toBe(true)
+    return
+  }
+
   const history = await slack.conversations.replies({
     channel: options.channelId ?? Constants.slack.channelId,
     ts: messageTs,

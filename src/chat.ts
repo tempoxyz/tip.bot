@@ -587,9 +587,14 @@ const handlers = {
       ],
     ]
     const mentionExampleRows = [
-      [`@${getSlackBotDisplayName(env.HOST)} connect`, 'Connect to Tipbot'],
-      [`@${getSlackBotDisplayName(env.HOST)} help`, 'Show help message'],
       [`@${getSlackBotDisplayName(env.HOST)} @account`, 'Send default amount'],
+      [`@${getSlackBotDisplayName(env.HOST)} balance`, 'Show wallet balance'],
+      [`@${getSlackBotDisplayName(env.HOST)} connect`, 'Connect to Tipbot'],
+      [`@${getSlackBotDisplayName(env.HOST)} disconnect`, 'Disconnect from Tipbot'],
+      [`@${getSlackBotDisplayName(env.HOST)} help`, 'Show help message'],
+      [`@${getSlackBotDisplayName(env.HOST)} leaderboard`, 'Show top tippers and recipients'],
+      [`@${getSlackBotDisplayName(env.HOST)} stats`, 'Show your tip stats'],
+      [`@${getSlackBotDisplayName(env.HOST)} status`, 'Check connection status'],
       [`@${getSlackBotDisplayName(env.HOST)} @account for coffee`, 'Send default amount with memo'],
       [
         `@${getSlackBotDisplayName(env.HOST)} @account 0.005 for coffee`,
