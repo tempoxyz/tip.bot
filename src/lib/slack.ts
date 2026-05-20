@@ -531,7 +531,7 @@ async function buildHomeView(input: {
               style: 'primary',
               text: { emoji: true, text: 'Open wallet', type: 'plain_text' },
               type: 'button',
-              url: 'https://app.tempo.xyz/',
+              url: 'https://wallet.tempo.xyz/',
             },
           ],
           type: 'actions',
