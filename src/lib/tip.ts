@@ -101,7 +101,9 @@ export async function handleTipRequest(
     recipientProviderUserId: string
     recipientProviderWorkspaceId?: string
     senderProviderUserId: string
+    settingsProviderId?: string
     tokenAddress?: string
+    workspaceProviderId?: string
   },
 ): Promise<TipResult> {
   const db = DB.create(env.DB)
@@ -110,7 +112,7 @@ export async function handleTipRequest(
       .selectFrom('workspace')
       .selectAll()
       .where('provider', '=', input.provider)
-      .where('provider_id', '=', input.providerId)
+      .where('provider_id', '=', input.workspaceProviderId ?? input.providerId)
       .executeTakeFirst()) ??
     (await (async () => {
       const id = Nanoid.generate()
@@ -124,7 +126,7 @@ export async function handleTipRequest(
           id,
           installed_at: now,
           provider: input.provider,
-          provider_id: input.providerId,
+          provider_id: input.workspaceProviderId ?? input.providerId,
           uninstalled_at: null,
           updated_at: now,
         })
@@ -135,17 +137,32 @@ export async function handleTipRequest(
         .where('id', '=', id)
         .executeTakeFirstOrThrow()
     })())
+  const settingsWorkspace = input.settingsProviderId
+    ? await db
+        .selectFrom('workspace')
+        .selectAll()
+        .where('provider', '=', input.provider)
+        .where('provider_id', '=', input.settingsProviderId)
+        .executeTakeFirstOrThrow()
+    : workspace
+  const executionWorkspace = {
+    ...workspace,
+    chain_id: settingsWorkspace.chain_id,
+    default_amount: settingsWorkspace.default_amount,
+    default_token_address: settingsWorkspace.default_token_address,
+  }
   if (
     input.senderProviderUserId === input.recipientProviderUserId &&
-    (!input.recipientProviderWorkspaceId || input.recipientProviderWorkspaceId === input.providerId)
+    (!input.recipientProviderWorkspaceId ||
+      input.recipientProviderWorkspaceId === (input.workspaceProviderId ?? input.providerId))
   )
     return { code: 'self_tip', ok: false }
 
-  const amount = input.amount ?? workspace.default_amount
+  const amount = input.amount ?? executionWorkspace.default_amount
   const tokenAddress = Address.checksum(
-    input.tokenAddress ?? workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+    input.tokenAddress ?? executionWorkspace.default_token_address ?? Tempo.addressLookup.pathUsd,
   )
-  if (!Tempo.isAllowedToken(workspace.chain_id, tokenAddress))
+  if (!Tempo.isAllowedToken(executionWorkspace.chain_id, tokenAddress))
     return {
       code: 'failed',
       message: 'Workspace token is not supported on this network.',
@@ -174,7 +191,7 @@ export async function handleTipRequest(
     .selectFrom('access_key')
     .selectAll()
     .where('account_id', '=', sender.account.id)
-    .where('chain_id', '=', workspace.chain_id)
+    .where('chain_id', '=', executionWorkspace.chain_id)
     .where('revoked_at', 'is', null)
     .where('expires_at', '>', new Date().toISOString())
     .orderBy('created_at', 'desc')
@@ -191,7 +208,7 @@ export async function handleTipRequest(
         amount,
         authorization,
         authorizationUsedAt: row.authorization_used_at,
-        chainId: workspace.chain_id,
+        chainId: executionWorkspace.chain_id,
         tokenAddress,
       }))
     ) {
@@ -202,7 +219,7 @@ export async function handleTipRequest(
     break
   }
   if (!accessKey)
-    return await createConfirmationRequired(env, input, workspace, amount, tokenAddress, {
+    return await createConfirmationRequired(env, input, executionWorkspace, amount, tokenAddress, {
       kind: trackedAccessKeyLimitExceeded ? 'onetime_payment' : undefined,
     })
 
@@ -214,12 +231,15 @@ export async function handleTipRequest(
     idempotencyKey: input.idempotencyKey,
     keyAuthorization: KeyAuthorization.fromRpc(JSON.parse(accessKey.authorization) as never),
     memo: input.memo,
+    providerChannelId: input.providerChannelId,
+    providerId: input.providerId,
+    providerThreadId: input.providerThreadId,
     recipient,
     recipientProviderUserId: input.recipientProviderUserId,
     sender,
     senderProviderUserId: input.senderProviderUserId,
     tokenAddress,
-    workspace,
+    workspace: executionWorkspace,
   })
 }
 
@@ -235,11 +255,13 @@ export async function handleTipBatchRequest(
     providerThreadId?: string
     recipients: TipRecipientInput[]
     senderProviderUserId: string
+    settingsProviderId?: string
     skippedRecipients?: TipSkippedRecipient[]
     source: 'command' | 'mention' | 'reaction'
     tokenAddress?: string
     usergroupId?: string
     usergroupLabel?: string
+    workspaceProviderId?: string
   },
 ): Promise<TipBatchResult> {
   const db = DB.create(env.DB)
@@ -248,7 +270,7 @@ export async function handleTipBatchRequest(
       .selectFrom('workspace')
       .selectAll()
       .where('provider', '=', input.provider)
-      .where('provider_id', '=', input.providerId)
+      .where('provider_id', '=', input.workspaceProviderId ?? input.providerId)
       .executeTakeFirst()) ??
     (await (async () => {
       const id = Nanoid.generate()
@@ -262,7 +284,7 @@ export async function handleTipBatchRequest(
           id,
           installed_at: now,
           provider: input.provider,
-          provider_id: input.providerId,
+          provider_id: input.workspaceProviderId ?? input.providerId,
           uninstalled_at: null,
           updated_at: now,
         })
@@ -273,6 +295,20 @@ export async function handleTipBatchRequest(
         .where('id', '=', id)
         .executeTakeFirstOrThrow()
     })())
+  const settingsWorkspace = input.settingsProviderId
+    ? await db
+        .selectFrom('workspace')
+        .selectAll()
+        .where('provider', '=', input.provider)
+        .where('provider_id', '=', input.settingsProviderId)
+        .executeTakeFirstOrThrow()
+    : workspace
+  const executionWorkspace = {
+    ...workspace,
+    chain_id: settingsWorkspace.chain_id,
+    default_amount: settingsWorkspace.default_amount,
+    default_token_address: settingsWorkspace.default_token_address,
+  }
   const recipients = input.recipients.slice(0, maxTipBatchRecipients)
   if (input.recipients.length === 0)
     return { code: 'failed', message: 'Payment must have at least one recipient.', ok: false }
@@ -287,19 +323,20 @@ export async function handleTipBatchRequest(
       (recipient) =>
         recipient.recipientProviderUserId === input.senderProviderUserId &&
         (!recipient.recipientProviderWorkspaceId ||
-          recipient.recipientProviderWorkspaceId === input.providerId),
+          recipient.recipientProviderWorkspaceId ===
+            (input.workspaceProviderId ?? input.providerId)),
     )
   )
     return { code: 'self_tip', ok: false }
 
-  const amount = input.amount ?? workspace.default_amount
+  const amount = input.amount ?? executionWorkspace.default_amount
   const totalAmount = amount * recipients.length
   if (!Number.isSafeInteger(totalAmount) || totalAmount <= 0)
     return { code: 'failed', message: 'Payment amount is too large.', ok: false }
   const tokenAddress = Address.checksum(
-    input.tokenAddress ?? workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+    input.tokenAddress ?? executionWorkspace.default_token_address ?? Tempo.addressLookup.pathUsd,
   )
-  if (!Tempo.isAllowedToken(workspace.chain_id, tokenAddress))
+  if (!Tempo.isAllowedToken(executionWorkspace.chain_id, tokenAddress))
     return {
       code: 'failed',
       message: 'Workspace token is not supported on this network.',
@@ -329,7 +366,7 @@ export async function handleTipBatchRequest(
     .selectFrom('access_key')
     .selectAll()
     .where('account_id', '=', sender.account.id)
-    .where('chain_id', '=', workspace.chain_id)
+    .where('chain_id', '=', executionWorkspace.chain_id)
     .where('revoked_at', 'is', null)
     .where('expires_at', '>', new Date().toISOString())
     .orderBy('created_at', 'desc')
@@ -346,7 +383,7 @@ export async function handleTipBatchRequest(
         amount: totalAmount,
         authorization,
         authorizationUsedAt: row.authorization_used_at,
-        chainId: workspace.chain_id,
+        chainId: executionWorkspace.chain_id,
         tokenAddress,
       }))
     )
@@ -374,7 +411,7 @@ export async function handleTipBatchRequest(
         usergroupId: input.usergroupId,
         usergroupLabel: input.usergroupLabel,
       },
-      workspace,
+      executionWorkspace,
       amount,
       tokenAddress,
       {
@@ -404,7 +441,7 @@ export async function handleTipBatchRequest(
     tokenAddress,
     usergroupId: input.usergroupId,
     usergroupLabel: input.usergroupLabel,
-    workspace,
+    workspace: executionWorkspace,
   })
 }
 
@@ -758,6 +795,9 @@ export async function confirmTipRequest(
     idempotencyKey: payload.idempotencyKey,
     keyAuthorization: verified.authorization,
     memo: payload.memo,
+    providerChannelId: payload.providerChannelId,
+    providerId: payload.providerId,
+    providerThreadId: payload.providerThreadId,
     recipient,
     recipientProviderUserId: payload.recipientProviderUserId,
     sender,
@@ -1300,6 +1340,9 @@ async function submitTip(
     idempotencyKey: string
     keyAuthorization: KeyAuthorization.Signed
     memo: string | null
+    providerChannelId: string
+    providerId: string
+    providerThreadId?: string
     recipient: ConnectedMember
     recipientProviderUserId: string
     sender: ConnectedMember
@@ -1318,8 +1361,9 @@ async function submitTip(
     keyAuthorization: input.keyAuthorization,
     memo: input.memo,
     provider: input.workspace.provider,
-    providerChannelId: '',
-    providerId: input.workspace.provider_id,
+    providerChannelId: input.providerChannelId,
+    providerId: input.providerId,
+    providerThreadId: input.providerThreadId,
     recipients: [
       {
         recipientProviderUserId: input.recipientProviderUserId,

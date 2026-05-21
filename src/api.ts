@@ -475,7 +475,7 @@ export const api = new Hono<{
                   'reaction_tip.workspace_id',
                   'tip.id as tip_id',
                 ])
-                .where('workspace.provider_id', '=', data.payload.providerId)
+                .where('reaction_tip.workspace_id', '=', data.payload.workspaceId)
                 .where('reaction_tip.idempotency_key', '=', data.payload.idempotencyKey)
                 .where('tip.confirmed_at', 'is not', null)
                 .executeTakeFirst()
