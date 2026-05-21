@@ -2557,6 +2557,7 @@ test('reaction tipping sends Slack Connect tip to recipient home workspace membe
   })
   if (!message.ts) throw new Error('Expected Slack message timestamp.')
 
+  const idempotencyKey = `${Chat.reactionTipIdempotencyPrefix}:${connected.workspace.id}:${channelId}:${message.ts}:money_with_wings:${connected.senderMember.id}:${message.ts}-reaction`
   const response = await postSlackReaction({
     channelId,
     itemUserId: Constants.slackConnect.userId,
@@ -2564,19 +2565,18 @@ test('reaction tipping sends Slack Connect tip to recipient home workspace membe
     reaction: 'money_with_wings',
     userId: Constants.slack.adminUserId,
   })
-  const tip = await waitForTipByIdempotencyKey(
-    `${Chat.reactionTipIdempotencyPrefix}:${connected.workspace.id}:${channelId}:${message.ts}:money_with_wings:${connected.senderMember.id}:${message.ts}-reaction`,
-  )
+  const tip = await waitForTipByIdempotencyKey(idempotencyKey)
   const reactionTip = await db
     .selectFrom('reaction_tip')
     .selectAll()
-    .where('tip_id', '=', tip.id)
+    .where('idempotency_key', '=', idempotencyKey)
     .executeTakeFirstOrThrow()
 
   expect(response.status).toBe(200)
   expect(reactionTip).toMatchObject({
     recipient_member_id: connectMember.id,
     sender_member_id: connected.senderMember.id,
+    tip_id: tip.id,
     workspace_id: connected.workspace.id,
   })
   expect(tip).toMatchObject({
