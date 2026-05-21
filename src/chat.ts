@@ -88,6 +88,7 @@ export function getChat() {
         const name = match[1]
         await handlers[name](event, {
           allowUninstalledWorkspaceCreate: name === 'connect',
+          channelProviderId: providerId,
           db: DB.create(env.DB),
           externalSlackConnect: true,
           provider: { id: slackConnectActor.providerId, type: 'slack' },
@@ -1351,6 +1352,7 @@ function isSlackConnectExternalCommand(
 
 type HandlerContext = {
   allowUninstalledWorkspaceCreate?: boolean
+  channelProviderId?: string
   defaultTip?: {
     idempotencyKey: string
     insufficientFundsThreadTs?: string
@@ -2781,6 +2783,7 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
       id: Nanoid.generate(),
       member_id: member.id,
       provider_channel_id: event.channel.id,
+      channel_provider_id: ctx.channelProviderId ?? ctx.provider.id,
       token_hash: await AccountLink.hashToken(env, token),
       used_at: null,
     })

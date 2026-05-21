@@ -44,6 +44,7 @@ type account_link_token = {
   access_key_expires_at: string
   access_key_public_key: string
   account_id: string | null
+  channel_provider_id: string | null
   created_at: k.Generated<string>
   expires_at: string
   id: string

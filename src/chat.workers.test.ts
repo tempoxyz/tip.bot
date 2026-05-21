@@ -1039,6 +1039,7 @@ test('@Tipbot mention connect link completion connects local workspace account',
       'account_link_token.id',
       'account_link_token.access_key_address',
       'account_link_token.access_key_expires_at',
+      'account_link_token.channel_provider_id',
       'member.provider_identity_id',
       'workspace.chain_id',
       'workspace.default_token_address',
@@ -1074,6 +1075,7 @@ test('@Tipbot mention connect link completion connects local workspace account',
     address: root.address,
     provider_user_id: unconnectedProviderUserId,
   })
+  expect(link.channel_provider_id).toBe(providerId)
   await expectSlackMessage('Connected')
 }, 20_000) // 20 seconds
 
@@ -1220,6 +1222,67 @@ test('@Tipbot mention supports connect command for Slack Connect external actors
   await expectSlackThreadMessageNotContaining(messageTs, 'Link expires in 10 minutes.', {
     channelId,
   })
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention connect link completion notifies Slack Connect external actors', async () => {
+  await deleteSlackConnectWorkspace()
+  const channelId = await getSlackConnectChannelId()
+  const messageTs = `1700000023.${Nanoid.generate().slice(0, 6)}`
+
+  const connectResponse = await postSlackAppMention({
+    channelId,
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> connect`,
+    userId: Constants.slackConnect.userId,
+  })
+  const token = await getLatestConnectToken({ channelId })
+  const link = await db
+    .selectFrom('account_link_token')
+    .innerJoin('member', 'member.id', 'account_link_token.member_id')
+    .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+    .select([
+      'account_link_token.access_key_address',
+      'account_link_token.access_key_expires_at',
+      'account_link_token.channel_provider_id',
+      'member.provider_identity_id',
+      'workspace.chain_id',
+      'workspace.default_token_address',
+      'workspace.provider_id',
+    ])
+    .where('member.provider_user_id', '=', Constants.slackConnect.userId)
+    .where('workspace.provider_id', '=', Constants.slackConnect.teamId)
+    .executeTakeFirstOrThrow()
+  const root = Account.fromSecp256k1(
+    '0x4444444444444444444444444444444444444444444444444444444444444444',
+  )
+  const keyAuthorization = await AccountLink.signKeyAuthorization(root, {
+    accessKeyAddress: link.access_key_address,
+    chainId: link.chain_id,
+    expiresAt: link.access_key_expires_at,
+    tokenAddress: Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
+  })
+
+  const completeResponse = await client.api.account.link[':token'].$post({
+    json: { address: root.address, keyAuthorization },
+    param: { token },
+  })
+  await drainWaitUntil()
+  const identity = await db
+    .selectFrom('provider_identity')
+    .innerJoin('account', 'account.id', 'provider_identity.account_id')
+    .select(['account.address', 'provider_identity.provider_user_id'])
+    .where('provider_identity.id', '=', link.provider_identity_id)
+    .executeTakeFirstOrThrow()
+
+  expect(connectResponse.status).toBe(200)
+  expect(completeResponse.status).toBe(200)
+  expect(identity).toMatchObject({
+    address: root.address,
+    provider_user_id: Constants.slackConnect.userId,
+  })
+  expect(link.provider_id).toBe(Constants.slackConnect.teamId)
+  expect(link.channel_provider_id).toBe(providerId)
+  await expectSlackMessage('Connected', { channelId })
 }, 20_000) // 20 seconds
 
 test('@Tipbot mention deduplicates connect setup for Slack Connect external actors', async () => {
@@ -4085,10 +4148,13 @@ async function getLatestConfirmToken() {
   return token
 }
 
-async function getLatestConnectToken(threadTs?: string) {
-  const history = threadTs
-    ? await slack.conversations.replies({ channel: Constants.slack.channelId, ts: threadTs })
-    : await slack.conversations.history({ channel: Constants.slack.channelId })
+async function getLatestConnectToken(options: { channelId?: string; threadTs?: string } = {}) {
+  const history = options.threadTs
+    ? await slack.conversations.replies({
+        channel: options.channelId ?? Constants.slack.channelId,
+        ts: options.threadTs,
+      })
+    : await slack.conversations.history({ channel: options.channelId ?? Constants.slack.channelId })
   const message = history.messages?.find((message) => message.text?.includes('/connect/'))
   const token = message?.text?.match(/\/connect\/([A-Za-z0-9_-]+)/)?.[1]
   if (!token) throw new Error('Expected connection token in Slack message.')

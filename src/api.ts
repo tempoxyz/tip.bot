@@ -95,6 +95,7 @@ export const api = new Hono<{
           'account_link_token.id',
           'account_link_token.member_id',
           'account_link_token.provider_channel_id',
+          'account_link_token.channel_provider_id',
           'account_link_token.used_at',
           'member.provider_identity_id as member_provider_identity_id',
           'member.provider_user_id as member_provider_user_id',
@@ -251,7 +252,9 @@ export const api = new Hono<{
           c.executionCtx.waitUntil(
             (async () => {
               await Chat.getChat().initialize()
-              const installation = await Chat.getSlack().getInstallation(link.provider_id)
+              const installation = await Chat.getSlack().getInstallation(
+                link.channel_provider_id ?? link.provider_id,
+              )
               if (!installation) return
 
               const channelRef = Chat.getChat().channel(

@@ -31,6 +31,7 @@ export const account_link_token = z.object({
   access_key_expires_at: z.string(),
   access_key_public_key: z.string(),
   account_id: z.string().nullable(),
+  channel_provider_id: z.string().nullable(),
   created_at: z.string(),
   expires_at: z.string(),
   id: z.string(),
