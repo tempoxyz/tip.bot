@@ -313,10 +313,14 @@ describe('/api/account/link/:token', () => {
     const channel = await slack.conversations.create({ name: `connect${Date.now()}` })
     const channelId = channel.channel?.id
     if (!channelId) throw new Error('Expected Slack test channel.')
+    const workspace = await factory.workspace.insert({
+      provider_id: providerId,
+      reaction_tip_emoji: 'bell',
+    })
     const pending = await createPendingAccountLink({
       providerChannelId: channelId,
-      providerId,
       providerUserId: Constants.slack.adminUserId,
+      workspaceId: workspace.id,
     })
     const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
     const keyAuthorization = await signKeyAuthorization(root, pending)
@@ -330,6 +334,7 @@ describe('/api/account/link/:token', () => {
     expect(response.status).toBe(200)
     expect(initialize).toHaveBeenCalled()
     await expectSlackMessage(channelId, 'Connected')
+    await expectSlackMessage(channelId, 'React with :bell: `:bell:` to tip a message.')
   })
 
   test('rejects token reuse', async () => {

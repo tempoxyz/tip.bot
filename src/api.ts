@@ -273,7 +273,7 @@ export const api = new Hono<{
                       children: [
                         chat.CardText(`Connected \`${truncatedAddress}\` <${explorerUrl}|View>`),
                         chat.CardText(
-                          `Mention \`@${getSlackBotDisplayName(c.env.HOST)} @user\` or use \`${getSlackCommand(c.env.HOST)} @user\` to send a payment. React with :${link.reaction_tip_emoji}: to tip a message.`,
+                          `Mention \`@${getSlackBotDisplayName(c.env.HOST)} @user\` or use \`${getSlackCommand(c.env.HOST)} @user\` to send a payment. React with :${link.reaction_tip_emoji}: \`:${link.reaction_tip_emoji}:\` to tip a message.`,
                           { style: 'muted' },
                         ),
                       ],
@@ -986,6 +986,8 @@ export const api = new Hono<{
             .set({
               installed_at: now,
               name: result.installation.teamName ?? null,
+              reaction_tip_emoji:
+                getPreviewReactionTipEmoji(c.env.HOST) ?? workspace.reaction_tip_emoji,
               uninstalled_at: null,
               updated_at: now,
             })
