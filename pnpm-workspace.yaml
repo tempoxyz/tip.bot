@@ -34,6 +34,7 @@ minimumReleaseAgeStrict: true
 overrides:
   protobufjs: 7.5.8
   tar: 7.5.11
+  uuid: 11.1.1
   vite: 'catalog:'
   vitest: 'catalog:'
   ws: 8.20.1
