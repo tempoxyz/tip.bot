@@ -124,6 +124,7 @@ export async function handleTipRequest(
           id,
           provider: input.provider,
           provider_id: input.providerId,
+          reaction_tip_emoji: 'money_with_wings',
           updated_at: now,
         })
         .execute()
@@ -260,6 +261,7 @@ export async function handleTipBatchRequest(
           id,
           provider: input.provider,
           provider_id: input.providerId,
+          reaction_tip_emoji: 'money_with_wings',
           updated_at: now,
         })
         .execute()

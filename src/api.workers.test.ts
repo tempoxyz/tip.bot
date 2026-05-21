@@ -596,7 +596,7 @@ describe('/api/confirm/:token', () => {
       channel_id: apiChannelId,
       idempotency_key: idempotencyKey,
       message_ts: parent.ts,
-      reaction: 'money_with_wings',
+      reaction: 'moneybag',
       recipient_member_id: confirmation.recipientMember.id,
       sender_member_id: confirmation.senderMember.id,
       thread_ts: parent.ts,

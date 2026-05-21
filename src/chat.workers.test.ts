@@ -1837,14 +1837,14 @@ test('reaction tipping sends default tip and updates aggregate thread reply', as
   const response = await postSlackReaction({
     channelId,
     messageTs: message.ts,
-    reaction: 'money_with_wings',
+    reaction: 'moneybag',
     userId: Constants.slack.adminUserId,
   })
   const readdResponse = await postSlackReaction({
     channelId,
     eventTs: `${message.ts}-readd`,
     messageTs: message.ts,
-    reaction: 'money_with_wings',
+    reaction: 'moneybag',
     userId: Constants.slack.adminUserId,
   })
   const tips = await db
@@ -1858,10 +1858,10 @@ test('reaction tipping sends default tip and updates aggregate thread reply', as
   expect(response.status).toBe(200)
   expect(readdResponse.status).toBe(200)
   expect(tips).toHaveLength(1)
-  expect(tips[0]).toMatchObject({ amount: 1000, confirmed_at: expect.any(String) })
+  expect(tips[0]).toMatchObject({ amount: 10_000, confirmed_at: expect.any(String) })
   await expectSlackThreadMessage(
     message.ts,
-    `:money_with_wings: Reaction tips received on this message:\n\n<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
+    `:moneybag: Reaction tips received on this message:\n\n<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.01 · <`,
     { channelId },
   )
 })
@@ -1906,7 +1906,7 @@ for (const subtype of ['thread_broadcast', 'reply_broadcast']) {
     const response = await postSlackReaction({
       channelId,
       messageTs: reply.ts,
-      reaction: 'money_with_wings',
+      reaction: 'moneybag',
       userId: Constants.slack.adminUserId,
     })
     let reactionTip = await db
@@ -1987,7 +1987,7 @@ test('reaction tipping updates one aggregate reply for multiple tipped messages 
     channel_id: channelId,
     idempotency_key: firstTip.idempotency_key,
     message_ts: parent.ts,
-    reaction: 'money_with_wings',
+    reaction: 'moneybag',
     recipient_member_id: connected.recipientMember.id,
     sender_member_id: connected.senderMember.id,
     thread_ts: parent.ts,
@@ -1996,7 +1996,7 @@ test('reaction tipping updates one aggregate reply for multiple tipped messages 
   })
   await Chat.updateReactionTipAggregate(providerId, {
     channelId,
-    reaction: 'money_with_wings',
+    reaction: 'moneybag',
     threadTs: parent.ts,
     workspaceId: connected.workspace.id,
   })
@@ -2034,7 +2034,7 @@ test('reaction tipping updates one aggregate reply for multiple tipped messages 
     channel_id: channelId,
     idempotency_key: secondTip.idempotency_key,
     message_ts: reply.ts,
-    reaction: 'money_with_wings',
+    reaction: 'moneybag',
     recipient_member_id: connected.recipientMember.id,
     sender_member_id: connected.senderMember.id,
     thread_ts: parent.ts,
@@ -2043,21 +2043,21 @@ test('reaction tipping updates one aggregate reply for multiple tipped messages 
   })
   await Chat.updateReactionTipAggregate(providerId, {
     channelId,
-    reaction: 'money_with_wings',
+    reaction: 'moneybag',
     threadTs: parent.ts,
     workspaceId: connected.workspace.id,
   })
   const thread = await slack.conversations.replies({ channel: channelId, ts: parent.ts })
   const aggregates = thread.messages?.filter((message) =>
-    message.text?.includes(':money_with_wings: Reaction tips received in this thread:'),
+    message.text?.includes(':moneybag: Reaction tips received in this thread:'),
   )
 
   expect(aggregates, JSON.stringify(thread.messages)).toHaveLength(1)
   expect(aggregates?.[0]?.text).toContain(
-    `<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${parent.ts}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
+    `<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${parent.ts}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.01 · <`,
   )
   expect(aggregates?.[0]?.text).toContain(
-    `<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${reply.ts}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
+    `<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${reply.ts}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.01 · <`,
   )
 })
 
@@ -2117,7 +2117,7 @@ test('reaction tipping ignores duplicate signed Slack event deliveries', async (
     eventId,
     eventTs: `${message.ts}-reaction`,
     messageTs: message.ts,
-    reaction: 'money_with_wings',
+    reaction: 'moneybag',
     userId: Constants.slack.adminUserId,
   })
   const secondResponse = await postSlackReaction({
@@ -2125,7 +2125,7 @@ test('reaction tipping ignores duplicate signed Slack event deliveries', async (
     eventId,
     eventTs: `${message.ts}-reaction`,
     messageTs: message.ts,
-    reaction: 'money_with_wings',
+    reaction: 'moneybag',
     userId: Constants.slack.adminUserId,
   })
   const tips = await db
@@ -2154,7 +2154,7 @@ test('reaction tipping reports unconnected sender', async () => {
   const response = await postSlackReaction({
     channelId,
     messageTs: message.ts,
-    reaction: 'money_with_wings',
+    reaction: 'moneybag',
     userId: unconnectedProviderUserId,
   })
   const reactionTips = await db
@@ -2186,7 +2186,7 @@ test('reaction tipping sends tip from single channel guest', async () => {
   const response = await postSlackReaction({
     channelId,
     messageTs: message.ts,
-    reaction: 'money_with_wings',
+    reaction: 'moneybag',
     userId: Constants.slack.singleChannelGuestUserId,
   })
 
@@ -2230,7 +2230,7 @@ test('reaction tipping blocks Slack Connect external sender', async () => {
   const response = await postSlackReaction({
     channelId,
     messageTs: message.ts,
-    reaction: 'money_with_wings',
+    reaction: 'moneybag',
     userId: Constants.slackConnect.userId,
   })
   const reactionTips = await db
@@ -2263,7 +2263,7 @@ test('reaction tipping reports unconnected recipient', async () => {
   const response = await postSlackReaction({
     channelId,
     messageTs: message.ts,
-    reaction: 'money_with_wings',
+    reaction: 'moneybag',
     userId: Constants.slack.adminUserId,
   })
   const reactionTips = await db
@@ -2297,7 +2297,7 @@ test('reaction tipping reports approval required', async () => {
   const response = await postSlackReaction({
     channelId,
     messageTs: message.ts,
-    reaction: 'money_with_wings',
+    reaction: 'moneybag',
     userId: Constants.slack.adminUserId,
   })
   const reactionTips = await db
@@ -2948,8 +2948,8 @@ describe('/tip help', () => {
     await expectSlackMessage('@Tipbot @account')
     await expectSlackMessage('@Tipbot @account for coffee')
     await expectSlackMessage('@Tipbot @account 0.005 for coffee')
-    await expectSlackMessage('[emoji] :money_with_wings:')
-    await expectSlackMessage('Send default amount by reacting to a message')
+    await expectSlackMessage('[emoji] :money_with_wings: / :moneybag:')
+    await expectSlackMessage('Send $0.001 / $0.01 by reacting to a message')
     await expectSlackMessageNotContaining('Payment examples')
     await expectSlackMessage('/tip config')
     await expectSlackMessage('/tip connect')

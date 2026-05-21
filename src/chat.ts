@@ -179,7 +179,7 @@ export function getChat() {
         .where('provider_id', '=', reaction.team_id)
         .executeTakeFirst()
       if (!workspace) return
-      if (reaction.reaction !== workspace.reaction_tip_emoji) return
+      if (getReactionTipAmount(reaction.reaction) === null) return
       return {
         db,
         provider: { id: reaction.team_id, type: 'slack' },
@@ -638,13 +638,6 @@ const handlers = {
     await postPrivateReply(event, event.user, 'Disconnected')
   },
   async help(event, ctx) {
-    const workspace = await ctx.db
-      .selectFrom('workspace')
-      .selectAll()
-      .where('provider', '=', ctx.provider.type)
-      .where('provider_id', '=', ctx.provider.id)
-      .executeTakeFirst()
-
     const commandRows = [
       [`${getSlackCommand(env.HOST)} @account [amount] [token] [for memo]`, 'Send payment'],
       [`${getSlackCommand(env.HOST)} balance`, 'Show wallet balance'],
@@ -681,10 +674,7 @@ const handlers = {
         `@${getSlackBotDisplayName(env.HOST)} @account 0.005 for coffee`,
         'Send custom amount with memo',
       ],
-      [
-        `[emoji] :${workspace?.reaction_tip_emoji ?? 'money_with_wings'}:`,
-        'Send default amount by reacting to a message',
-      ],
+      ['[emoji] :money_with_wings: / :moneybag:', 'Send $0.001 / $0.01 by reacting to a message'],
     ]
     const body = new URLSearchParams()
     body.set('channel', event.channel.id.replace(/^slack:/, ''))
@@ -1371,6 +1361,17 @@ type ParsedTipBatch = NonNullable<ReturnType<typeof Tip.parseTipBatchText>>
 
 export const reactionTipIdempotencyPrefix = 'reaction:'
 
+const reactionTipAmounts = {
+  money_with_wings: 1_000,
+  moneybag: 10_000,
+} as const
+
+function getReactionTipAmount(reaction: string) {
+  return reaction in reactionTipAmounts
+    ? reactionTipAmounts[reaction as keyof typeof reactionTipAmounts]
+    : null
+}
+
 export function isReactionTipIdempotencyKey(value: string) {
   return value.startsWith(reactionTipIdempotencyPrefix)
 }
@@ -1947,7 +1948,11 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
   })()
   if (!inserted) return
 
+  const amount = getReactionTipAmount(event.reaction)
+  if (amount === null) return
+
   const result = await Tip.handleTipBatchRequest(env, {
+    amount,
     idempotencyKey,
     memo: null,
     provider: provider.type,
