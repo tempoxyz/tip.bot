@@ -139,12 +139,10 @@ jobs:
         id: reaction_tip_emoji
         env:
           PREVIEW_HOST: ${{ env.PREVIEW_HOST }}
-          STATE_REACTION_TIP_EMOJI: ${{ steps.state.outputs.reaction_tip_emoji }}
         run: |
           node --experimental-strip-types --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
           import { getPreviewReactionTipEmoji } from './src/lib/app.ts'
-          const emoji =
-            process.env.STATE_REACTION_TIP_EMOJI || getPreviewReactionTipEmoji(process.env.PREVIEW_HOST)
+          const emoji = getPreviewReactionTipEmoji(process.env.PREVIEW_HOST)
           if (!emoji) throw new Error(`Expected preview host, got ${process.env.PREVIEW_HOST}.`)
           console.log(`name=${emoji}`)
           NODE
