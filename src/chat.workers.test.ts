@@ -1222,6 +1222,70 @@ test('@Tipbot mention supports connect command for Slack Connect external actors
   })
 }, 20_000) // 20 seconds
 
+test('@Tipbot mention deduplicates connect setup for Slack Connect external actors', async () => {
+  await deleteSlackConnectWorkspace()
+  const channelId = await getSlackConnectChannelId()
+  const firstMessageTs = `1700000021.${Nanoid.generate().slice(0, 6)}`
+  const secondMessageTs = `1700000022.${Nanoid.generate().slice(0, 6)}`
+
+  const firstResponse = await postSlackAppMention({
+    channelId,
+    messageTs: firstMessageTs,
+    text: `<@${Constants.slack.botUserId}> connect`,
+    userId: Constants.slackConnect.userId,
+  })
+  const secondResponse = await postSlackAppMention({
+    channelId,
+    messageTs: secondMessageTs,
+    text: `<@${Constants.slack.botUserId}> connect`,
+    userId: Constants.slackConnect.userId,
+  })
+  const workspaces = await db
+    .selectFrom('workspace')
+    .select(['id', 'installed_at', 'provider_id'])
+    .where('provider', '=', 'slack')
+    .where('provider_id', '=', Constants.slackConnect.teamId)
+    .execute()
+  const members = await db
+    .selectFrom('member')
+    .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+    .select(['member.id', 'member.provider_user_id'])
+    .where('member.provider_user_id', '=', Constants.slackConnect.userId)
+    .where('workspace.provider_id', '=', Constants.slackConnect.teamId)
+    .execute()
+  const hostMembers = await db
+    .selectFrom('member')
+    .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+    .select('member.id')
+    .where('member.provider_user_id', '=', Constants.slackConnect.userId)
+    .where('workspace.provider_id', '=', providerId)
+    .execute()
+  const links = await db
+    .selectFrom('account_link_token')
+    .innerJoin('member', 'member.id', 'account_link_token.member_id')
+    .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+    .select('account_link_token.id')
+    .where('member.provider_user_id', '=', Constants.slackConnect.userId)
+    .where('workspace.provider_id', '=', Constants.slackConnect.teamId)
+    .where('account_link_token.used_at', 'is', null)
+    .execute()
+
+  expect(firstResponse.status).toBe(200)
+  expect(secondResponse.status).toBe(200)
+  expect(workspaces).toEqual([
+    {
+      id: expect.any(String),
+      installed_at: null,
+      provider_id: Constants.slackConnect.teamId,
+    },
+  ])
+  expect(members).toEqual([
+    { id: expect.any(String), provider_user_id: Constants.slackConnect.userId },
+  ])
+  expect(hostMembers).toEqual([])
+  expect(links).toHaveLength(1)
+}, 20_000) // 20 seconds
+
 test('@Tipbot mention supports status command for Slack Connect external actors', async () => {
   await deleteSlackConnectWorkspace()
   const channelId = await getSlackConnectChannelId()

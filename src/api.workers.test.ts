@@ -887,13 +887,19 @@ describe('/api/chat/slack/oauth/callback', () => {
 
   test('updates existing workspace and redirects', async () => {
     await deleteSlackOauthWorkspace()
-    await factory.workspace.insert({
+    const workspace = await factory.workspace.insert({
       chain_id: Tempo.chainLookup.localnet,
       default_amount: 1234,
       installed_at: null,
       name: 'Old Name',
       provider_id: Constants.slack.teamId,
       uninstalled_at: new Date().toISOString(),
+    })
+    const account = await factory.account.insert({})
+    const member = await insertMember({
+      account_id: account.id,
+      provider_user_id: Constants.slack.adminUserId,
+      workspace_id: workspace.id,
     })
     const installResponse = await client.api.chat.slack.install.$get()
     const location = installResponse.headers.get('location')
@@ -926,6 +932,7 @@ describe('/api/chat/slack/oauth/callback', () => {
       .select([
         'chain_id',
         'default_amount',
+        'id',
         'installed_at',
         'name',
         'provider',
@@ -934,12 +941,19 @@ describe('/api/chat/slack/oauth/callback', () => {
       ])
       .where('provider_id', '=', Constants.slack.teamId)
       .execute()
+    const existingMember = await db
+      .selectFrom('member')
+      .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+      .select(['member.id', 'member.workspace_id', 'provider_identity.account_id'])
+      .where('member.id', '=', member.id)
+      .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(302)
     expect(workspaces).toEqual([
       {
         chain_id: Tempo.chainLookup.localnet,
         default_amount: 1234,
+        id: workspace.id,
         installed_at: expect.any(String),
         name: 'Emulate',
         provider: 'slack',
@@ -947,6 +961,11 @@ describe('/api/chat/slack/oauth/callback', () => {
         uninstalled_at: null,
       },
     ])
+    expect(existingMember).toEqual({
+      account_id: account.id,
+      id: member.id,
+      workspace_id: workspace.id,
+    })
   })
 })
 
