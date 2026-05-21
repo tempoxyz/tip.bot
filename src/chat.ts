@@ -656,6 +656,31 @@ const handlers = {
     await postPrivateReply(event, event.user, 'Disconnected')
   },
   async help(event, ctx) {
+    if (ctx.externalSlackConnect) {
+      const body = new URLSearchParams()
+      body.set('channel', event.channel.id.replace(/^slack:/, ''))
+      body.set(
+        'text',
+        [
+          `Tipbot commands available here:`,
+          `\`@${getSlackBotDisplayName(env.HOST)} connect\` Connect to Tipbot`,
+          `\`@${getSlackBotDisplayName(env.HOST)} disconnect\` Disconnect from Tipbot`,
+          `\`@${getSlackBotDisplayName(env.HOST)} help\` Show help message`,
+          `\`@${getSlackBotDisplayName(env.HOST)} status\` Check connection status`,
+          '',
+          `Payments in Slack Connect channels aren’t supported yet unless you install the Tipbot app to your workspace.`,
+        ].join('\n'),
+      )
+      await postSlackPrivateReply(
+        ctx.channelProviderId ?? ctx.provider.id,
+        event.channel.id.replace(/^slack:/, ''),
+        event.user.userId,
+        body,
+        { threadTs: ctx.threadTs },
+      )
+      return
+    }
+
     const workspace = await ctx.db
       .selectFrom('workspace')
       .selectAll()
@@ -1327,7 +1352,7 @@ const commandNames = [
   'status',
 ] as const
 const commandPattern = new RegExp(`^(${commandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
-const slackConnectExternalCommandNames = ['connect', 'disconnect', 'status'] as const
+const slackConnectExternalCommandNames = ['connect', 'disconnect', 'help', 'status'] as const
 const actionNames = ['config_edit', 'connect_cancel', 'confirm_cancel', 'confirm_tip'] as const
 const modalSubmitNames = ['config_edit'] as const
 const tokenOptions = [

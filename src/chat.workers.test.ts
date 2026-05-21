@@ -1125,7 +1125,6 @@ test('@Tipbot mention supports disconnect command for local workspace accounts',
 
 test.each([
   { name: 'balance command', text: `<@${Constants.slack.botUserId}> balance` },
-  { name: 'help command', text: `<@${Constants.slack.botUserId}> help` },
   { name: 'leaderboard command', text: `<@${Constants.slack.botUserId}> leaderboard` },
   { name: 'tip text', text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}>` },
 ])(
@@ -1176,6 +1175,42 @@ test.each([
   },
   20_000,
 )
+
+test('@Tipbot mention supports help command for Slack Connect external actors', async () => {
+  await deleteSlackConnectWorkspace()
+  const channelId = await getSlackConnectChannelId()
+  const messageTs = `1700000024.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    channelId,
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> help`,
+    userId: Constants.slackConnect.userId,
+  })
+  const homeWorkspaces = await db
+    .selectFrom('workspace')
+    .select('id')
+    .where('provider_id', '=', Constants.slackConnect.teamId)
+    .execute()
+  const hostMembers = await db
+    .selectFrom('member')
+    .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+    .select('member.id')
+    .where('workspace.provider_id', '=', providerId)
+    .where('member.provider_user_id', '=', Constants.slackConnect.userId)
+    .execute()
+
+  expect(response.status).toBe(200)
+  expect(homeWorkspaces).toEqual([])
+  expect(hostMembers).toEqual([])
+  await expectSlackMessage('@Tipbot connect', { channelId })
+  await expectSlackMessage('@Tipbot disconnect', { channelId })
+  await expectSlackMessage('@Tipbot help', { channelId })
+  await expectSlackMessage('@Tipbot status', { channelId })
+  await expectSlackMessage('payments in Slack Connect channels aren’t supported yet', { channelId })
+  await expectSlackMessageNotContaining('@Tipbot @account', { channelId })
+  await expectSlackThreadMessageNotContaining(messageTs, '@Tipbot help', { channelId })
+}, 20_000) // 20 seconds
 
 test('@Tipbot mention supports connect command for Slack Connect external actors', async () => {
   await deleteSlackConnectWorkspace()
@@ -4127,8 +4162,10 @@ async function findSlackMessageTs(text: string) {
   return message.ts
 }
 
-async function expectSlackMessageNotContaining(text: string) {
-  const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+async function expectSlackMessageNotContaining(text: string, options: { channelId?: string } = {}) {
+  const history = await slack.conversations.history({
+    channel: options.channelId ?? Constants.slack.channelId,
+  })
 
   expect(history.ok).toBe(true)
   expect(history.messages?.some((message) => message.text?.includes(text))).toBe(false)
