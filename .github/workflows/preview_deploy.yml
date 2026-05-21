@@ -142,15 +142,18 @@ jobs:
         run: |
           node --experimental-strip-types --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
           import { getPreviewReactionTipEmoji } from './src/lib/app.ts'
+          import { replaceEmojiShortcodes } from './src/lib/emoji.ts'
           const emoji = getPreviewReactionTipEmoji(process.env.PREVIEW_HOST)
           if (!emoji) throw new Error(`Expected preview host, got ${process.env.PREVIEW_HOST}.`)
           console.log(`name=${emoji}`)
+          console.log(`native=${replaceEmojiShortcodes(`:${emoji}:`)}`)
           NODE
 
       - name: Comment building status
         env:
           GH_TOKEN: ${{ github.token }}
           REACTION_TIP_EMOJI: ${{ steps.reaction_tip_emoji.outputs.name }}
+          REACTION_TIP_EMOJI_NATIVE: ${{ steps.reaction_tip_emoji.outputs.native }}
           PR_NUMBER: ${{ inputs.pr_number }}
           SHA: ${{ inputs.sha }}
           STATE_D1_ID: ${{ steps.state.outputs.d1_id }}
@@ -162,7 +165,7 @@ jobs:
           SHA_SHORT=$(echo "$SHA" | cut -c1-7)
           UPDATED=$(date -u +"%b %-d, %Y, %-I:%M %p")
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message with :${REACTION_TIP_EMOJI}:."
+          COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message with ${REACTION_TIP_EMOJI_NATIVE} \`:${REACTION_TIP_EMOJI}:\`."
           BODY=$(printf '%s\n\n%s\n%s\n%s\n\n%s' \
             "The latest Tipbot preview deployment for ${SHA_SHORT}" \
             "| Name | Status | Preview | Updated (UTC) |" \
@@ -422,6 +425,7 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           MANIFEST_SCOPES_HASH: ${{ steps.manifest.outputs.scopes_hash }}
           REACTION_TIP_EMOJI: ${{ steps.reaction_tip_emoji.outputs.name }}
+          REACTION_TIP_EMOJI_NATIVE: ${{ steps.reaction_tip_emoji.outputs.native }}
           PR_NUMBER: ${{ inputs.pr_number }}
           SEEDED_REACTION_TIP_EMOJI: ${{ steps.seed.outputs.reaction_tip_emoji }}
           SHA: ${{ inputs.sha }}
@@ -440,7 +444,7 @@ jobs:
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           PREVIEW="[${PREVIEW_HOST}](https://${PREVIEW_HOST})"
           INSTALL="<a href=\"https://${PREVIEW_HOST}/install/slack\"><img alt=\"Add to Slack\" height=\"38\" width=\"auto\" src=\"https://platform.slack-edge.com/img/add_to_slack@2x.png\" /></a>"
-          COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message with :${REACTION_TIP_EMOJI}:."
+          COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message with ${REACTION_TIP_EMOJI_NATIVE} \`:${REACTION_TIP_EMOJI}:\`."
           STATUS="[![Ready](https://vercel.com/static/status/ready.svg) Ready](${RUN_URL})"
           if [ "$JOB_STATUS" != "success" ]; then STATUS="[![Error](https://vercel.com/static/status/error.svg) Error](${RUN_URL})"; fi
           REINSTALL=""
