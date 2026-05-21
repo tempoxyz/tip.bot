@@ -264,6 +264,19 @@ describe('/tip @account', () => {
     await expectSlackMessageNotContaining('Receipt')
   }, 20_000) // 20 seconds
 
+  test('previews channel tip through channel membership', async () => {
+    await connectTipAccounts()
+
+    const response = await postSlashCommand('<!channel> $11 for coffee')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('You’re about to tip <!channel> 1 accounts $11.00 each for coffee.')
+    await expectSlackMessage(`• <@${Constants.slack.memberUserId}>`)
+    await expectSlackMessage(`• <@${unconnectedProviderUserId}> (not connected yet)`)
+    await expectSlackMessageNotContaining(`• <@${Constants.slack.adminUserId}> (you)`)
+    await expectSlackMessageNotContaining('Receipt')
+  })
+
   test('previews small group tip when total is more than $10', async () => {
     await connectTipAccounts()
 

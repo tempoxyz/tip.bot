@@ -1410,6 +1410,8 @@ type PendingSlackTip = {
 type ParsedTipBatch = NonNullable<ReturnType<typeof Tip.parseTipBatchText>>
 
 export const reactionTipIdempotencyPrefix = 'reaction:'
+const slackVanityUsergroupIds = ['channel', 'here', 'everyone'] as const
+type SlackVanityUsergroupId = (typeof slackVanityUsergroupIds)[number]
 
 export function isReactionTipIdempotencyKey(value: string) {
   return value.startsWith(reactionTipIdempotencyPrefix)
@@ -1506,30 +1508,11 @@ async function resolveSlackTipPlan(
       source: 'explicit' as const,
     }))
   for (const usergroup of parsed.usergroups ?? []) {
-    const response = await getSlack().withBotToken(installation.botToken, () => {
-      const body = new URLSearchParams()
-      body.set('usergroup', usergroup.providerUsergroupId)
-      return fetch(`${env.SLACK_API_URL}/usergroups.users.list`, {
-        body,
-        headers: { authorization: `Bearer ${installation.botToken}` },
-        method: 'POST',
-      })
-    })
-    const json = z.parse(
-      z.object({
-        ok: z.boolean().optional(),
-        users: z.array(z.string()).optional(),
-      }),
-      await response.json(),
-    )
-    if (!json.ok)
-      return {
-        message: `Payment not sent. I could not read @${usergroup.providerUsergroupLabel ?? usergroup.providerUsergroupId}.`,
-        ok: false,
-      }
-    // Slack usergroups.users.list is treated as authoritative flat membership; no recursive
-    // usergroup expansion.
-    for (const providerUserId of json.users ?? []) {
+    const users = isSlackVanityUsergroupId(usergroup.providerUsergroupId)
+      ? await getSlackConversationMembers(installation.botToken, event.channel.id)
+      : await getSlackUsergroupMembers(installation.botToken, usergroup)
+    if (!users.ok) return { message: users.message, ok: false }
+    for (const providerUserId of users.providerUserIds) {
       if (!/^[UW][A-Z0-9_]+$/.test(providerUserId)) continue
       const user = await getSlackUserInfo(installation.botToken, providerUserId)
       if (!user || user.deleted || user.is_app_user || user.is_bot) continue
@@ -1595,6 +1578,77 @@ async function resolveSlackTipPlan(
     skippedRecipients,
     usergroupId: parsed.usergroups?.[0]?.providerUsergroupId,
     usergroupLabel: parsed.usergroups?.[0]?.providerUsergroupLabel,
+  }
+}
+
+function isSlackVanityUsergroupId(value: string): value is SlackVanityUsergroupId {
+  return slackVanityUsergroupIds.includes(value as SlackVanityUsergroupId)
+}
+
+async function getSlackUsergroupMembers(
+  botToken: string,
+  usergroup: Tip.TipUsergroupInput,
+): Promise<{ ok: true; providerUserIds: string[] } | { message: string; ok: false }> {
+  const response = await getSlack().withBotToken(botToken, () => {
+    const body = new URLSearchParams()
+    body.set('usergroup', usergroup.providerUsergroupId)
+    return fetch(`${env.SLACK_API_URL}/usergroups.users.list`, {
+      body,
+      headers: { authorization: `Bearer ${botToken}` },
+      method: 'POST',
+    })
+  })
+  const json = z.parse(
+    z.object({
+      ok: z.boolean().optional(),
+      users: z.array(z.string()).optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok)
+    return {
+      message: `Payment not sent. I could not read ${formatSlackUsergroupMention(usergroup.providerUsergroupId, usergroup.providerUsergroupLabel)}.`,
+      ok: false,
+    }
+  // Slack usergroups.users.list is treated as authoritative flat membership; no recursive
+  // usergroup expansion.
+  return { ok: true, providerUserIds: json.users ?? [] }
+}
+
+async function getSlackConversationMembers(
+  botToken: string,
+  channelId: string,
+): Promise<{ ok: true; providerUserIds: string[] } | { message: string; ok: false }> {
+  const providerUserIds: string[] = []
+  let cursor: string | undefined
+  for (;;) {
+    const body = new URLSearchParams()
+    body.set('channel', channelId.replace(/^slack:/, ''))
+    if (cursor) body.set('cursor', cursor)
+    const response = await getSlack().withBotToken(botToken, () =>
+      fetch(`${env.SLACK_API_URL}/conversations.members`, {
+        body,
+        headers: { authorization: `Bearer ${botToken}` },
+        method: 'POST',
+      }),
+    )
+    const json = z.parse(
+      z.object({
+        error: z.string().optional(),
+        members: z.array(z.string()).optional(),
+        ok: z.boolean().optional(),
+        response_metadata: z.object({ next_cursor: z.string().optional() }).optional(),
+      }),
+      await response.json(),
+    )
+    if (!json.ok)
+      return {
+        message: 'Payment not sent. I could not read the channel members.',
+        ok: false,
+      }
+    providerUserIds.push(...(json.members ?? []))
+    cursor = json.response_metadata?.next_cursor || undefined
+    if (!cursor) return { ok: true, providerUserIds }
   }
 }
 
@@ -2511,7 +2565,9 @@ function normalizeSlackMentionText(value: string, botUserId: string) {
 }
 
 function parseSlackMentionTipText(text: string) {
-  const target = text.match(/<@[A-Z0-9_]+(?:\|[^>]+)?>|<!subteam\^[A-Z0-9_]+(?:\|[^>]+)?>/)
+  const target = text.match(
+    /<@[A-Z0-9_]+(?:\|[^>]+)?>|<!subteam\^[A-Z0-9_]+(?:\|[^>]+)?>|<!(?:channel|here|everyone)(?:\|[^>]+)?>/,
+  )
   if (!target) return null
   const prefix = text.slice(0, target.index).trim().toLowerCase()
   if (prefix && !['pay', 'send', 'tip'].includes(prefix)) return null
@@ -2519,6 +2575,7 @@ function parseSlackMentionTipText(text: string) {
 }
 
 function formatSlackUsergroupMention(usergroupId: string, usergroupLabel?: string) {
+  if (isSlackVanityUsergroupId(usergroupId)) return `<!${usergroupId}>`
   return `<!subteam^${usergroupId}${usergroupLabel ? `|@${usergroupLabel}` : ''}>`
 }
 

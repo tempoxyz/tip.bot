@@ -181,6 +181,27 @@ test('parses multi-recipient tip mentions', () => {
     token: null,
     usergroups: [{ providerUsergroupId: 'SENGINEERING', providerUsergroupLabel: 'engineering' }],
   })
+  expect(Tip.parseTipBatchText('<!channel> 0.001 for coffee')).toEqual({
+    amount: 1000,
+    memo: 'coffee',
+    recipients: [],
+    token: null,
+    usergroups: [{ providerUsergroupId: 'channel' }],
+  })
+  expect(Tip.parseTipBatchText('<!here|@here>')).toEqual({
+    amount: undefined,
+    memo: null,
+    recipients: [],
+    token: null,
+    usergroups: [{ providerUsergroupId: 'here', providerUsergroupLabel: 'here' }],
+  })
+  expect(Tip.parseTipBatchText('<!everyone> 1 USDC for ship')).toEqual({
+    amount: 1_000_000,
+    memo: 'ship',
+    recipients: [],
+    token: 'USDC',
+    usergroups: [{ providerUsergroupId: 'everyone' }],
+  })
   expect(Tip.parseTipBatchText('<@UFOO> for <@UBAR>')).toBe(null)
 })
 
