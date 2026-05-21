@@ -2340,7 +2340,7 @@ describe('/tip config', () => {
     await expectSlackMessage('Default amount')
     await expectSlackMessage('0.001')
     await expectSlackMessage('Reaction')
-    await expectSlackMessage('💸 `:money_with_wings:`')
+    await expectSlackMessage(':money_with_wings: `:money_with_wings:`')
     await expectSlackPostEphemeralCall(fetchSpy, '"style":{"code":true}')
     await expectSlackPostEphemeralCall(fetchSpy, '"text":":money_with_wings:"')
     fetchSpy.mockRestore()
