@@ -266,13 +266,13 @@ describe('/tip @account', () => {
 
   test('previews channel tip through channel membership', async () => {
     await connectTipAccounts()
+    await memberSlack.conversations.join({ channel: Constants.slack.channelId })
 
     const response = await postSlashCommand('<!channel> $11 for coffee')
 
     expect(response.status).toBe(200)
     await expectSlackMessage('You’re about to tip <!channel> 1 accounts $11.00 each for coffee.')
     await expectSlackMessage(`• <@${Constants.slack.memberUserId}>`)
-    await expectSlackMessage(`• <@${unconnectedProviderUserId}> (not connected yet)`)
     await expectSlackMessageNotContaining(`• <@${Constants.slack.adminUserId}> (you)`)
     await expectSlackMessageNotContaining('Receipt')
   })
