@@ -4,7 +4,7 @@ import * as chat from 'chat'
 import { z } from 'zod'
 import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
-import { getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
+import { getPreviewReactionTipEmoji, getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as hono from '#/lib/hono.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
@@ -993,6 +993,7 @@ export const api = new Hono<{
               name: result.installation.teamName ?? null,
               provider: 'slack',
               provider_id: result.teamId,
+              reaction_tip_emoji: getPreviewReactionTipEmoji(c.env.HOST) ?? 'money_with_wings',
               updated_at: now,
             })
             .execute()

@@ -115,6 +115,7 @@ jobs:
           output('seeded_at', state.seeded_at)
           output('slack_app_id', state.slack_app_id)
           output('slack_credentials', state.slack_credentials)
+          output('reaction_tip_emoji', state.reaction_tip_emoji)
           if (state.slack_credentials) {
             const key = crypto.createHash('sha256').update(process.env.STATE_KEY).digest()
             const payload = JSON.parse(Buffer.from(state.slack_credentials, 'base64url').toString('utf8'))
@@ -134,9 +135,24 @@ jobs:
           }
           NODE
 
+      - name: Choose preview reaction emoji
+        id: reaction_tip_emoji
+        env:
+          PREVIEW_HOST: ${{ env.PREVIEW_HOST }}
+          STATE_REACTION_TIP_EMOJI: ${{ steps.state.outputs.reaction_tip_emoji }}
+        run: |
+          node --experimental-strip-types --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import { getPreviewReactionTipEmoji } from './src/lib/app.ts'
+          const emoji =
+            process.env.STATE_REACTION_TIP_EMOJI || getPreviewReactionTipEmoji(process.env.PREVIEW_HOST)
+          if (!emoji) throw new Error(`Expected preview host, got ${process.env.PREVIEW_HOST}.`)
+          console.log(`name=${emoji}`)
+          NODE
+
       - name: Comment building status
         env:
           GH_TOKEN: ${{ github.token }}
+          REACTION_TIP_EMOJI: ${{ steps.reaction_tip_emoji.outputs.name }}
           PR_NUMBER: ${{ inputs.pr_number }}
           SHA: ${{ inputs.sha }}
           STATE_D1_ID: ${{ steps.state.outputs.d1_id }}
@@ -148,20 +164,23 @@ jobs:
           SHA_SHORT=$(echo "$SHA" | cut -c1-7)
           UPDATED=$(date -u +"%b %-d, %Y, %-I:%M %p")
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          BODY=$(printf '%s\n\n%s\n%s\n%s' \
+          COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message with :${REACTION_TIP_EMOJI}:."
+          BODY=$(printf '%s\n\n%s\n%s\n%s\n\n%s' \
             "The latest Tipbot preview deployment for ${SHA_SHORT}" \
             "| Name | Status | Preview | Updated (UTC) |" \
             "| :--- | :----- | :------ | :------------ |" \
-            "| ${PREVIEW_APEX} | [![Building](https://vercel.com/static/status/building.svg) Building](${RUN_URL}) | — | ${UPDATED} |")
+            "| ${PREVIEW_APEX} | [![Building](https://vercel.com/static/status/building.svg) Building](${RUN_URL}) | — | ${UPDATED} |" \
+            "${COMMANDS}")
           if [ -n "${STATE_D1_ID}${STATE_SLACK_APP_ID}" ]; then
             STATE=$(jq -nc \
               --arg pr "$PR_NUMBER" \
               --arg d1_id "$STATE_D1_ID" \
               --arg scopes_hash "$STATE_SCOPES_HASH" \
               --arg seeded_at "$STATE_SEEDED_AT" \
+              --arg reaction_tip_emoji "$REACTION_TIP_EMOJI" \
               --arg slack_credentials "$STATE_SLACK_CREDENTIALS" \
               --arg slack_app_id "$STATE_SLACK_APP_ID" \
-              '{pr: ($pr | tonumber), d1_id: $d1_id, scopes_hash: $scopes_hash, seeded_at: $seeded_at, slack_app_id: $slack_app_id, slack_credentials: $slack_credentials}')
+              '{pr: ($pr | tonumber), d1_id: $d1_id, reaction_tip_emoji: $reaction_tip_emoji, scopes_hash: $scopes_hash, seeded_at: $seeded_at, slack_app_id: $slack_app_id, slack_credentials: $slack_credentials}')
             BODY=$(printf '%s\n\n<!-- tipbot-preview: %s -->' "$BODY" "$STATE")
           fi
           COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --jq '.[] | select(.body | contains("tipbot-preview") or contains("Tipbot preview deployment")) | .id' | head -1)
@@ -387,6 +406,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           PREVIEW_D1_ID: ${{ steps.d1.outputs.id }}
+          PREVIEW_HOST: ${{ env.PREVIEW_HOST }}
           PREVIEW_SEED_SLACK_TEAM_ID: ${{ vars.PREVIEW_SEED_SLACK_TEAM_ID }}
           STATE_SEEDED_AT: ${{ steps.state.outputs.seeded_at }}
         run: |
@@ -403,7 +423,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           JOB_STATUS: ${{ job.status }}
           MANIFEST_SCOPES_HASH: ${{ steps.manifest.outputs.scopes_hash }}
+          REACTION_TIP_EMOJI: ${{ steps.reaction_tip_emoji.outputs.name }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          SEEDED_REACTION_TIP_EMOJI: ${{ steps.seed.outputs.reaction_tip_emoji }}
           SHA: ${{ inputs.sha }}
           SEEDED_AT: ${{ steps.seed.outputs.seeded_at }}
           SLACK_APP_ID: ${{ steps.slack.outputs.app_id }}
@@ -416,10 +438,11 @@ jobs:
         run: |
           SHA_SHORT=$(echo "$SHA" | cut -c1-7)
           UPDATED=$(date -u +"%b %-d, %Y, %-I:%M %p")
+          REACTION_TIP_EMOJI="${SEEDED_REACTION_TIP_EMOJI:-$REACTION_TIP_EMOJI}"
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           PREVIEW="[${PREVIEW_HOST}](https://${PREVIEW_HOST})"
           INSTALL="<a href=\"https://${PREVIEW_HOST}/install/slack\"><img alt=\"Add to Slack\" height=\"38\" width=\"auto\" src=\"https://platform.slack-edge.com/img/add_to_slack@2x.png\" /></a>"
-          COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\` or \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`."
+          COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message with :${REACTION_TIP_EMOJI}:."
           STATUS="[![Ready](https://vercel.com/static/status/ready.svg) Ready](${RUN_URL})"
           if [ "$JOB_STATUS" != "success" ]; then STATUS="[![Error](https://vercel.com/static/status/error.svg) Error](${RUN_URL})"; fi
           REINSTALL=""
@@ -431,9 +454,10 @@ jobs:
             --arg d1_id "${D1_ID:-$STATE_D1_ID}" \
             --arg scopes_hash "${MANIFEST_SCOPES_HASH:-$STATE_SCOPES_HASH}" \
             --arg seeded_at "${SEEDED_AT:-$STATE_SEEDED_AT}" \
+            --arg reaction_tip_emoji "$REACTION_TIP_EMOJI" \
             --arg slack_credentials "${SLACK_STATE_CREDENTIALS:-$STATE_SLACK_CREDENTIALS}" \
             --arg slack_app_id "${SLACK_APP_ID:-$STATE_SLACK_APP_ID}" \
-            '{pr: ($pr | tonumber), d1_id: $d1_id, scopes_hash: $scopes_hash, seeded_at: $seeded_at, slack_app_id: $slack_app_id, slack_credentials: $slack_credentials}')
+            '{pr: ($pr | tonumber), d1_id: $d1_id, reaction_tip_emoji: $reaction_tip_emoji, scopes_hash: $scopes_hash, seeded_at: $seeded_at, slack_app_id: $slack_app_id, slack_credentials: $slack_credentials}')
           BODY=$(printf '%s\n\n%s\n%s\n%s\n\n%s\n\n%s%s\n%s' \
             "The latest Tipbot preview deployment for ${SHA_SHORT}" \
             "| Name | Status | Preview | Updated (UTC) |" \

@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import * as DB from '#db/client.ts'
+import { getPreviewReactionTipEmoji } from '#/lib/app.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import { sql } from 'kysely'
 import JSONC from 'tiny-jsonc'
@@ -10,11 +11,14 @@ const env = z.parse(
     CLOUDFLARE_ACCOUNT_ID: z.string().min(1),
     CLOUDFLARE_API_TOKEN: z.string().min(1),
     PREVIEW_D1_ID: z.string().min(1),
+    PREVIEW_HOST: z.string().min(1),
     PREVIEW_SEED_SLACK_TEAM_ID: z.string().min(1),
     STATE_SEEDED_AT: z.string().optional(),
   }),
   process.env,
 )
+const previewReactionTipEmoji = getPreviewReactionTipEmoji(env.PREVIEW_HOST)
+if (!previewReactionTipEmoji) throw new Error(`Expected preview host, got ${env.PREVIEW_HOST}.`)
 
 const config = z.parse(
   z.looseObject({
@@ -69,6 +73,15 @@ try {
       .executeTakeFirstOrThrow()
     const linkedCount = Number(linked.count)
     if (linkedCount > 0) {
+      await previewDb
+        .updateTable('workspace')
+        .set({
+          reaction_tip_emoji: previewReactionTipEmoji,
+          updated_at: new Date().toISOString(),
+        })
+        .where('id', '=', previewWorkspace.id)
+        .execute()
+      output('reaction_tip_emoji', previewReactionTipEmoji)
       output('seeded_at', env.STATE_SEEDED_AT)
       console.log(`Preview workspace already seeded with ${linkedCount} linked members.`)
       process.exit(0)
@@ -86,7 +99,7 @@ try {
       name: sourceWorkspace.name,
       provider: sourceWorkspace.provider,
       provider_id: sourceWorkspace.provider_id,
-      reaction_tip_emoji: sourceWorkspace.reaction_tip_emoji,
+      reaction_tip_emoji: previewReactionTipEmoji,
       updated_at: new Date().toISOString(),
     })
     .onConflict((oc) =>
@@ -223,6 +236,7 @@ try {
   }
 
   const seededAt = new Date().toISOString()
+  output('reaction_tip_emoji', previewReactionTipEmoji)
   output('seeded_at', seededAt)
   console.log(
     `Seeded preview workspace ${env.PREVIEW_SEED_SLACK_TEAM_ID} with ${members.length} linked members.`,
