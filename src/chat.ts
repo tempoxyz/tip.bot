@@ -73,8 +73,13 @@ export function getChat() {
     const installation = await getSlack().getInstallation(providerId)
     if (!installation?.botUserId) throw new Error('Slack app installation missing bot user id.')
 
-    const threadTs = raw.thread_ts ?? raw.ts
-    const event = { channel: thread.channel, threadTs, user: message.author } satisfies TipEvent
+    const publicThreadTs = raw.thread_ts ?? raw.ts
+    const privateThreadTs = raw.thread_ts
+    const event = {
+      channel: thread.channel,
+      threadTs: privateThreadTs,
+      user: message.author,
+    } satisfies TipEvent
     const mentionText = normalizeSlackMentionText(raw.text, installation.botUserId)
     const match = mentionText.match(commandPattern)
     const slackConnectActor = await resolveSlackConnectActor(providerId, raw.channel, raw.user)
@@ -87,7 +92,7 @@ export function getChat() {
           externalSlackConnect: true,
           provider: { id: slackConnectActor.providerId, type: 'slack' },
           text: match[2]?.trim() ?? '',
-          threadTs,
+          threadTs: privateThreadTs,
         })
         return
       }
@@ -105,7 +110,7 @@ export function getChat() {
       db: DB.create(env.DB),
       provider: { id: providerId, type: 'slack' },
       text: parseSlackMentionTipText(mentionText) ?? '',
-      threadTs,
+      threadTs: privateThreadTs,
     } satisfies HandlerContext
 
     if (mentionText.toLowerCase() === 'introduce yourself') {
@@ -119,7 +124,7 @@ export function getChat() {
       const body = new URLSearchParams()
       body.set('channel', event.channel.id.replace(/^slack:/, ''))
       body.set('text', text)
-      body.set('thread_ts', threadTs)
+      body.set('thread_ts', publicThreadTs)
       body.set('unfurl_links', 'false')
       body.set('unfurl_media', 'false')
       const response = await getSlack().withBotToken(installation.botToken, () =>
@@ -158,7 +163,7 @@ export function getChat() {
         return !hasInvalidMentionIntent(mentionText)
       })()
       if (isSelfMentionChatter) return
-      await postInvalidMentionReply(event, context, mentionText, threadTs)
+      await postInvalidMentionReply(event, context, mentionText, publicThreadTs)
       return
     }
 
@@ -168,6 +173,7 @@ export function getChat() {
         idempotencyKey: `mention:${providerId}:${raw.channel}:${raw.ts}`,
         insufficientFundsThreadTs: raw.thread_ts,
         mention: true,
+        threadTs: publicThreadTs,
       },
     })
   })
@@ -406,7 +412,7 @@ const actions = {
       await state.delete(`pending_tip:${token.data}`)
       await state.disconnect()
     })()
-    await postTipResult(tipEvent, ctx, result, pending)
+    await postTipResult(tipEvent, ctx, result, { ...pending, threadTs: pending.providerThreadId })
   },
 } as const satisfies Record<
   (typeof actionNames)[number],
@@ -1014,6 +1020,7 @@ const handlers = {
       return {
         idempotencyKey: `command:${ctx.provider.id}:${event.triggerId}`,
         insufficientFundsThreadTs: ctx.threadTs,
+        threadTs: ctx.threadTs,
       }
     })()
     if (!defaultTip) {
@@ -1021,7 +1028,7 @@ const handlers = {
       return
     }
 
-    const options = { ...defaultTip, threadTs: ctx.threadTs }
+    const options = { ...defaultTip, threadTs: defaultTip.threadTs ?? ctx.threadTs }
     const workspace = await ctx.db
       .selectFrom('workspace')
       .selectAll()
@@ -1195,6 +1202,7 @@ const handlers = {
       if (result.ok && result.status === 'sent' && 'recipients' in result) {
         await postTipResult(event, ctx, result, {
           skippedRecipients: plan.skippedRecipients,
+          threadTs: options.threadTs,
           usergroupId: plan.usergroupId,
           usergroupLabel: plan.usergroupLabel,
         })
@@ -1347,6 +1355,7 @@ type HandlerContext = {
     idempotencyKey: string
     insufficientFundsThreadTs?: string
     mention?: boolean
+    threadTs?: string
   }
   db: DB.Type
   externalSlackConnect?: boolean
@@ -1568,7 +1577,7 @@ async function resolveSlackTipPlan(
     // Small group tips send immediately; require Slack confirmation only for larger groups or
     // more expensive total sends.
     parsed.usergroups?.length &&
-    (recipients.length > 10 || (options.amountEach ?? 0) * recipients.length > 10_000_000),
+    (recipients.length > 15 || (options.amountEach ?? 0) * recipients.length > 10_000_000),
   )
   return {
     ok: true,
@@ -2876,10 +2885,12 @@ async function postTipResult(
   result: Tip.TipBatchResult,
   options: {
     skippedRecipients?: Tip.TipSkippedRecipient[]
+    threadTs?: string
     usergroupId?: string
     usergroupLabel?: string
   } = {},
 ) {
+  const threadTs = options.threadTs ?? event.threadTs
   if (!result.ok) {
     if (result.code === 'confirmation_required' && result.confirmUrl) {
       const confirmUrlLabel = result.confirmUrl.replace(/(\/confirm\/.{8}).+$/, '$1...')
@@ -2909,7 +2920,7 @@ async function postTipResult(
       return
     }
     if (result.code === 'insufficient_funds') {
-      await postSlackInsufficientFunds(event, ctx, event.threadTs)
+      await postSlackInsufficientFunds(event, ctx, threadTs)
       return
     }
     await postPrivateReply(
@@ -2949,10 +2960,9 @@ async function postTipResult(
       result.feePayer === 'sender'
         ? 'Fee sponsor unavailable; fee paid from your balance.'
         : undefined,
-      event.threadTs,
+      threadTs,
     )
-    if (result.memo && event.threadTs)
-      await postSlackMemoReply(event, ctx, result.memo, event.threadTs)
+    if (result.memo && threadTs) await postSlackMemoReply(event, ctx, result.memo, threadTs)
     return
   }
   await postPrivateReply(event, event.user, 'Payment already sent.')
