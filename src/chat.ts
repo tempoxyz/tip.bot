@@ -102,7 +102,7 @@ export function getChat() {
         event.user,
         match
           ? `Tipbot is not installed in your Slack workspace yet. You can use \`@${getSlackBotDisplayName(env.HOST)} connect\`, \`@${getSlackBotDisplayName(env.HOST)} disconnect\`, or \`@${getSlackBotDisplayName(env.HOST)} status\` here, or ask an admin to install Tipbot for full support.`
-          : `Tipbot can connect your account here, but payments in Slack Connect channels aren’t supported yet unless you install the Tipbot app to your workspace.`,
+          : 'Payment not sent. Use your workspace’s Tipbot app to send payments here.',
       )
       return
     }
