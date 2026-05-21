@@ -3167,7 +3167,7 @@ function configCard(
             ['Network', networkLabel],
             ['Default token', token.symbol],
             ['Default amount', formatAmount(workspace.default_amount)],
-            ['Reaction', `💸 \`:${workspace.reaction_tip_emoji}:\``],
+            ['Reaction', `:${workspace.reaction_tip_emoji}: \`:${workspace.reaction_tip_emoji}:\``],
           ],
         }),
         ...(options?.canEdit
@@ -3182,10 +3182,12 @@ function configCard(
               ]),
             ]
           : []),
-        ...(options?.updated ? [chat.CardText('Workspace settings updated')] : []),
+        ...(options?.updated
+          ? [chat.CardText('Workspace settings updated', { style: 'muted' })]
+          : []),
       ],
     }),
-    fallbackText: `Network ${networkLabel}\nDefault token ${token.symbol} ${Tempo.explorerLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}\nReaction 💸 \`:${workspace.reaction_tip_emoji}:\`${options?.updated ? '\nWorkspace settings updated' : ''}`,
+    fallbackText: `Network ${networkLabel}\nDefault token ${token.symbol} ${Tempo.explorerLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}\nReaction :${workspace.reaction_tip_emoji}: \`:${workspace.reaction_tip_emoji}:\`${options?.updated ? '\nWorkspace settings updated' : ''}`,
   }
 }
 
@@ -3263,7 +3265,7 @@ function configFallbackText(
   options?: { updated?: boolean },
 ) {
   const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
-  return `Setting Value\nNetwork ${configNetworkLabel(workspace)}\nDefault token ${configToken(workspace).symbol} ${Tempo.explorerLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}\nReaction 💸 \`:${workspace.reaction_tip_emoji}:\`${options?.updated ? '\nWorkspace settings updated' : ''}`
+  return `Setting Value\nNetwork ${configNetworkLabel(workspace)}\nDefault token ${configToken(workspace).symbol} ${Tempo.explorerLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}\nReaction :${workspace.reaction_tip_emoji}: \`:${workspace.reaction_tip_emoji}:\`${options?.updated ? '\nWorkspace settings updated' : ''}`
 }
 
 function configNetworkLabel(workspace: DB_gen.Selectable.workspace) {
