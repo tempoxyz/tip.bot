@@ -2566,11 +2566,19 @@ test('reaction tipping sends Slack Connect tip to recipient home workspace membe
     userId: Constants.slack.adminUserId,
   })
   const tip = await waitForTipByIdempotencyKey(idempotencyKey)
-  const reactionTip = await db
+  let reactionTip = await db
     .selectFrom('reaction_tip')
     .selectAll()
     .where('idempotency_key', '=', idempotencyKey)
     .executeTakeFirstOrThrow()
+  for (let index = 0; index < 50 && reactionTip.tip_id !== tip.id; index++) {
+    await new Promise((resolve) => setTimeout(resolve, 100)) // 100 milliseconds
+    reactionTip = await db
+      .selectFrom('reaction_tip')
+      .selectAll()
+      .where('idempotency_key', '=', idempotencyKey)
+      .executeTakeFirstOrThrow()
+  }
 
   expect(response.status).toBe(200)
   expect(reactionTip).toMatchObject({
