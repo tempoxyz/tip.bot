@@ -44,6 +44,7 @@ type account_link_token = {
   access_key_expires_at: string
   access_key_public_key: string
   account_id: string | null
+  channel_provider_id: string | null
   created_at: k.Generated<string>
   expires_at: string
   id: string
@@ -155,10 +156,12 @@ type workspace = {
   default_amount: k.Generated<number>
   default_token_address: string | null
   id: string
+  installed_at: string | null
   name: string | null
   provider: k.Generated<'slack'>
   provider_id: string
   reaction_tip_emoji: k.Generated<string>
+  uninstalled_at: string | null
   updated_at: k.Generated<string>
 }
 

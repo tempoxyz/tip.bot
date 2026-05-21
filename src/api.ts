@@ -95,6 +95,7 @@ export const api = new Hono<{
           'account_link_token.id',
           'account_link_token.member_id',
           'account_link_token.provider_channel_id',
+          'account_link_token.channel_provider_id',
           'account_link_token.used_at',
           'member.provider_identity_id as member_provider_identity_id',
           'member.provider_user_id as member_provider_user_id',
@@ -251,7 +252,9 @@ export const api = new Hono<{
           c.executionCtx.waitUntil(
             (async () => {
               await Chat.getChat().initialize()
-              const installation = await Chat.getSlack().getInstallation(link.provider_id)
+              const installation = await Chat.getSlack().getInstallation(
+                link.channel_provider_id ?? link.provider_id,
+              )
               if (!installation) return
 
               const channelRef = Chat.getChat().channel(
@@ -270,7 +273,7 @@ export const api = new Hono<{
                       children: [
                         chat.CardText(`Connected \`${truncatedAddress}\` <${explorerUrl}|View>`),
                         chat.CardText(
-                          `Mention \`@${getSlackBotDisplayName(c.env.HOST)} @user\` or use \`${getSlackCommand(c.env.HOST)} @user\` to send a payment. React with :${link.reaction_tip_emoji}: to tip a message.`,
+                          `Mention \`@${getSlackBotDisplayName(c.env.HOST)} @user\` or use \`${getSlackCommand(c.env.HOST)} @user\` to send a payment. React with :${link.reaction_tip_emoji}: \`:${link.reaction_tip_emoji}:\` to tip a message.`,
                           { style: 'muted' },
                         ),
                       ],
@@ -980,7 +983,14 @@ export const api = new Hono<{
         if (workspace)
           await c.var.db
             .updateTable('workspace')
-            .set({ name: result.installation.teamName ?? null, updated_at: now })
+            .set({
+              installed_at: now,
+              name: result.installation.teamName ?? null,
+              reaction_tip_emoji:
+                getPreviewReactionTipEmoji(c.env.HOST) ?? workspace.reaction_tip_emoji,
+              uninstalled_at: null,
+              updated_at: now,
+            })
             .where('id', '=', workspace.id)
             .execute()
         else
@@ -990,10 +1000,12 @@ export const api = new Hono<{
               created_at: now,
               default_amount: 1000,
               id: Nanoid.generate(),
+              installed_at: now,
               name: result.installation.teamName ?? null,
               provider: 'slack',
               provider_id: result.teamId,
               reaction_tip_emoji: getPreviewReactionTipEmoji(c.env.HOST) ?? 'money_with_wings',
+              uninstalled_at: null,
               updated_at: now,
             })
             .execute()

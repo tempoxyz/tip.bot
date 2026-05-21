@@ -31,6 +31,7 @@ export const account_link_token = z.object({
   access_key_expires_at: z.string(),
   access_key_public_key: z.string(),
   account_id: z.string().nullable(),
+  channel_provider_id: z.string().nullable(),
   created_at: z.string(),
   expires_at: z.string(),
   id: z.string(),
@@ -149,10 +150,12 @@ export const workspace = z.object({
   default_amount: z.number(),
   default_token_address: z.string().nullable(),
   id: z.string(),
+  installed_at: z.string().nullable(),
   name: z.string().nullable(),
   provider: z.literal('slack'),
   provider_id: z.string(),
   reaction_tip_emoji: z.string(),
+  uninstalled_at: z.string().nullable(),
   updated_at: z.string(),
 })
 

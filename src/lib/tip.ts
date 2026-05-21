@@ -122,8 +122,10 @@ export async function handleTipRequest(
           created_at: now,
           default_amount: 1000,
           id,
+          installed_at: now,
           provider: input.provider,
           provider_id: input.providerId,
+          uninstalled_at: null,
           updated_at: now,
         })
         .execute()
@@ -258,8 +260,10 @@ export async function handleTipBatchRequest(
           created_at: now,
           default_amount: 1000,
           id,
+          installed_at: now,
           provider: input.provider,
           provider_id: input.providerId,
+          uninstalled_at: null,
           updated_at: now,
         })
         .execute()

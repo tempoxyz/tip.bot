@@ -80,16 +80,33 @@ export function getChat() {
       threadTs: privateThreadTs,
       user: message.author,
     } satisfies TipEvent
-    if (await isExternalSlackConnectActor(providerId, raw.channel, raw.user)) {
+    const mentionText = normalizeSlackMentionText(raw.text, installation.botUserId)
+    const match = mentionText.match(commandPattern)
+    const slackConnectActor = await resolveSlackConnectActor(providerId, raw.channel, raw.user)
+    if (slackConnectActor.blocked || slackConnectActor.external) {
+      if (slackConnectActor.external && match && isSlackConnectExternalCommand(match[1])) {
+        const name = match[1]
+        await handlers[name](event, {
+          allowUninstalledWorkspaceCreate: name === 'connect',
+          channelProviderId: providerId,
+          db: DB.create(env.DB),
+          externalSlackConnect: true,
+          provider: { id: slackConnectActor.providerId, type: 'slack' },
+          text: match[2]?.trim() ?? '',
+          threadTs: privateThreadTs,
+        })
+        return
+      }
       await postPrivateReply(
         event,
         event.user,
-        `Tipbot isn't installed in your Slack workspace yet. Ask an admin to install Tipbot there, then try again.`,
+        match
+          ? `Tipbot is not installed in your Slack workspace yet. You can use \`@${getSlackBotDisplayName(env.HOST)} connect\`, \`@${getSlackBotDisplayName(env.HOST)} disconnect\`, or \`@${getSlackBotDisplayName(env.HOST)} status\` here, or ask an admin to install Tipbot for full support.`
+          : 'Payment not sent. Use your workspace’s Tipbot app to send payments here.',
       )
       return
     }
 
-    const mentionText = normalizeSlackMentionText(raw.text, installation.botUserId)
     const context = {
       db: DB.create(env.DB),
       provider: { id: providerId, type: 'slack' },
@@ -129,7 +146,6 @@ export function getChat() {
       return
     }
 
-    const match = mentionText.match(commandPattern)
     if (match) {
       const name = z.parse(z.enum(commandNames), match[1])
       await handlers[name](event, { ...context, text: match[2]?.trim() ?? '' })
@@ -608,7 +624,9 @@ const handlers = {
       await postPrivateReply(
         event,
         event.user,
-        'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+        ctx.externalSlackConnect
+          ? 'No account connected.'
+          : 'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
       )
       return
     }
@@ -638,6 +656,31 @@ const handlers = {
     await postPrivateReply(event, event.user, 'Disconnected')
   },
   async help(event, ctx) {
+    if (ctx.externalSlackConnect) {
+      const body = new URLSearchParams()
+      body.set('channel', event.channel.id.replace(/^slack:/, ''))
+      body.set(
+        'text',
+        [
+          `Tipbot commands available here:`,
+          `\`@${getSlackBotDisplayName(env.HOST)} connect\` Connect to Tipbot`,
+          `\`@${getSlackBotDisplayName(env.HOST)} disconnect\` Disconnect from Tipbot`,
+          `\`@${getSlackBotDisplayName(env.HOST)} help\` Show help message`,
+          `\`@${getSlackBotDisplayName(env.HOST)} status\` Check connection status`,
+          '',
+          `Payments in Slack Connect channels aren’t supported yet unless you install the Tipbot app to your workspace.`,
+        ].join('\n'),
+      )
+      await postSlackPrivateReply(
+        ctx.channelProviderId ?? ctx.provider.id,
+        event.channel.id.replace(/^slack:/, ''),
+        event.user.userId,
+        body,
+        { threadTs: ctx.threadTs },
+      )
+      return
+    }
+
     const workspace = await ctx.db
       .selectFrom('workspace')
       .selectAll()
@@ -756,7 +799,9 @@ const handlers = {
       await postPrivateReply(
         event,
         event.user,
-        'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+        ctx.externalSlackConnect
+          ? 'No account connected.'
+          : 'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
       )
       return
     }
@@ -867,7 +912,9 @@ const handlers = {
       await postPrivateReply(
         event,
         event.user,
-        'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+        ctx.externalSlackConnect
+          ? 'No account connected.'
+          : 'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
       )
       return
     }
@@ -1215,28 +1262,9 @@ const handlers = {
         )
       else {
         if (result.code === 'confirmation_required' && result.confirmUrl) {
-          const confirmUrlLabel = result.confirmUrl.replace(/(\/confirm\/.{8}).+$/, '$1...')
-          await postPrivateReply(event, event.user, {
-            card: chat.Card({
-              children: [
-                chat.CardText('Tipbot needs your approval to send this payment.'),
-                chat.Actions([
-                  chat.LinkButton({
-                    label: 'Confirm payment',
-                    style: 'primary',
-                    url: result.confirmUrl,
-                  }),
-                  chat.Button({ id: 'confirm_cancel', label: 'Cancel' }),
-                ]),
-                chat.CardText(
-                  `Link expires in 10 minutes. <${result.confirmUrl}|${confirmUrlLabel}>`,
-                  {
-                    style: 'muted',
-                  },
-                ),
-              ],
-            }),
-            fallbackText: `Tipbot needs your approval to send this payment.\nConfirm payment: ${result.confirmUrl}\nLink expires in 10 minutes.`,
+          await postSlackPaymentConfirmation(event, ctx, result.confirmUrl, {
+            label: 'Confirm payment',
+            message: 'Tipbot needs your approval to send this payment.',
           })
           return
         }
@@ -1305,6 +1333,7 @@ const commandNames = [
   'status',
 ] as const
 const commandPattern = new RegExp(`^(${commandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
+const slackConnectExternalCommandNames = ['connect', 'disconnect', 'help', 'status'] as const
 const actionNames = ['config_edit', 'connect_cancel', 'confirm_cancel', 'confirm_tip'] as const
 const modalSubmitNames = ['config_edit'] as const
 const tokenOptions = [
@@ -1319,7 +1348,17 @@ const workspaceSettingsAccountAddressAllowlist = [
   '0x00ec0495bb6d03a32d75c460ca2f2a9e53654348',
 ] as const
 
+function isSlackConnectExternalCommand(
+  value: string,
+): value is (typeof slackConnectExternalCommandNames)[number] {
+  return slackConnectExternalCommandNames.includes(
+    value as (typeof slackConnectExternalCommandNames)[number],
+  )
+}
+
 type HandlerContext = {
+  allowUninstalledWorkspaceCreate?: boolean
+  channelProviderId?: string
   defaultTip?: {
     idempotencyKey: string
     insufficientFundsThreadTs?: string
@@ -1327,6 +1366,7 @@ type HandlerContext = {
     threadTs?: string
   }
   db: DB.Type
+  externalSlackConnect?: boolean
   provider: ProviderContext
   text: string
   threadTs?: string
@@ -1573,7 +1613,9 @@ async function getSlackConversationInfo(botToken: string, channelId: string) {
       channel: z
         .object({
           context_team_id: z.string().optional(),
+          is_im: z.boolean().optional(),
           is_ext_shared: z.boolean().optional(),
+          is_mpim: z.boolean().optional(),
           is_shared: z.boolean().optional(),
           shared_team_ids: z.array(z.string()).optional(),
         })
@@ -1588,6 +1630,8 @@ async function getSlackConversationInfo(botToken: string, channelId: string) {
     json.channel?.shared_team_ids?.some((teamId) => teamId !== json.channel?.context_team_id),
   )
   return {
+    isIm: Boolean(json.ok && json.channel?.is_im),
+    isMpim: Boolean(json.ok && json.channel?.is_mpim),
     isShared: Boolean(json.ok && json.channel && isShared),
     teamIds: new Set(
       [json.channel?.context_team_id, ...(json.channel?.shared_team_ids ?? [])].filter(
@@ -1645,7 +1689,7 @@ async function resolveLocalSlackRecipient(ctx: HandlerContext, recipient: Tip.Ti
 }
 
 async function resolveSlackConnectRecipient(
-  ctx: HandlerContext,
+  ctx: Pick<HandlerContext, 'db' | 'provider'>,
   teamIds: Set<string>,
   recipient: Tip.TipRecipientInput,
 ) {
@@ -1712,37 +1756,13 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
       provider.id,
       event.item.channel,
       event.user,
-      `Tipbot isn't installed in your Slack workspace yet. Ask an admin to install Tipbot there, then try again.`,
+      `Tipbot can connect your account here, but payments in Slack Connect channels aren’t supported yet unless you install the Tipbot app to your workspace.`,
     )
     return
   }
 
-  const conversation = await (async () => {
-    const body = new URLSearchParams()
-    body.set('channel', event.item.channel)
-    const response = await getSlack().withBotToken(installation.botToken, () =>
-      fetch(`${env.SLACK_API_URL}/conversations.info`, {
-        body,
-        headers: { authorization: `Bearer ${installation.botToken}` },
-        method: 'POST',
-      }),
-    )
-    const json = z.parse(
-      z.object({
-        channel: z
-          .object({
-            is_im: z.boolean().optional(),
-            is_mpim: z.boolean().optional(),
-          })
-          .optional(),
-        ok: z.boolean().optional(),
-      }),
-      await response.json(),
-    )
-    if (!json.ok) return null
-    return json.channel ?? null
-  })()
-  if (conversation?.is_im || conversation?.is_mpim) return
+  const conversation = await getSlackConversationInfo(installation.botToken, event.item.channel)
+  if (conversation.isIm || conversation.isMpim) return
 
   const message = await (async () => {
     const methods = ['conversations.replies', 'conversations.history'] as const
@@ -1888,7 +1908,23 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
     )
     return
   }
-  const recipient = await getConnectedSlackMember(db, workspace.id, recipientProviderUserId)
+  const resolvedRecipient = conversation.isShared
+    ? await resolveSlackConnectRecipient({ db, provider }, conversation.teamIds, {
+        recipientProviderUserId,
+      })
+    : { value: { recipientProviderUserId } }
+  if ('message' in resolvedRecipient) {
+    await postSlackEphemeral(
+      provider.id,
+      event.item.channel,
+      event.user,
+      resolvedRecipient.message ?? 'Payment not sent. Recipient could not be resolved safely.',
+    )
+    return
+  }
+  const recipient = resolvedRecipient.value
+    ? await getConnectedSlackRecipient(db, provider.type, workspace, resolvedRecipient.value)
+    : null
   if (!recipient) {
     await postSlackEphemeral(
       provider.id,
@@ -1953,7 +1989,7 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
     provider: provider.type,
     providerChannelId: event.item.channel,
     providerId: provider.id,
-    recipients: [{ recipientProviderUserId: recipient.providerUserId }],
+    recipients: [recipient.input],
     senderProviderUserId: sender.providerUserId,
     source: 'reaction',
   }).catch(
@@ -2073,6 +2109,63 @@ async function postSlackEphemeral(
   if (!json.ok) throw Slack.slackApiError('chat.postEphemeral', json.error)
 }
 
+async function postSlackPaymentConfirmation(
+  event: TipEvent,
+  ctx: HandlerContext,
+  confirmUrl: string,
+  options: { label: string; message: string; threadTs?: string },
+) {
+  const confirmUrlLabel = confirmUrl.replace(/(\/confirm\/.{8}).+$/, '$1...')
+  const body = new URLSearchParams()
+  body.set('channel', event.channel.id.replace(/^slack:/, ''))
+  body.set(
+    'blocks',
+    JSON.stringify([
+      {
+        text: { text: options.message, type: 'mrkdwn' },
+        type: 'section',
+      },
+      {
+        elements: [
+          {
+            action_id: 'confirm_payment',
+            style: 'primary',
+            text: { text: options.label, type: 'plain_text' },
+            type: 'button',
+            url: confirmUrl,
+          },
+          {
+            action_id: 'confirm_cancel',
+            text: { text: 'Cancel', type: 'plain_text' },
+            type: 'button',
+          },
+        ],
+        type: 'actions',
+      },
+      {
+        elements: [
+          {
+            text: `Link expires in 10 minutes. <${confirmUrl}|${confirmUrlLabel}>`,
+            type: 'mrkdwn',
+          },
+        ],
+        type: 'context',
+      },
+    ]),
+  )
+  body.set(
+    'text',
+    `${options.message}\nConfirm payment: ${confirmUrl}\nLink expires in 10 minutes.`,
+  )
+  await postSlackPrivateReply(
+    ctx.channelProviderId ?? ctx.provider.id,
+    event.channel.id.replace(/^slack:/, ''),
+    event.user.userId,
+    body,
+    { threadTs: options.threadTs ?? ctx.threadTs },
+  )
+}
+
 async function postSlackPrivateReply(
   providerId: string,
   channelId: string,
@@ -2111,8 +2204,17 @@ async function isExternalSlackConnectActor(
   channelId: string,
   providerUserId: string,
 ) {
+  const actor = await resolveSlackConnectActor(providerId, channelId, providerUserId)
+  return actor.blocked || actor.external
+}
+
+async function resolveSlackConnectActor(
+  providerId: string,
+  channelId: string,
+  providerUserId: string,
+) {
   const installation = await getSlack().getInstallation(providerId)
-  if (!installation) return false
+  if (!installation) return { blocked: false as const, external: false as const }
 
   const channelBody = new URLSearchParams()
   channelBody.set('channel', channelId)
@@ -2141,7 +2243,8 @@ async function isExternalSlackConnectActor(
     channel.channel?.is_ext_shared ||
     channel.channel?.is_shared ||
     channel.channel?.shared_team_ids?.some((teamId) => teamId !== channel.channel?.context_team_id)
-  if (!channel.ok || !channel.channel || !isSharedChannel) return false
+  if (!channel.ok || !channel.channel || !isSharedChannel)
+    return { blocked: false as const, external: false as const }
 
   const userBody = new URLSearchParams()
   userBody.set('user', providerUserId)
@@ -2163,10 +2266,12 @@ async function isExternalSlackConnectActor(
     }),
     await userResponse.json(),
   )
-  if (!info.ok || !info.user?.team_id) return false
+  if (!info.ok || !info.user?.team_id) return { blocked: true as const, external: false as const }
 
   const localTeamIds = new Set([providerId, channel.channel.context_team_id].filter(Boolean))
-  return !localTeamIds.has(info.user.team_id)
+  if (localTeamIds.has(info.user.team_id))
+    return { blocked: false as const, external: false as const }
+  return { blocked: false as const, external: true as const, providerId: info.user.team_id }
 }
 
 function getProvider(event: chat.SlashCommandEvent): ProviderContext {
@@ -2193,6 +2298,31 @@ async function getConnectedSlackMember(db: DB.Type, workspaceId: string, provide
     .executeTakeFirst()
   if (!member) return null
   return { memberId: member.id, providerUserId: member.provider_user_id }
+}
+
+async function getConnectedSlackRecipient(
+  db: DB.Type,
+  provider: ProviderContext['type'],
+  workspace: DB_gen.Selectable.workspace,
+  recipient: Tip.TipRecipientInput,
+) {
+  const recipientWorkspace = recipient.recipientProviderWorkspaceId
+    ? await db
+        .selectFrom('workspace')
+        .select(['id'])
+        .where('provider', '=', provider)
+        .where('provider_id', '=', recipient.recipientProviderWorkspaceId)
+        .executeTakeFirst()
+    : workspace
+  if (!recipientWorkspace) return null
+
+  const member = await getConnectedSlackMember(
+    db,
+    recipientWorkspace.id,
+    recipient.recipientProviderUserId,
+  )
+  if (!member) return null
+  return { ...member, input: recipient }
 }
 
 export async function updateReactionTipAggregate(
@@ -2579,12 +2709,38 @@ async function postSlackInsufficientFunds(event: TipEvent, ctx: HandlerContext, 
 }
 
 async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
-  const workspace = await ctx.db
-    .selectFrom('workspace')
-    .selectAll()
-    .where('provider', '=', ctx.provider.type)
-    .where('provider_id', '=', ctx.provider.id)
-    .executeTakeFirst()
+  const workspace =
+    (await ctx.db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', ctx.provider.type)
+      .where('provider_id', '=', ctx.provider.id)
+      .executeTakeFirst()) ??
+    (ctx.allowUninstalledWorkspaceCreate
+      ? await (async () => {
+          const now = new Date().toISOString()
+          await ctx.db
+            .insertInto('workspace')
+            .values({
+              created_at: now,
+              default_amount: 1000,
+              id: Nanoid.generate(),
+              installed_at: null,
+              provider: ctx.provider.type,
+              provider_id: ctx.provider.id,
+              uninstalled_at: null,
+              updated_at: now,
+            })
+            .onConflict((oc) => oc.columns(['provider', 'provider_id']).doNothing())
+            .execute()
+          return await ctx.db
+            .selectFrom('workspace')
+            .selectAll()
+            .where('provider', '=', ctx.provider.type)
+            .where('provider_id', '=', ctx.provider.id)
+            .executeTakeFirst()
+        })()
+      : null)
   if (!workspace) {
     await postPrivateReply(
       event,
@@ -2620,6 +2776,16 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
         updated_at: createdAt,
       })
       .execute()
+      .catch((error) => {
+        if (!isUniqueConstraintError(error)) throw error
+      })
+    const identity = await ctx.db
+      .selectFrom('provider_identity')
+      .select('id')
+      .where('provider', '=', workspace.provider)
+      .where('provider_workspace_id', '=', workspace.provider_id)
+      .where('provider_user_id', '=', event.user.userId)
+      .executeTakeFirstOrThrow()
     await ctx.db
       .insertInto('member')
       .values({
@@ -2627,16 +2793,18 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
         id,
         login: null,
         name: null,
-        provider_identity_id: providerIdentityId,
+        provider_identity_id: identity.id,
         provider_user_id: event.user.userId,
         updated_at: createdAt,
         workspace_id: workspace.id,
       })
+      .onConflict((oc) => oc.columns(['workspace_id', 'provider_user_id']).doNothing())
       .execute()
     member = await ctx.db
       .selectFrom('member')
       .selectAll()
-      .where('id', '=', id)
+      .where('workspace_id', '=', workspace.id)
+      .where('provider_user_id', '=', event.user.userId)
       .executeTakeFirstOrThrow()
   }
 
@@ -2699,6 +2867,7 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
       id: Nanoid.generate(),
       member_id: member.id,
       provider_channel_id: event.channel.id,
+      channel_provider_id: ctx.channelProviderId ?? ctx.provider.id,
       token_hash: await AccountLink.hashToken(env, token),
       used_at: null,
     })
@@ -2811,25 +2980,10 @@ async function postTipResult(
   const threadTs = options.threadTs ?? event.threadTs
   if (!result.ok) {
     if (result.code === 'confirmation_required' && result.confirmUrl) {
-      const confirmUrlLabel = result.confirmUrl.replace(/(\/confirm\/.{8}).+$/, '$1...')
-      await postPrivateReply(event, event.user, {
-        card: chat.Card({
-          children: [
-            chat.CardText('Tipbot needs wallet approval to send this payment.'),
-            chat.Actions([
-              chat.LinkButton({
-                label: 'Review and approve',
-                style: 'primary',
-                url: result.confirmUrl,
-              }),
-              chat.Button({ id: 'confirm_cancel', label: 'Cancel' }),
-            ]),
-            chat.CardText(`Link expires in 10 minutes. <${result.confirmUrl}|${confirmUrlLabel}>`, {
-              style: 'muted',
-            }),
-          ],
-        }),
-        fallbackText: `Tipbot needs wallet approval to send this payment. Confirm payment: ${result.confirmUrl}`,
+      await postSlackPaymentConfirmation(event, ctx, result.confirmUrl, {
+        label: 'Review and approve',
+        message: 'Tipbot needs wallet approval to send this payment.',
+        threadTs,
       })
       return
     }

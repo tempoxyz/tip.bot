@@ -313,10 +313,14 @@ describe('/api/account/link/:token', () => {
     const channel = await slack.conversations.create({ name: `connect${Date.now()}` })
     const channelId = channel.channel?.id
     if (!channelId) throw new Error('Expected Slack test channel.')
+    const workspace = await factory.workspace.insert({
+      provider_id: providerId,
+      reaction_tip_emoji: 'bell',
+    })
     const pending = await createPendingAccountLink({
       providerChannelId: channelId,
-      providerId,
       providerUserId: Constants.slack.adminUserId,
+      workspaceId: workspace.id,
     })
     const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
     const keyAuthorization = await signKeyAuthorization(root, pending)
@@ -330,6 +334,7 @@ describe('/api/account/link/:token', () => {
     expect(response.status).toBe(200)
     expect(initialize).toHaveBeenCalled()
     await expectSlackMessage(channelId, 'Connected')
+    await expectSlackMessage(channelId, 'React with :bell: `:bell:` to tip a message.')
   })
 
   test('rejects token reuse', async () => {
@@ -870,22 +875,37 @@ describe('/api/chat/slack/oauth/callback', () => {
     })
     const workspace = await db
       .selectFrom('workspace')
-      .select(['name', 'provider', 'provider_id'])
+      .select(['installed_at', 'name', 'provider', 'provider_id', 'uninstalled_at'])
       .where('provider_id', '=', Constants.slack.teamId)
       .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(302)
     expect(response.headers.get('location')).toBe('http://localhost/?slack=installed&team=Emulate')
     expect(workspace).toEqual({
+      installed_at: expect.any(String),
       name: 'Emulate',
       provider: 'slack',
       provider_id: Constants.slack.teamId,
+      uninstalled_at: null,
     })
   })
 
   test('updates existing workspace and redirects', async () => {
     await deleteSlackOauthWorkspace()
-    await factory.workspace.insert({ name: 'Old Name', provider_id: Constants.slack.teamId })
+    const workspace = await factory.workspace.insert({
+      chain_id: Tempo.chainLookup.localnet,
+      default_amount: 1234,
+      installed_at: null,
+      name: 'Old Name',
+      provider_id: Constants.slack.teamId,
+      uninstalled_at: new Date().toISOString(),
+    })
+    const account = await factory.account.insert({})
+    const member = await insertMember({
+      account_id: account.id,
+      provider_user_id: Constants.slack.adminUserId,
+      workspace_id: workspace.id,
+    })
     const installResponse = await client.api.chat.slack.install.$get()
     const location = installResponse.headers.get('location')
     if (!location) throw new Error('Expected Slack install redirect location.')
@@ -914,14 +934,43 @@ describe('/api/chat/slack/oauth/callback', () => {
     })
     const workspaces = await db
       .selectFrom('workspace')
-      .select(['name', 'provider', 'provider_id'])
+      .select([
+        'chain_id',
+        'default_amount',
+        'id',
+        'installed_at',
+        'name',
+        'provider',
+        'provider_id',
+        'uninstalled_at',
+      ])
       .where('provider_id', '=', Constants.slack.teamId)
       .execute()
+    const existingMember = await db
+      .selectFrom('member')
+      .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+      .select(['member.id', 'member.workspace_id', 'provider_identity.account_id'])
+      .where('member.id', '=', member.id)
+      .executeTakeFirstOrThrow()
 
     expect(response.status).toBe(302)
     expect(workspaces).toEqual([
-      { name: 'Emulate', provider: 'slack', provider_id: Constants.slack.teamId },
+      {
+        chain_id: Tempo.chainLookup.localnet,
+        default_amount: 1234,
+        id: workspace.id,
+        installed_at: expect.any(String),
+        name: 'Emulate',
+        provider: 'slack',
+        provider_id: Constants.slack.teamId,
+        uninstalled_at: null,
+      },
     ])
+    expect(existingMember).toEqual({
+      account_id: account.id,
+      id: member.id,
+      workspace_id: workspace.id,
+    })
   })
 })
 

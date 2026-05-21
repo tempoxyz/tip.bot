@@ -159,10 +159,12 @@ const defaultConfig: Partial<{
       created_at: now,
       default_amount: 1000,
       default_token_address: null,
+      installed_at: now,
       name: null,
       provider: 'slack',
       provider_id: `T${Nanoid.generate()}`,
       reaction_tip_emoji: 'money_with_wings',
+      uninstalled_at: null,
       updated_at: now,
     }
   },
