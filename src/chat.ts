@@ -1613,7 +1613,9 @@ async function getSlackConversationInfo(botToken: string, channelId: string) {
       channel: z
         .object({
           context_team_id: z.string().optional(),
+          is_im: z.boolean().optional(),
           is_ext_shared: z.boolean().optional(),
+          is_mpim: z.boolean().optional(),
           is_shared: z.boolean().optional(),
           shared_team_ids: z.array(z.string()).optional(),
         })
@@ -1628,6 +1630,8 @@ async function getSlackConversationInfo(botToken: string, channelId: string) {
     json.channel?.shared_team_ids?.some((teamId) => teamId !== json.channel?.context_team_id),
   )
   return {
+    isIm: Boolean(json.ok && json.channel?.is_im),
+    isMpim: Boolean(json.ok && json.channel?.is_mpim),
     isShared: Boolean(json.ok && json.channel && isShared),
     teamIds: new Set(
       [json.channel?.context_team_id, ...(json.channel?.shared_team_ids ?? [])].filter(
@@ -1685,7 +1689,7 @@ async function resolveLocalSlackRecipient(ctx: HandlerContext, recipient: Tip.Ti
 }
 
 async function resolveSlackConnectRecipient(
-  ctx: HandlerContext,
+  ctx: Pick<HandlerContext, 'db' | 'provider'>,
   teamIds: Set<string>,
   recipient: Tip.TipRecipientInput,
 ) {
@@ -1757,32 +1761,8 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
     return
   }
 
-  const conversation = await (async () => {
-    const body = new URLSearchParams()
-    body.set('channel', event.item.channel)
-    const response = await getSlack().withBotToken(installation.botToken, () =>
-      fetch(`${env.SLACK_API_URL}/conversations.info`, {
-        body,
-        headers: { authorization: `Bearer ${installation.botToken}` },
-        method: 'POST',
-      }),
-    )
-    const json = z.parse(
-      z.object({
-        channel: z
-          .object({
-            is_im: z.boolean().optional(),
-            is_mpim: z.boolean().optional(),
-          })
-          .optional(),
-        ok: z.boolean().optional(),
-      }),
-      await response.json(),
-    )
-    if (!json.ok) return null
-    return json.channel ?? null
-  })()
-  if (conversation?.is_im || conversation?.is_mpim) return
+  const conversation = await getSlackConversationInfo(installation.botToken, event.item.channel)
+  if (conversation.isIm || conversation.isMpim) return
 
   const message = await (async () => {
     const methods = ['conversations.replies', 'conversations.history'] as const
@@ -1928,7 +1908,23 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
     )
     return
   }
-  const recipient = await getConnectedSlackMember(db, workspace.id, recipientProviderUserId)
+  const resolvedRecipient = conversation.isShared
+    ? await resolveSlackConnectRecipient({ db, provider }, conversation.teamIds, {
+        recipientProviderUserId,
+      })
+    : { value: { recipientProviderUserId } }
+  if ('message' in resolvedRecipient) {
+    await postSlackEphemeral(
+      provider.id,
+      event.item.channel,
+      event.user,
+      resolvedRecipient.message ?? 'Payment not sent. Recipient could not be resolved safely.',
+    )
+    return
+  }
+  const recipient = resolvedRecipient.value
+    ? await getConnectedSlackRecipient(db, provider.type, workspace, resolvedRecipient.value)
+    : null
   if (!recipient) {
     await postSlackEphemeral(
       provider.id,
@@ -1993,7 +1989,7 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
     provider: provider.type,
     providerChannelId: event.item.channel,
     providerId: provider.id,
-    recipients: [{ recipientProviderUserId: recipient.providerUserId }],
+    recipients: [recipient.input],
     senderProviderUserId: sender.providerUserId,
     source: 'reaction',
   }).catch(
@@ -2302,6 +2298,31 @@ async function getConnectedSlackMember(db: DB.Type, workspaceId: string, provide
     .executeTakeFirst()
   if (!member) return null
   return { memberId: member.id, providerUserId: member.provider_user_id }
+}
+
+async function getConnectedSlackRecipient(
+  db: DB.Type,
+  provider: ProviderContext['type'],
+  workspace: DB_gen.Selectable.workspace,
+  recipient: Tip.TipRecipientInput,
+) {
+  const recipientWorkspace = recipient.recipientProviderWorkspaceId
+    ? await db
+        .selectFrom('workspace')
+        .select(['id'])
+        .where('provider', '=', provider)
+        .where('provider_id', '=', recipient.recipientProviderWorkspaceId)
+        .executeTakeFirst()
+    : workspace
+  if (!recipientWorkspace) return null
+
+  const member = await getConnectedSlackMember(
+    db,
+    recipientWorkspace.id,
+    recipient.recipientProviderUserId,
+  )
+  if (!member) return null
+  return { ...member, input: recipient }
 }
 
 export async function updateReactionTipAggregate(

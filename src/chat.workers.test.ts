@@ -1206,7 +1206,7 @@ test('@Tipbot mention supports help command for Slack Connect external actors', 
   await expectSlackMessage('@Tipbot disconnect', { channelId })
   await expectSlackMessage('@Tipbot help', { channelId })
   await expectSlackMessage('@Tipbot status', { channelId })
-  await expectSlackMessage('payments in Slack Connect channels aren’t supported yet', { channelId })
+  await expectSlackMessage('Payments in Slack Connect channels aren’t supported yet', { channelId })
   await expectSlackMessageNotContaining('@Tipbot @account', { channelId })
   await expectSlackThreadMessageNotContaining(messageTs, '@Tipbot help', { channelId })
 }, 20_000) // 20 seconds
@@ -2529,6 +2529,64 @@ test('reaction tipping sends tip from single channel guest', async () => {
   await expectSlackThreadMessage(message.ts, 'tipped', { channelId, wait: true })
 }, 20_000) // 20 seconds
 
+test('reaction tipping sends Slack Connect tip to recipient home workspace member', async () => {
+  await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  const connected = await connectTipAccounts({ recipient: false })
+  const connectWorkspace = await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
+  const connectMember = await insertMember({
+    account_id: connected.recipientAccount.id,
+    provider_user_id: Constants.slackConnect.userId,
+    workspace_id: connectWorkspace.id,
+  })
+  const channelId = await getSlackConnectChannelId()
+  const connectSlack = new WebClient(Constants.slackConnect.teamBotToken, {
+    slackApiUrl: env.SLACK_API_URL,
+  })
+  const message = await connectSlack.chat.postMessage({
+    channel: channelId,
+    text: 'slack connect recipient should receive reaction tip',
+  })
+  if (!message.ts) throw new Error('Expected Slack message timestamp.')
+
+  const response = await postSlackReaction({
+    channelId,
+    itemUserId: Constants.slackConnect.userId,
+    messageTs: message.ts,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.adminUserId,
+  })
+  const tip = await waitForTipByIdempotencyKey(
+    `${Chat.reactionTipIdempotencyPrefix}:${connected.workspace.id}:${channelId}:${message.ts}:money_with_wings:${connected.senderMember.id}:${message.ts}-reaction`,
+  )
+  const reactionTip = await db
+    .selectFrom('reaction_tip')
+    .selectAll()
+    .where('tip_id', '=', tip.id)
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(reactionTip).toMatchObject({
+    recipient_member_id: connectMember.id,
+    sender_member_id: connected.senderMember.id,
+    workspace_id: connected.workspace.id,
+  })
+  expect(tip).toMatchObject({
+    recipient_member_id: connectMember.id,
+    sender_member_id: connected.senderMember.id,
+    workspace_id: connected.workspace.id,
+  })
+  await expectSlackThreadMessage(message.ts, 'tipped', { channelId, wait: true })
+}, 20_000) // 20 seconds
+
 test('reaction tipping blocks Slack Connect external sender', async () => {
   const fetchSpy = vi.spyOn(globalThis, 'fetch')
   await connectTipAccounts()
@@ -3846,7 +3904,7 @@ async function waitForTipByIdempotencyKey(idempotencyKey: string) {
   while (Date.now() - startedAt < timeoutMs) {
     const tip = await db
       .selectFrom('tip')
-      .select(['recipient_member_id', 'sender_member_id', 'workspace_id'])
+      .select(['id', 'recipient_member_id', 'sender_member_id', 'workspace_id'])
       .where('idempotency_key', '=', idempotencyKey)
       .executeTakeFirst()
     if (tip) return tip
