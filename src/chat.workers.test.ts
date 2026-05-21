@@ -4514,14 +4514,13 @@ async function deleteSlackConnectWorkspace() {
     .where('workspace_id', '=', workspace.id)
     .execute()
   if (members.length > 0) {
-    await db
-      .deleteFrom('member')
-      .where(
-        'id',
-        'in',
-        members.map((member) => member.id),
-      )
-      .execute()
+    const memberIds = members.map((member) => member.id)
+    await db.deleteFrom('reaction_tip').where('sender_member_id', 'in', memberIds).execute()
+    await db.deleteFrom('reaction_tip').where('recipient_member_id', 'in', memberIds).execute()
+    await db.deleteFrom('tip').where('sender_member_id', 'in', memberIds).execute()
+    await db.deleteFrom('tip').where('recipient_member_id', 'in', memberIds).execute()
+    await db.deleteFrom('tip_batch').where('sender_member_id', 'in', memberIds).execute()
+    await db.deleteFrom('member').where('id', 'in', memberIds).execute()
     await db
       .deleteFrom('provider_identity')
       .where(
