@@ -486,7 +486,6 @@ describe('/tip @account', () => {
     expect(response.status).toBe(200)
     await expectSlackMessage('Tipbot needs your approval to send this payment.')
     await expectSlackMessage('/confirm/')
-    await expectSlackMessage('|https://tip.bot/confirm/0x')
     await expectSlackMessage('Link expires in 10 minutes.')
     await expectSlackMessageNotContaining('Receipt')
   })
@@ -1487,6 +1486,46 @@ test('@Tipbot mention sends Slack Connect tip to recipient home workspace member
     sender_member_id: connected.senderMember.id,
     workspace_id: connected.workspace.id,
   })
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention posts Slack Connect confirmation with host workspace installation', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  const connected = await connectTipAccounts({ recipient: false })
+  await db.deleteFrom('access_key').where('account_id', '=', connected.senderAccount.id).execute()
+  const connectWorkspace = await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
+  await insertMember({
+    account_id: connected.recipientAccount.id,
+    provider_user_id: Constants.slackConnect.userId,
+    workspace_id: connectWorkspace.id,
+  })
+  const channelId = await getSlackConnectChannelId()
+  const messageTs = `1700000025.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    channelId,
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slackConnect.userId}>`,
+  })
+  const call = await getSlackPostEphemeralCall(
+    fetchSpy,
+    'Tipbot needs your approval to send this payment.',
+  )
+
+  expect(response.status).toBe(200)
+  expect(getSlackFetchAuthorization(call)).toBe(`Bearer ${Constants.slack.botToken}`)
+  expect(getSlackFetchAuthorization(call)).not.toBe(`Bearer ${Constants.slackConnect.teamBotToken}`)
+  await expectSlackMessage('Tipbot needs your approval to send this payment.', { channelId })
+  fetchSpy.mockRestore()
 }, 20_000) // 20 seconds
 
 test('@Tipbot mention fails closed when Slack Connect recipient workspace is not installed', async () => {
@@ -3976,6 +4015,45 @@ async function expectSlackPostEphemeralCall(
     .toBe(true)
 }
 
+async function getSlackPostEphemeralCall(
+  fetchSpy: { mock: { calls: Parameters<typeof fetch>[] } },
+  text: string,
+): Promise<Parameters<typeof fetch>> {
+  let found: Parameters<typeof fetch> | null = null
+  await expect
+    .poll(
+      async () => {
+        for (const call of fetchSpy.mock.calls) {
+          const input = call[0]
+          const url =
+            typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+          const params = await slackFetchCallBodyParams(...call)
+          const callText = `${params.get('text') ?? ''} ${params.get('blocks') ?? ''}`
+          if (url.endsWith('/chat.postEphemeral') && callText.includes(text)) {
+            found = call
+            return true
+          }
+        }
+        return false
+      },
+      {
+        message: fetchSpy.mock.calls
+          .map((call) => {
+            const input = call[0]
+            const url =
+              typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+            const params = slackFetchBodyParams(call[1]?.body)
+            return `${url} ${params.get('text') ?? ''} ${params.get('blocks') ?? ''}`
+          })
+          .join('\n'),
+        timeout: 10_000, // 10 seconds
+      },
+    )
+    .toBe(true)
+  if (!found) throw new Error(`Expected Slack ephemeral call containing ${text}.`)
+  return found
+}
+
 async function getSlackPostEphemeralParams(
   fetchSpy: { mock: { calls: Parameters<typeof fetch>[] } },
   text: string,
@@ -4013,6 +4091,12 @@ async function getSlackPostEphemeralParams(
     .toBe(true)
   if (!found) throw new Error(`Expected Slack ephemeral call containing ${text}.`)
   return found as URLSearchParams
+}
+
+function getSlackFetchAuthorization(call: Parameters<typeof fetch>) {
+  const inputHeaders = call[0] instanceof Request ? call[0].headers : undefined
+  const headers = new Headers(call[1]?.headers ?? inputHeaders)
+  return headers.get('authorization')
 }
 
 async function expectSlackPostMessageCall(

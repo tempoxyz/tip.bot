@@ -1262,28 +1262,9 @@ const handlers = {
         )
       else {
         if (result.code === 'confirmation_required' && result.confirmUrl) {
-          const confirmUrlLabel = result.confirmUrl.replace(/(\/confirm\/.{8}).+$/, '$1...')
-          await postPrivateReply(event, event.user, {
-            card: chat.Card({
-              children: [
-                chat.CardText('Tipbot needs your approval to send this payment.'),
-                chat.Actions([
-                  chat.LinkButton({
-                    label: 'Confirm payment',
-                    style: 'primary',
-                    url: result.confirmUrl,
-                  }),
-                  chat.Button({ id: 'confirm_cancel', label: 'Cancel' }),
-                ]),
-                chat.CardText(
-                  `Link expires in 10 minutes. <${result.confirmUrl}|${confirmUrlLabel}>`,
-                  {
-                    style: 'muted',
-                  },
-                ),
-              ],
-            }),
-            fallbackText: `Tipbot needs your approval to send this payment.\nConfirm payment: ${result.confirmUrl}\nLink expires in 10 minutes.`,
+          await postSlackPaymentConfirmation(event, ctx, result.confirmUrl, {
+            label: 'Confirm payment',
+            message: 'Tipbot needs your approval to send this payment.',
           })
           return
         }
@@ -2132,6 +2113,63 @@ async function postSlackEphemeral(
   if (!json.ok) throw Slack.slackApiError('chat.postEphemeral', json.error)
 }
 
+async function postSlackPaymentConfirmation(
+  event: TipEvent,
+  ctx: HandlerContext,
+  confirmUrl: string,
+  options: { label: string; message: string; threadTs?: string },
+) {
+  const confirmUrlLabel = confirmUrl.replace(/(\/confirm\/.{8}).+$/, '$1...')
+  const body = new URLSearchParams()
+  body.set('channel', event.channel.id.replace(/^slack:/, ''))
+  body.set(
+    'blocks',
+    JSON.stringify([
+      {
+        text: { text: options.message, type: 'mrkdwn' },
+        type: 'section',
+      },
+      {
+        elements: [
+          {
+            action_id: 'confirm_payment',
+            style: 'primary',
+            text: { text: options.label, type: 'plain_text' },
+            type: 'button',
+            url: confirmUrl,
+          },
+          {
+            action_id: 'confirm_cancel',
+            text: { text: 'Cancel', type: 'plain_text' },
+            type: 'button',
+          },
+        ],
+        type: 'actions',
+      },
+      {
+        elements: [
+          {
+            text: `Link expires in 10 minutes. <${confirmUrl}|${confirmUrlLabel}>`,
+            type: 'mrkdwn',
+          },
+        ],
+        type: 'context',
+      },
+    ]),
+  )
+  body.set(
+    'text',
+    `${options.message}\nConfirm payment: ${confirmUrl}\nLink expires in 10 minutes.`,
+  )
+  await postSlackPrivateReply(
+    ctx.channelProviderId ?? ctx.provider.id,
+    event.channel.id.replace(/^slack:/, ''),
+    event.user.userId,
+    body,
+    { threadTs: options.threadTs ?? ctx.threadTs },
+  )
+}
+
 async function postSlackPrivateReply(
   providerId: string,
   channelId: string,
@@ -2921,25 +2959,10 @@ async function postTipResult(
   const threadTs = options.threadTs ?? event.threadTs
   if (!result.ok) {
     if (result.code === 'confirmation_required' && result.confirmUrl) {
-      const confirmUrlLabel = result.confirmUrl.replace(/(\/confirm\/.{8}).+$/, '$1...')
-      await postPrivateReply(event, event.user, {
-        card: chat.Card({
-          children: [
-            chat.CardText('Tipbot needs wallet approval to send this payment.'),
-            chat.Actions([
-              chat.LinkButton({
-                label: 'Review and approve',
-                style: 'primary',
-                url: result.confirmUrl,
-              }),
-              chat.Button({ id: 'confirm_cancel', label: 'Cancel' }),
-            ]),
-            chat.CardText(`Link expires in 10 minutes. <${result.confirmUrl}|${confirmUrlLabel}>`, {
-              style: 'muted',
-            }),
-          ],
-        }),
-        fallbackText: `Tipbot needs wallet approval to send this payment. Confirm payment: ${result.confirmUrl}`,
+      await postSlackPaymentConfirmation(event, ctx, result.confirmUrl, {
+        label: 'Review and approve',
+        message: 'Tipbot needs wallet approval to send this payment.',
+        threadTs,
       })
       return
     }
