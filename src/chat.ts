@@ -1435,8 +1435,6 @@ type PendingSlackTip = {
 type ParsedTipBatch = NonNullable<ReturnType<typeof Tip.parseTipBatchText>>
 
 export const reactionTipIdempotencyPrefix = 'reaction:'
-const slackVanityUsergroupIds = ['channel', 'here'] as const
-type SlackVanityUsergroupId = (typeof slackVanityUsergroupIds)[number]
 
 export function isReactionTipIdempotencyKey(value: string) {
   return value.startsWith(reactionTipIdempotencyPrefix)
@@ -1521,9 +1519,11 @@ async function resolveSlackTipPlan(
 
   const conversation = await getSlackConversationInfo(installation.botToken, event.channel.id)
   if (
-    parsed.usergroups?.some(
-      (usergroup) => !isSlackVanityUsergroupId(usergroup.providerUsergroupId),
-    ) &&
+    parsed.usergroups?.some((usergroup) => {
+      // Slack special mentions resolve from channel state, so they can work in Slack Connect;
+      // custom Slack usergroups still cannot be resolved safely there.
+      return !['channel', 'here'].includes(usergroup.providerUsergroupId)
+    }) &&
     conversation.isShared
   ) {
     return {
@@ -1539,11 +1539,14 @@ async function resolveSlackTipPlan(
       source: 'explicit' as const,
     }))
   for (const usergroup of parsed.usergroups ?? []) {
-    const users = isSlackVanityUsergroupId(usergroup.providerUsergroupId)
-      ? await (async (): Promise<
-          { ok: true; providerUserIds: string[] } | { message: string; ok: false }
-        > => {
-          // @channel includes all conversation members; @here narrows that list to active members.
+    const users = (() => {
+      // Slack special mentions are represented in the parsed usergroup list but resolve via
+      // conversation APIs instead of usergroups.users.list.
+      return ['channel', 'here'].includes(usergroup.providerUsergroupId)
+    })()
+      ? await (async () => {
+          // Slack special mentions: @channel includes all conversation members;
+          // @here narrows that list to active members.
           const providerUserIds: string[] = []
           let cursor: string | undefined
           for (;;) {
@@ -1569,13 +1572,14 @@ async function resolveSlackTipPlan(
             if (!json.ok)
               return {
                 message: formatSlackConversationMembersError(json.error),
-                ok: false,
+                ok: false as const,
               }
             providerUserIds.push(...(json.members ?? []))
             cursor = json.response_metadata?.next_cursor || undefined
             if (!cursor) break
           }
-          if (usergroup.providerUsergroupId === 'channel') return { ok: true, providerUserIds }
+          if (usergroup.providerUsergroupId === 'channel')
+            return { ok: true as const, providerUserIds }
 
           const activeProviderUserIds = [] as string[]
           for (const providerUserId of providerUserIds) {
@@ -1600,13 +1604,13 @@ async function resolveSlackTipPlan(
               return {
                 message:
                   json.error === 'missing_scope'
-                    ? 'Payment not sent. I could not read active channel members because Tipbot is missing Slack permissions. Reinstall Tipbot and try again.'
-                    : `Payment not sent. I could not read active channel members${json.error ? ` (${json.error})` : ''}.`,
-                ok: false,
+                    ? 'Payment not sent. Tipbot could not read active channel members because Tipbot is missing Slack permissions. Reinstall Tipbot and try again.'
+                    : `Payment not sent. Tipbot could not read active channel members${json.error ? ` (${json.error})` : ''}.`,
+                ok: false as const,
               }
             if (json.presence === 'active') activeProviderUserIds.push(providerUserId)
           }
-          return { ok: true, providerUserIds: activeProviderUserIds }
+          return { ok: true as const, providerUserIds: activeProviderUserIds }
         })()
       : await getSlackUsergroupMembers(installation.botToken, usergroup)
     if (!users.ok) return { message: users.message, ok: false }
@@ -1679,10 +1683,6 @@ async function resolveSlackTipPlan(
   }
 }
 
-function isSlackVanityUsergroupId(value: string): value is SlackVanityUsergroupId {
-  return slackVanityUsergroupIds.includes(value as SlackVanityUsergroupId)
-}
-
 async function getSlackUsergroupMembers(
   botToken: string,
   usergroup: Tip.TipUsergroupInput,
@@ -1715,10 +1715,10 @@ async function getSlackUsergroupMembers(
 
 function formatSlackConversationMembersError(error?: string) {
   if (error === 'not_in_channel' || error === 'no_permission' || error === 'channel_not_found')
-    return 'Payment not sent. I could not read the channel members. Invite Tipbot to this channel and try again.'
+    return 'Payment not sent. Tipbot could not read the channel members. Invite Tipbot to this channel and try again.'
   if (error === 'missing_scope')
-    return 'Payment not sent. I could not read the channel members because Tipbot is missing Slack permissions. Reinstall Tipbot and try again.'
-  return `Payment not sent. I could not read the channel members${error ? ` (${error})` : ''}.`
+    return 'Payment not sent. Tipbot could not read the channel members because Tipbot is missing Slack permissions. Reinstall Tipbot and try again.'
+  return `Payment not sent. Tipbot could not read the channel members${error ? ` (${error})` : ''}.`
 }
 
 async function getSlackConversationInfo(botToken: string, channelId: string) {
@@ -2644,7 +2644,13 @@ function parseSlackMentionTipText(text: string) {
 }
 
 function formatSlackUsergroupMention(usergroupId: string, usergroupLabel?: string) {
-  if (isSlackVanityUsergroupId(usergroupId)) return `<!${usergroupId}>`
+  if (
+    (() => {
+      // Slack special mentions are formatted without subteam syntax.
+      return ['channel', 'here'].includes(usergroupId)
+    })()
+  )
+    return `<!${usergroupId}>`
   return `<!subteam^${usergroupId}${usergroupLabel ? `|@${usergroupLabel}` : ''}>`
 }
 

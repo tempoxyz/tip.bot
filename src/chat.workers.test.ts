@@ -356,7 +356,7 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      'Payment not sent. I could not read the channel members. Invite Tipbot to this channel and try again.',
+      'Payment not sent. Tipbot could not read the channel members. Invite Tipbot to this channel and try again.',
     )
     await expectSlackMessageNotContaining('You’re about to tip')
     fetchSpy.mockRestore()
@@ -376,7 +376,7 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      'Payment not sent. I could not read the channel members because Tipbot is missing Slack permissions. Reinstall Tipbot and try again.',
+      'Payment not sent. Tipbot could not read the channel members because Tipbot is missing Slack permissions. Reinstall Tipbot and try again.',
     )
     await expectSlackMessageNotContaining('You’re about to tip')
     fetchSpy.mockRestore()
@@ -397,7 +397,7 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      'Payment not sent. I could not read active channel members because Tipbot is missing Slack permissions. Reinstall Tipbot and try again.',
+      'Payment not sent. Tipbot could not read active channel members because Tipbot is missing Slack permissions. Reinstall Tipbot and try again.',
     )
     await expectSlackMessageNotContaining('You’re about to tip')
     fetchSpy.mockRestore()

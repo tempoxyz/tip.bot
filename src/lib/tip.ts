@@ -508,19 +508,17 @@ export function parseTipBatchText(value: string, options: { chainId?: number } =
     }
 
     const usergroup = remaining.match(/^<!subteam\^([A-Z0-9_]+)(?:\|([^>]+))?>\s*/)
-    const vanityUsergroup = usergroup
-      ? null
-      : remaining.match(/^<!(channel|here)(?:\|([^>]+))?>\s*/)
-    if (!usergroup && !vanityUsergroup) break
-    const providerUsergroupId = (usergroup?.[1] ?? vanityUsergroup?.[1])!
+    const specialMention = usergroup ? null : remaining.match(/^<!(channel|here)(?:\|([^>]+))?>\s*/)
+    if (!usergroup && !specialMention) break
+    const providerUsergroupId = (usergroup?.[1] ?? specialMention?.[1])!
     const providerUsergroupLabel =
-      usergroup?.[2]?.trim().replace(/^@+/, '') ?? vanityUsergroup?.[2]?.trim().replace(/^@+/, '')
+      usergroup?.[2]?.trim().replace(/^@+/, '') ?? specialMention?.[2]?.trim().replace(/^@+/, '')
     if (!usergroups.some((item) => item.providerUsergroupId === providerUsergroupId))
       usergroups.push({
         ...(providerUsergroupLabel ? { providerUsergroupLabel } : {}),
         providerUsergroupId,
       })
-    remaining = remaining.slice((usergroup ?? vanityUsergroup)![0].length)
+    remaining = remaining.slice((usergroup ?? specialMention)![0].length)
   }
   if (recipients.length === 0 && usergroups.length === 0) return null
   if (
