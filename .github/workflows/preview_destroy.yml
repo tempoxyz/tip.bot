@@ -40,6 +40,11 @@ jobs:
           const state = JSON.parse(match[1])
           if (state.d1_id) console.log(`d1_id=${state.d1_id}`)
           if (state.slack_app_id) console.log(`slack_app_id=${state.slack_app_id}`)
+          const slackAppIds = [
+            ...(Array.isArray(state.slack_app_ids) ? state.slack_app_ids : []),
+            state.slack_app_id,
+          ].filter((value, index, array) => value && array.indexOf(value) === index)
+          if (slackAppIds.length) console.log(`slack_app_ids=${JSON.stringify(slackAppIds)}`)
           NODE
 
       - name: Checkout
@@ -55,19 +60,21 @@ jobs:
           slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
           slack-config-access-token: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
 
-      - name: Delete Slack preview app
-        if: steps.state.outputs.slack_app_id != ''
+      - name: Delete Slack preview apps
+        if: steps.state.outputs.slack_app_ids != ''
         env:
-          SLACK_APP_ID: ${{ steps.state.outputs.slack_app_id }}
+          SLACK_APP_IDS: ${{ steps.state.outputs.slack_app_ids }}
           SLACK_CONFIG_ACCESS_TOKEN: ${{ steps.slack_token.outputs.token }}
         run: |
-          BODY=$(jq -nc --arg app_id "$SLACK_APP_ID" '{app_id: $app_id}')
-          RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.delete \
-            -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
-            -H "Content-Type: application/json; charset=utf-8" \
-            -d "$BODY")
-          OK=$(echo "$RESPONSE" | jq -r '.ok')
-          if [ "$OK" != "true" ]; then echo "$RESPONSE" | jq '{ok,error,errors}'; fi
+          echo "$SLACK_APP_IDS" | jq -r '.[]' | while read -r SLACK_APP_ID; do
+            BODY=$(jq -nc --arg app_id "$SLACK_APP_ID" '{app_id: $app_id}')
+            RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.delete \
+              -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
+              -H "Content-Type: application/json; charset=utf-8" \
+              -d "$BODY" || echo '{"ok":false,"error":"request_failed"}')
+            OK=$(echo "$RESPONSE" | jq -r '.ok // false')
+            if [ "$OK" != "true" ]; then echo "$RESPONSE" | jq '{ok,error,errors}'; fi
+          done
 
       - name: Delete preview Worker
         env:

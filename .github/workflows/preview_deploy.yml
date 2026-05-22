@@ -116,6 +116,11 @@ jobs:
           output('slack_app_id', state.slack_app_id)
           output('slack_credentials', state.slack_credentials)
           output('reaction_tip_emoji', state.reaction_tip_emoji)
+          const slackAppIds = [
+            ...(Array.isArray(state.slack_app_ids) ? state.slack_app_ids : []),
+            state.slack_app_id,
+          ].filter((value, index, array) => value && array.indexOf(value) === index)
+          if (slackAppIds.length) output('slack_app_ids', JSON.stringify(slackAppIds))
           if (state.slack_credentials) {
             const key = crypto.createHash('sha256').update(process.env.STATE_KEY).digest()
             const payload = JSON.parse(Buffer.from(state.slack_credentials, 'base64url').toString('utf8'))
@@ -160,6 +165,7 @@ jobs:
           STATE_SCOPES_HASH: ${{ steps.state.outputs.scopes_hash }}
           STATE_SEEDED_AT: ${{ steps.state.outputs.seeded_at }}
           STATE_SLACK_APP_ID: ${{ steps.state.outputs.slack_app_id }}
+          STATE_SLACK_APP_IDS: ${{ steps.state.outputs.slack_app_ids }}
           STATE_SLACK_CREDENTIALS: ${{ steps.state.outputs.slack_credentials }}
         run: |
           SHA_SHORT=$(echo "$SHA" | cut -c1-7)
@@ -181,7 +187,8 @@ jobs:
               --arg reaction_tip_emoji "$REACTION_TIP_EMOJI" \
               --arg slack_credentials "$STATE_SLACK_CREDENTIALS" \
               --arg slack_app_id "$STATE_SLACK_APP_ID" \
-              '{pr: ($pr | tonumber), d1_id: $d1_id, reaction_tip_emoji: $reaction_tip_emoji, scopes_hash: $scopes_hash, seeded_at: $seeded_at, slack_app_id: $slack_app_id, slack_credentials: $slack_credentials}')
+              --argjson slack_app_ids "${STATE_SLACK_APP_IDS:-[]}" \
+              '{pr: ($pr | tonumber), d1_id: $d1_id, reaction_tip_emoji: $reaction_tip_emoji, scopes_hash: $scopes_hash, seeded_at: $seeded_at, slack_app_id: $slack_app_id, slack_app_ids: $slack_app_ids, slack_credentials: $slack_credentials}')
             BODY=$(printf '%s\n\n<!-- tipbot-preview: %s -->' "$BODY" "$STATE")
           fi
           COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --jq '.[] | select(.body | contains("tipbot-preview") or contains("Tipbot preview deployment")) | .id' | head -1)
@@ -209,6 +216,7 @@ jobs:
           set -euo pipefail
           METHOD="apps.manifest.update"
           MANIFEST=/tmp/slack-manifest.json
+          REPLACED_APP_ID=""
           if [ -z "$APP_ID" ]; then
             METHOD="apps.manifest.create"
             MANIFEST=/tmp/slack-manifest-bootstrap.json
@@ -229,6 +237,7 @@ jobs:
             ERROR=$(echo "$RESPONSE" | jq -r '.error // empty')
             if [ -n "$APP_ID" ] && [ "$ERROR" = "internal_error" ]; then
               echo "Stored Slack app ${APP_ID} could not be updated; creating a replacement preview app."
+              REPLACED_APP_ID="$APP_ID"
               APP_ID=""
               METHOD="apps.manifest.create"
               MANIFEST=/tmp/slack-manifest-bootstrap.json
@@ -289,7 +298,17 @@ jobs:
           else
             echo "created=false" >> "$GITHUB_OUTPUT"
           fi
+          if [ -n "$REPLACED_APP_ID" ]; then
+            BODY=$(jq -nc --arg app_id "$REPLACED_APP_ID" '{app_id: $app_id}')
+            RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.delete \
+              -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
+              -H "Content-Type: application/json; charset=utf-8" \
+              -d "$BODY" || echo '{"ok":false,"error":"request_failed"}')
+            OK=$(echo "$RESPONSE" | jq -r '.ok // false')
+            if [ "$OK" != "true" ]; then echo "$RESPONSE" | jq '{ok,error,errors}'; fi
+          fi
           echo "app_id=$APP_ID" >> "$GITHUB_OUTPUT"
+          echo "replaced_app_id=$REPLACED_APP_ID" >> "$GITHUB_OUTPUT"
 
       - name: Setup preview D1
         id: d1
@@ -432,11 +451,13 @@ jobs:
           SEEDED_AT: ${{ steps.seed.outputs.seeded_at }}
           SLACK_APP_ID: ${{ steps.slack.outputs.app_id }}
           SLACK_APP_CREATED: ${{ steps.slack.outputs.created }}
+          SLACK_REPLACED_APP_ID: ${{ steps.slack.outputs.replaced_app_id }}
           SLACK_STATE_CREDENTIALS: ${{ steps.slack.outputs.state_credentials }}
           STATE_D1_ID: ${{ steps.state.outputs.d1_id }}
           STATE_SCOPES_HASH: ${{ steps.state.outputs.scopes_hash }}
           STATE_SEEDED_AT: ${{ steps.state.outputs.seeded_at }}
           STATE_SLACK_APP_ID: ${{ steps.state.outputs.slack_app_id }}
+          STATE_SLACK_APP_IDS: ${{ steps.state.outputs.slack_app_ids }}
           STATE_SLACK_CREDENTIALS: ${{ steps.state.outputs.slack_credentials }}
         run: |
           SHA_SHORT=$(echo "$SHA" | cut -c1-7)
@@ -462,7 +483,10 @@ jobs:
             --arg reaction_tip_emoji "$REACTION_TIP_EMOJI" \
             --arg slack_credentials "${SLACK_STATE_CREDENTIALS:-$STATE_SLACK_CREDENTIALS}" \
             --arg slack_app_id "${SLACK_APP_ID:-$STATE_SLACK_APP_ID}" \
-            '{pr: ($pr | tonumber), d1_id: $d1_id, reaction_tip_emoji: $reaction_tip_emoji, scopes_hash: $scopes_hash, seeded_at: $seeded_at, slack_app_id: $slack_app_id, slack_credentials: $slack_credentials}')
+            --arg replaced_slack_app_id "$SLACK_REPLACED_APP_ID" \
+            --arg state_slack_app_id "$STATE_SLACK_APP_ID" \
+            --argjson state_slack_app_ids "${STATE_SLACK_APP_IDS:-[]}" \
+            '([$state_slack_app_ids[], $state_slack_app_id, $replaced_slack_app_id, $slack_app_id] | map(select(. != "")) | unique) as $slack_app_ids | {pr: ($pr | tonumber), d1_id: $d1_id, reaction_tip_emoji: $reaction_tip_emoji, scopes_hash: $scopes_hash, seeded_at: $seeded_at, slack_app_id: $slack_app_id, slack_app_ids: $slack_app_ids, slack_credentials: $slack_credentials}')
           BODY=$(printf '%s\n\n%s\n%s\n%s\n\n%s\n\n%s%s\n%s' \
             "The latest Tipbot preview deployment for ${SHA_SHORT}" \
             "| Name | Status | Preview | Updated (UTC) |" \
