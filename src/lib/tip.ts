@@ -545,18 +545,25 @@ export function parseTipBatchText(value: string, options: { chainId?: number } =
     }
 
     const usergroup = remaining.match(/^<!subteam\^([A-Z0-9_]+)(?:\|([^>]+))?>\s*/)
-    if (!usergroup) break
-    if (!usergroups.some((item) => item.providerUsergroupId === usergroup[1]))
+    const specialMention = usergroup ? null : remaining.match(/^<!(channel|here)(?:\|([^>]+))?>\s*/)
+    if (!usergroup && !specialMention) break
+    const providerUsergroupId = (usergroup?.[1] ?? specialMention?.[1])!
+    const providerUsergroupLabel =
+      usergroup?.[2]?.trim().replace(/^@+/, '') ?? specialMention?.[2]?.trim().replace(/^@+/, '')
+    if (!usergroups.some((item) => item.providerUsergroupId === providerUsergroupId))
       usergroups.push({
-        ...(usergroup[2]?.trim()
-          ? { providerUsergroupLabel: usergroup[2].trim().replace(/^@+/, '') }
-          : {}),
-        providerUsergroupId: usergroup[1]!,
+        ...(providerUsergroupLabel ? { providerUsergroupLabel } : {}),
+        providerUsergroupId,
       })
-    remaining = remaining.slice(usergroup[0].length)
+    remaining = remaining.slice((usergroup ?? specialMention)![0].length)
   }
   if (recipients.length === 0 && usergroups.length === 0) return null
-  if (/<@[A-Z0-9_]+(?:\|[^>]+)?>|<!subteam\^[A-Z0-9_]+(?:\|[^>]+)?>/.test(remaining)) return null
+  if (
+    /<@[A-Z0-9_]+(?:\|[^>]+)?>|<!subteam\^[A-Z0-9_]+(?:\|[^>]+)?>|<!(?:channel|here)(?:\|[^>]+)?>/.test(
+      remaining,
+    )
+  )
+    return null
 
   const parsed = parseTipText(
     `<@${recipients[0]?.recipientProviderUserId ?? 'U000000000'}${recipients[0]?.recipientProviderLabel ? `|${recipients[0].recipientProviderLabel}` : ''}> ${remaining}`,

@@ -264,6 +264,145 @@ describe('/tip @account', () => {
     await expectSlackMessageNotContaining('Receipt')
   }, 20_000) // 20 seconds
 
+  test('previews channel tip through channel membership', async () => {
+    await connectTipAccounts()
+    await memberSlack.conversations.join({ channel: Constants.slack.channelId })
+
+    const response = await postSlashCommand('<!channel> $11 for coffee')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('You’re about to tip <!channel> 1 accounts $11.00 each for coffee.')
+    await expectSlackMessage(`• <@${Constants.slack.memberUserId}>`)
+    await expectSlackMessageNotContaining(`• <@${Constants.slack.adminUserId}> (you)`)
+    await expectSlackMessageNotContaining('Receipt')
+  })
+
+  test('previews channel tip through paginated channel membership', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.endsWith('/conversations.members')) {
+        const params = slackFetchBodyParams(init?.body)
+        return Response.json(
+          params.get('cursor')
+            ? {
+                members: [Constants.slack.memberUserId],
+                ok: true,
+                response_metadata: { next_cursor: '' },
+              }
+            : {
+                members: [Constants.slack.adminUserId],
+                ok: true,
+                response_metadata: { next_cursor: 'page_2' },
+              },
+        )
+      }
+      return originalFetch(input, init)
+    }) satisfies typeof fetch)
+    await connectTipAccounts()
+
+    const response = await postSlashCommand('<!channel> $11 for coffee')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('You’re about to tip <!channel> 1 accounts $11.00 each for coffee.')
+    await expectSlackMessage(`• <@${Constants.slack.memberUserId}>`)
+    await expectSlackMessageNotContaining(`• <@${Constants.slack.adminUserId}> (you)`)
+    await expectSlackMessageNotContaining('Receipt')
+    fetchSpy.mockRestore()
+  })
+
+  test('previews here tip through active channel membership', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.endsWith('/users.getPresence')) {
+        const params = slackFetchBodyParams(init?.body)
+        return Response.json({
+          ok: true,
+          presence:
+            params.get('user') === Constants.slack.adminUserId ||
+            params.get('user') === Constants.slack.memberUserId
+              ? 'active'
+              : 'away',
+        })
+      }
+      return originalFetch(input, init)
+    }) satisfies typeof fetch)
+    await connectTipAccounts()
+    await memberSlack.conversations.join({ channel: Constants.slack.channelId })
+
+    const response = await postSlashCommand('<!here> $11 for coffee')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage('You’re about to tip <!here> 1 accounts $11.00 each for coffee.')
+    await expectSlackMessage(`• <@${Constants.slack.memberUserId}>`)
+    await expectSlackMessageNotContaining(`• <@${Constants.slack.adminUserId}> (you)`)
+    await expectSlackMessageNotContaining(`• <@${unconnectedProviderUserId}> (not connected yet)`)
+    await expectSlackMessageNotContaining('Receipt')
+    fetchSpy.mockRestore()
+  })
+
+  test('explains when channel membership cannot be read', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.endsWith('/conversations.members'))
+        return Response.json({ error: 'not_in_channel', ok: false })
+      return originalFetch(input, init)
+    }) satisfies typeof fetch)
+    await connectTipAccounts()
+
+    const response = await postSlashCommand('<!channel> $11 for coffee')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(
+      'Payment not sent. Tipbot could not read the channel members. Invite Tipbot to this channel and try again.',
+    )
+    await expectSlackMessageNotContaining('You’re about to tip')
+    fetchSpy.mockRestore()
+  })
+
+  test('explains when channel membership permission is missing', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.endsWith('/conversations.members'))
+        return Response.json({ error: 'missing_scope', ok: false })
+      return originalFetch(input, init)
+    }) satisfies typeof fetch)
+    await connectTipAccounts()
+
+    const response = await postSlashCommand('<!channel> $11 for coffee')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(
+      'Payment not sent. Tipbot could not read the channel members because Tipbot is missing Slack permissions. Reinstall Tipbot and try again.',
+    )
+    await expectSlackMessageNotContaining('You’re about to tip')
+    fetchSpy.mockRestore()
+  })
+
+  test('explains when active channel membership permission is missing', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.endsWith('/users.getPresence'))
+        return Response.json({ error: 'missing_scope', ok: false })
+      return originalFetch(input, init)
+    }) satisfies typeof fetch)
+    await connectTipAccounts()
+    await memberSlack.conversations.join({ channel: Constants.slack.channelId })
+
+    const response = await postSlashCommand('<!here> $11 for coffee')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(
+      'Payment not sent. Tipbot could not read active channel members because Tipbot is missing Slack permissions. Reinstall Tipbot and try again.',
+    )
+    await expectSlackMessageNotContaining('You’re about to tip')
+    fetchSpy.mockRestore()
+  })
+
   test('previews small group tip when total is more than $10', async () => {
     await connectTipAccounts()
 
@@ -1500,6 +1639,157 @@ test('@Tipbot mention sends Slack Connect tip to recipient home workspace member
   })
 }, 20_000) // 20 seconds
 
+test('@Tipbot mention sends Slack Connect channel tip with mentioned workspace installation', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  const connected = await connectTipAccounts({ recipient: false })
+  const connectWorkspace = await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
+  const connectMember = await insertMember({
+    account_id: connected.recipientAccount.id,
+    provider_user_id: Constants.slackConnect.userId,
+    workspace_id: connectWorkspace.id,
+  })
+  const channelId = await getSlackConnectChannelId()
+  const messageTs = `1700000027.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    authorizations: [{ is_bot: true, team_id: providerId, user_id: Constants.slack.botUserId }],
+    channelId,
+    contextTeamId: providerId,
+    messageTs,
+    teamId: Constants.slackConnect.teamId,
+    text: `<@${Constants.slack.botUserId}> <!channel>`,
+  })
+  const tip = await waitForTipByIdempotencyKey(`mention:${providerId}:${channelId}:${messageTs}`)
+
+  expect(response.status).toBe(200)
+  await expectSlackThreadMessage(
+    messageTs,
+    `<@${Constants.slack.adminUserId}> tipped <!channel> 1 accounts $0.001 each · Receipt`,
+    { channelId },
+  )
+  expect(tip).toMatchObject({
+    recipient_member_id: connectMember.id,
+    sender_member_id: connected.senderMember.id,
+    workspace_id: connected.workspace.id,
+  })
+  expect(
+    fetchSpy.mock.calls.some((call) => {
+      const input = call[0]
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      const params = slackFetchBodyParams(call[1]?.body)
+      return (
+        url.endsWith('/chat.postMessage') &&
+        getSlackFetchAuthorization(call) === `Bearer ${Constants.slack.botToken}` &&
+        params.get('text')?.includes('tipped <!channel>')
+      )
+    }),
+  ).toBe(true)
+  fetchSpy.mockRestore()
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention sends Slack Connect here tip with active members', async () => {
+  const originalFetch = globalThis.fetch
+  const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((async (input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    if (url.endsWith('/users.getPresence')) {
+      const params = slackFetchBodyParams(init?.body)
+      if (
+        params.get('user') === Constants.slackConnect.userId &&
+        getSlackFetchAuthorization([input, init]) === `Bearer ${Constants.slack.botToken}`
+      )
+        return Response.json({ error: 'user_not_found', ok: false })
+      return Response.json({
+        ok: true,
+        presence:
+          params.get('user') === Constants.slack.adminUserId ||
+          params.get('user') === Constants.slackConnect.userId
+            ? 'active'
+            : 'away',
+      })
+    }
+    return originalFetch(input, init)
+  }) satisfies typeof fetch)
+  await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  const connected = await connectTipAccounts({ recipient: false })
+  const connectWorkspace = await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
+  const connectMember = await insertMember({
+    account_id: connected.recipientAccount.id,
+    provider_user_id: Constants.slackConnect.userId,
+    workspace_id: connectWorkspace.id,
+  })
+  const channelId = await getSlackConnectChannelId()
+  const messageTs = `1700000028.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    authorizations: [{ is_bot: true, team_id: providerId, user_id: Constants.slack.botUserId }],
+    channelId,
+    contextTeamId: providerId,
+    messageTs,
+    teamId: Constants.slackConnect.teamId,
+    text: `<@${Constants.slack.botUserId}> <!here>`,
+  })
+  const tip = await waitForTipByIdempotencyKey(`mention:${providerId}:${channelId}:${messageTs}`)
+
+  expect(response.status).toBe(200)
+  await expectSlackThreadMessage(
+    messageTs,
+    `<@${Constants.slack.adminUserId}> tipped <!here> 1 accounts $0.001 each · Receipt`,
+    { channelId },
+  )
+  expect(tip).toMatchObject({
+    recipient_member_id: connectMember.id,
+    sender_member_id: connected.senderMember.id,
+    workspace_id: connected.workspace.id,
+  })
+  expect(
+    fetchSpy.mock.calls.some((call) => {
+      const input = call[0]
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      const params = slackFetchBodyParams(call[1]?.body)
+      return (
+        url.endsWith('/chat.postMessage') &&
+        getSlackFetchAuthorization(call) === `Bearer ${Constants.slack.botToken}` &&
+        params.get('text')?.includes('tipped <!here>')
+      )
+    }),
+  ).toBe(true)
+  fetchSpy.mockRestore()
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention ignores everyone as a tip target', async () => {
+  aiRunMock.mockResolvedValueOnce({ response: '@Tipbot' } as never)
+  const messageTs = `1700000029.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <!everyone> $11 for coffee`,
+  })
+
+  expect(response.status).toBe(200)
+  await expectSlackThreadMessage(messageTs, 'Anytime.')
+  await expectSlackThreadMessageNotContaining(messageTs, 'You’re about to tip')
+  await expectSlackThreadMessageNotContaining(messageTs, 'Receipt')
+}, 20_000) // 20 seconds
+
 test('@Tipbot mention sends Slack Connect external sender tip from sender workspace with host defaults', async () => {
   await deleteSlackConnectWorkspace()
   const channelId = await getSlackConnectChannelId()
@@ -1509,7 +1799,7 @@ test('@Tipbot mention sends Slack Connect external sender tip from sender worksp
     .where('provider_id', '=', providerId)
     .execute()
   const connected = await connectSlackConnectSender()
-  const messageTs = `1700000027.${Nanoid.generate().slice(0, 6)}`
+  const messageTs = `1700000030.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
     channelId,
@@ -1570,7 +1860,7 @@ test('@Tipbot mention blocks Slack Connect external sender after sender workspac
     .set({ installed_at: new Date().toISOString() })
     .where('id', '=', connected.senderWorkspace.id)
     .execute()
-  const messageTs = `1700000028.${Nanoid.generate().slice(0, 6)}`
+  const messageTs = `1700000031.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
     channelId,
@@ -4589,21 +4879,31 @@ async function postSlackInteraction(payload: unknown) {
 }
 
 async function postSlackAppMention(options: {
+  authorizations?: Array<{
+    is_bot?: boolean
+    team_id?: string
+    user_id?: string
+  }>
   channelId?: string
+  contextTeamId?: string
   eventId?: string
   messageTs: string
   subtype?: string
+  teamId?: string
   text: string
   threadTs?: string
   userId?: string
 }) {
   const body = JSON.stringify({
+    ...(options.authorizations ? { authorizations: options.authorizations } : {}),
+    ...(options.contextTeamId ? { context_team_id: options.contextTeamId } : {}),
     event: {
       channel: options.channelId ?? Constants.slack.channelId,
       channel_type: 'channel',
+      ...(options.contextTeamId ? { context_team_id: options.contextTeamId } : {}),
       event_ts: options.messageTs,
       ...(options.subtype ? { subtype: options.subtype } : {}),
-      team: providerId,
+      team: options.teamId ?? providerId,
       text: options.text,
       ...(options.threadTs ? { thread_ts: options.threadTs } : {}),
       ts: options.messageTs,
@@ -4611,7 +4911,7 @@ async function postSlackAppMention(options: {
       user: options.userId ?? Constants.slack.adminUserId,
     },
     event_id: options.eventId ?? `Ev${Nanoid.generate()}`,
-    team_id: providerId,
+    team_id: options.teamId ?? providerId,
     type: 'event_callback',
   })
   const response = await client.api.chat.slack.$post(

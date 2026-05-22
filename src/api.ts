@@ -782,14 +782,23 @@ export const api = new Hono<{
         )
         const json = z.parse(
           z.object({
-            channel: z.object({ is_member: z.boolean().optional() }).optional(),
+            channel: z
+              .object({
+                is_ext_shared: z.boolean().optional(),
+                is_member: z.boolean().optional(),
+                is_org_shared: z.boolean().optional(),
+                is_shared: z.boolean().optional(),
+              })
+              .optional(),
             error: z.string().optional(),
             ok: z.boolean().optional(),
           }),
           await response.json(),
         )
-        if (json.ok) return json.channel?.is_member === false
-        return ['channel_not_found', 'no_permission', 'not_in_channel'].includes(json.error ?? '')
+        if (!json.ok) return false
+        if (json.channel?.is_ext_shared || json.channel?.is_org_shared || json.channel?.is_shared)
+          return false
+        return json.channel?.is_member === false
       })()
       if (botMissingFromChannel)
         return c.json({

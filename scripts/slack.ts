@@ -13,16 +13,19 @@ const scopeReasons = {
     'Show a temporary sending payment status while Tipbot processes a mentioned tip.',
   'channels:history':
     'Read messages Tipbot is asked to act on in public channels, including reaction and mention tips.',
-  'channels:read': 'Check public channel metadata and respond in the correct conversation.',
+  'channels:read':
+    'Check public channel metadata, read channel members for @channel/@here tips, and respond in the correct conversation.',
   'chat:write': 'Send tip receipts, connection prompts, confirmation prompts, and error messages.',
   commands: 'Register and handle the /tip slash command.',
   'emoji:read': 'Validate configured custom tip reaction emoji exist in the workspace.',
   'groups:history':
     'Read messages Tipbot is asked to act on in private channels where Tipbot has been added.',
-  'groups:read': 'Check private channel metadata where Tipbot has been added.',
+  'groups:read':
+    'Check private channel metadata and read channel members for @channel/@here tips where Tipbot has been added.',
   'reactions:read': 'Detect configured tip reaction emoji and identify the message being tipped.',
   'usergroups:read': 'Expand Slack user groups like @engineering into eligible tip recipients.',
-  'users:read': 'Resolve Slack users for mentions, admin checks, and connected account status.',
+  'users:read':
+    'Resolve Slack users for mentions, admin checks, connected account status, and active @here tips.',
 } as const
 const eventReasons = {
   app_home_opened: 'Refresh each member Home tab when they open Tipbot in Slack.',

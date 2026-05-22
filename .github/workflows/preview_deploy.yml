@@ -431,6 +431,7 @@ jobs:
           SHA: ${{ inputs.sha }}
           SEEDED_AT: ${{ steps.seed.outputs.seeded_at }}
           SLACK_APP_ID: ${{ steps.slack.outputs.app_id }}
+          SLACK_APP_CREATED: ${{ steps.slack.outputs.created }}
           SLACK_STATE_CREDENTIALS: ${{ steps.slack.outputs.state_credentials }}
           STATE_D1_ID: ${{ steps.state.outputs.d1_id }}
           STATE_SCOPES_HASH: ${{ steps.state.outputs.scopes_hash }}
@@ -448,7 +449,9 @@ jobs:
           STATUS="[![Ready](https://vercel.com/static/status/ready.svg) Ready](${RUN_URL})"
           if [ "$JOB_STATUS" != "success" ]; then STATUS="[![Error](https://vercel.com/static/status/error.svg) Error](${RUN_URL})"; fi
           REINSTALL=""
-          if [ -n "$STATE_SCOPES_HASH" ] && [ "$STATE_SCOPES_HASH" != "$MANIFEST_SCOPES_HASH" ]; then
+          if [ "$SLACK_APP_CREATED" = "true" ]; then
+            REINSTALL="\n\nSlack preview app changed. Reinstall the Slack preview."
+          elif [ -n "$STATE_SCOPES_HASH" ] && [ "$STATE_SCOPES_HASH" != "$MANIFEST_SCOPES_HASH" ]; then
             REINSTALL="\n\nOAuth scopes changed. Reinstall the Slack preview."
           fi
           STATE=$(jq -nc \

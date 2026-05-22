@@ -53,7 +53,17 @@ export function getChat() {
 
     const raw = z.parse(
       z.object({
+        authorizations: z
+          .array(
+            z.object({
+              is_bot: z.boolean().optional(),
+              team_id: z.string().min(1).nullable().optional(),
+              user_id: z.string().min(1).nullable().optional(),
+            }),
+          )
+          .optional(),
         channel: z.string().min(1),
+        context_team_id: z.string().min(1).nullable().optional(),
         subtype: z.string().min(1).optional(),
         team: z.string().min(1).optional(),
         team_id: z.string().min(1).optional(),
@@ -67,7 +77,20 @@ export function getChat() {
     )
     if (raw.subtype) return
 
-    const providerId = raw.team_id ?? raw.team
+    const providerId = (() => {
+      const mentioned = new Set(
+        [...raw.text.matchAll(/<@([A-Z0-9_]+)(?:\|[^>]+)?>/g)].map((match) => match[1]),
+      )
+      return (
+        raw.authorizations?.find(
+          (authorization) =>
+            authorization.user_id && mentioned.has(authorization.user_id) && authorization.team_id,
+        )?.team_id ??
+        raw.context_team_id ??
+        raw.team_id ??
+        raw.team
+      )
+    })()
     if (!providerId) throw new Error('Slack app mention missing team id.')
 
     const installation = await getSlack().getInstallation(providerId)
@@ -1212,7 +1235,9 @@ const handlers = {
           amountEach: parsed.amount ?? workspace?.default_amount,
         })
     if (!plan.ok) {
-      await postPrivateReply(event, event.user, plan.message)
+      await postPrivateReply(event, event.user, plan.message, {
+        providerId: ctx.channelProviderId ?? ctx.provider.id,
+      })
       return
     }
     if (plan.previewRequired) {
@@ -1564,12 +1589,20 @@ async function resolveSlackTipPlan(
     }
 
   const conversation = await getSlackConversationInfo(installation.botToken, event.channel.id)
-  if (parsed.usergroups?.length && conversation.isShared)
+  if (
+    parsed.usergroups?.some((usergroup) => {
+      // Slack special mentions resolve from channel state, so they can work in Slack Connect;
+      // custom Slack usergroups still cannot be resolved safely there.
+      return !['channel', 'here'].includes(usergroup.providerUsergroupId)
+    }) &&
+    conversation.isShared
+  ) {
     return {
       message:
         'Group tips are not supported in Slack Connect channels yet; mention individual recipients instead.',
       ok: false,
     }
+  }
 
   const targets: Array<{ recipient: Tip.TipRecipientInput; source: 'explicit' | 'usergroup' }> =
     parsed.recipients.map((recipient) => ({
@@ -1577,30 +1610,91 @@ async function resolveSlackTipPlan(
       source: 'explicit' as const,
     }))
   for (const usergroup of parsed.usergroups ?? []) {
-    const response = await getSlack().withBotToken(installation.botToken, () => {
-      const body = new URLSearchParams()
-      body.set('usergroup', usergroup.providerUsergroupId)
-      return fetch(`${env.SLACK_API_URL}/usergroups.users.list`, {
-        body,
-        headers: { authorization: `Bearer ${installation.botToken}` },
-        method: 'POST',
-      })
-    })
-    const json = z.parse(
-      z.object({
-        ok: z.boolean().optional(),
-        users: z.array(z.string()).optional(),
-      }),
-      await response.json(),
-    )
-    if (!json.ok)
-      return {
-        message: `Payment not sent. I could not read @${usergroup.providerUsergroupLabel ?? usergroup.providerUsergroupId}.`,
-        ok: false,
+    const users = await (async () => {
+      if (usergroup.providerUsergroupId !== 'channel' && usergroup.providerUsergroupId !== 'here')
+        return await getSlackUsergroupMembers(installation.botToken, usergroup)
+
+      // Slack special mentions are represented in the parsed usergroup list but resolve via
+      // conversation APIs instead of usergroups.users.list.
+      const providerUserIds: string[] = []
+      const slackChannelId = Slack.getChannelId(event.channel.id)
+      let cursor: string | undefined
+      do {
+        const body = new URLSearchParams()
+        body.set('channel', slackChannelId)
+        if (cursor) body.set('cursor', cursor)
+        const response = await getSlack().withBotToken(installation.botToken, () =>
+          fetch(`${env.SLACK_API_URL}/conversations.members`, {
+            body,
+            headers: { authorization: `Bearer ${installation.botToken}` },
+            method: 'POST',
+          }),
+        )
+        const json = z.parse(
+          z.object({
+            error: z.string().optional(),
+            members: z.array(z.string()).optional(),
+            ok: z.boolean().optional(),
+            response_metadata: z.object({ next_cursor: z.string().optional() }).optional(),
+          }),
+          await response.json(),
+        )
+        if (!json.ok)
+          return {
+            message: formatSlackConversationMembersError(json.error),
+            ok: false as const,
+          }
+        providerUserIds.push(...(json.members ?? []))
+        cursor = json.response_metadata?.next_cursor || undefined
+      } while (cursor)
+
+      // @channel includes all conversation members; @here narrows that list to active members.
+      if (usergroup.providerUsergroupId === 'channel') return { ok: true as const, providerUserIds }
+
+      const activeProviderUserIds = [] as string[]
+      for (const providerUserId of providerUserIds) {
+        const presence = await (async () => {
+          // Slack Connect can return user_not_found for a shared-channel member when using the
+          // host workspace token. Try every installed shared workspace before skipping that member.
+          for (const providerId of [ctx.provider.id, ...conversation.teamIds]) {
+            const tokenInstallation = await getSlack().getInstallation(providerId)
+            if (!tokenInstallation) continue
+            const body = new URLSearchParams()
+            body.set('user', providerUserId)
+            const response = await getSlack().withBotToken(tokenInstallation.botToken, () =>
+              fetch(`${env.SLACK_API_URL}/users.getPresence`, {
+                body,
+                headers: { authorization: `Bearer ${tokenInstallation.botToken}` },
+                method: 'POST',
+              }),
+            )
+            const json = z.parse(
+              z.object({
+                error: z.string().optional(),
+                ok: z.boolean().optional(),
+                presence: z.string().optional(),
+              }),
+              await response.json(),
+            )
+            if (json.ok) return { ok: true as const, presence: json.presence }
+            if (json.error !== 'user_not_found')
+              return {
+                message:
+                  json.error === 'missing_scope'
+                    ? 'Payment not sent. Tipbot could not read active channel members because Tipbot is missing Slack permissions. Reinstall Tipbot and try again.'
+                    : `Payment not sent. Tipbot could not read active channel members${json.error ? ` (${json.error})` : ''}.`,
+                ok: false as const,
+              }
+          }
+          return { ok: true as const, presence: 'away' }
+        })()
+        if (!presence.ok) return presence
+        if (presence.presence === 'active') activeProviderUserIds.push(providerUserId)
       }
-    // Slack usergroups.users.list is treated as authoritative flat membership; no recursive
-    // usergroup expansion.
-    for (const providerUserId of json.users ?? []) {
+      return { ok: true as const, providerUserIds: activeProviderUserIds }
+    })()
+    if (!users.ok) return { message: users.message, ok: false }
+    for (const providerUserId of users.providerUserIds) {
       if (!/^[UW][A-Z0-9_]+$/.test(providerUserId)) continue
       const user = await getSlackUserInfo(installation.botToken, providerUserId)
       if (!user || user.deleted || user.is_app_user || user.is_bot) continue
@@ -1667,6 +1761,44 @@ async function resolveSlackTipPlan(
     usergroupId: parsed.usergroups?.[0]?.providerUsergroupId,
     usergroupLabel: parsed.usergroups?.[0]?.providerUsergroupLabel,
   }
+}
+
+async function getSlackUsergroupMembers(
+  botToken: string,
+  usergroup: Tip.TipUsergroupInput,
+): Promise<{ ok: true; providerUserIds: string[] } | { message: string; ok: false }> {
+  const response = await getSlack().withBotToken(botToken, () => {
+    const body = new URLSearchParams()
+    body.set('usergroup', usergroup.providerUsergroupId)
+    return fetch(`${env.SLACK_API_URL}/usergroups.users.list`, {
+      body,
+      headers: { authorization: `Bearer ${botToken}` },
+      method: 'POST',
+    })
+  })
+  const json = z.parse(
+    z.object({
+      ok: z.boolean().optional(),
+      users: z.array(z.string()).optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok)
+    return {
+      message: `Payment not sent. I could not read ${formatSlackUsergroupMention(usergroup.providerUsergroupId, usergroup.providerUsergroupLabel)}.`,
+      ok: false,
+    }
+  // Slack usergroups.users.list is treated as authoritative flat membership; no recursive
+  // usergroup expansion.
+  return { ok: true, providerUserIds: json.users ?? [] }
+}
+
+function formatSlackConversationMembersError(error?: string) {
+  if (error === 'not_in_channel' || error === 'no_permission' || error === 'channel_not_found')
+    return 'Payment not sent. Tipbot could not read the channel members. Invite Tipbot to this channel and try again.'
+  if (error === 'missing_scope')
+    return 'Payment not sent. Tipbot could not read the channel members because Tipbot is missing Slack permissions. Reinstall Tipbot and try again.'
+  return `Payment not sent. Tipbot could not read the channel members${error ? ` (${error})` : ''}.`
 }
 
 async function getSlackConversationInfo(botToken: string, channelId: string) {
@@ -2603,7 +2735,9 @@ function normalizeSlackMentionText(value: string, botUserId: string) {
 }
 
 function parseSlackMentionTipText(text: string) {
-  const target = text.match(/<@[A-Z0-9_]+(?:\|[^>]+)?>|<!subteam\^[A-Z0-9_]+(?:\|[^>]+)?>/)
+  const target = text.match(
+    /<@[A-Z0-9_]+(?:\|[^>]+)?>|<!subteam\^[A-Z0-9_]+(?:\|[^>]+)?>|<!(?:channel|here)(?:\|[^>]+)?>/,
+  )
   if (!target) return null
   const prefix = text.slice(0, target.index).trim().toLowerCase()
   if (prefix && !['pay', 'send', 'tip'].includes(prefix)) return null
@@ -2611,6 +2745,7 @@ function parseSlackMentionTipText(text: string) {
 }
 
 function formatSlackUsergroupMention(usergroupId: string, usergroupLabel?: string) {
+  if (['channel', 'here'].includes(usergroupId)) return `<!${usergroupId}>`
   return `<!subteam^${usergroupId}${usergroupLabel ? `|@${usergroupLabel}` : ''}>`
 }
 
@@ -3009,9 +3144,24 @@ async function postPrivateReply(
   event: TipEvent,
   user: chat.Author,
   message: Parameters<TipEvent['channel']['postEphemeral']>[1],
-  options: { threadTs?: string } = {},
+  options: { providerId?: string; threadTs?: string } = {},
 ) {
   const threadTs = options.threadTs ?? event.threadTs
+  if (options.providerId && typeof message === 'string') {
+    const body = new URLSearchParams()
+    body.set('channel', Slack.getChannelId(event.channel.id))
+    body.set('text', message)
+    await postSlackPrivateReply(
+      options.providerId,
+      Slack.getChannelId(event.channel.id),
+      user.userId,
+      body,
+      {
+        threadTs,
+      },
+    )
+    return
+  }
   if (Slack.isDMChannelId(event.channel.id)) {
     await event.channel.post(message)
     return
