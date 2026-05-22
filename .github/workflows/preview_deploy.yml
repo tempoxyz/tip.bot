@@ -474,9 +474,9 @@ jobs:
           if [ "$JOB_STATUS" != "success" ]; then STATUS="[![Error](https://vercel.com/static/status/error.svg) Error](${RUN_URL})"; fi
           REINSTALL=""
           if [ "$SLACK_APP_CREATED" = "true" ]; then
-            REINSTALL="\n\nSlack preview app changed. Reinstall the Slack preview."
+            REINSTALL=$(printf '\n\n> [!IMPORTANT]\n> %s' "Slack preview app changed. Reinstall the Slack preview.")
           elif [ -n "$STATE_SCOPES_HASH" ] && [ "$STATE_SCOPES_HASH" != "$MANIFEST_SCOPES_HASH" ]; then
-            REINSTALL="\n\nOAuth scopes changed. Reinstall the Slack preview."
+            REINSTALL=$(printf '\n\n> [!IMPORTANT]\n> %s' "OAuth scopes changed. Reinstall the Slack preview.")
           fi
           STATE=$(jq -nc \
             --arg pr "$PR_NUMBER" \
