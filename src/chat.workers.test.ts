@@ -1709,6 +1709,50 @@ test('@Tipbot mention sends Slack Connect tip to recipient home workspace member
   })
 }, 20_000) // 20 seconds
 
+test('@Tipbot mention supports Slack Connect broadcast reply tips', async () => {
+  await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  const connected = await connectTipAccounts({ recipient: false })
+  const connectWorkspace = await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
+  const connectMember = await insertMember({
+    account_id: connected.recipientAccount.id,
+    provider_user_id: Constants.slackConnect.userId,
+    workspace_id: connectWorkspace.id,
+  })
+  const channelId = await getSlackConnectChannelId()
+  const messageTs = `1700000030.${Nanoid.generate().slice(0, 6)}`
+  const threadTs = `1700000029.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    channelId,
+    messageTs,
+    subtype: 'thread_broadcast',
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slackConnect.userId}>`,
+    threadTs,
+  })
+  const tip = await waitForTipByIdempotencyKey(`mention:${providerId}:${channelId}:${messageTs}`)
+
+  expect(response.status).toBe(200)
+  await expectSlackThreadMessage(
+    threadTs,
+    `<@${Constants.slack.adminUserId}> tipped <@${Constants.slackConnect.userId}> $0.001 · Receipt`,
+    { channelId },
+  )
+  expect(tip).toMatchObject({
+    recipient_member_id: connectMember.id,
+    sender_member_id: connected.senderMember.id,
+    workspace_id: connected.workspace.id,
+  })
+}, 20_000) // 20 seconds
+
 test('@Tipbot mention sends Slack Connect channel tip with mentioned workspace installation', async () => {
   const fetchSpy = vi.spyOn(globalThis, 'fetch')
   await deleteSlackConnectWorkspace()

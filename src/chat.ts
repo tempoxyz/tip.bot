@@ -75,7 +75,7 @@ export function getChat() {
       }),
       message.raw,
     )
-    if (raw.subtype) return
+    if (raw.subtype && !['reply_broadcast', 'thread_broadcast'].includes(raw.subtype)) return
 
     const providerId = (() => {
       const mentioned = new Set(
