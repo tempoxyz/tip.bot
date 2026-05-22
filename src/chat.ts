@@ -115,8 +115,66 @@ export function getChat() {
           db: DB.create(env.DB),
           externalSlackConnect: true,
           provider: { id: slackConnectActor.providerId, type: 'slack' },
+          settingsProviderId: providerId,
           text: match[2]?.trim() ?? '',
           threadTs: privateThreadTs,
+        })
+        return
+      }
+      if (slackConnectActor.external && !match) {
+        const db = DB.create(env.DB)
+        const workspace = await db
+          .selectFrom('workspace')
+          .select(['id', 'installed_at'])
+          .where('provider', '=', 'slack')
+          .where('provider_id', '=', slackConnectActor.providerId)
+          .executeTakeFirst()
+        if (!workspace) {
+          await postPrivateReply(
+            event,
+            event.user,
+            `Payment not sent. Connect with \`@${getSlackBotDisplayName(env.HOST)} connect\` first.`,
+          )
+          return
+        }
+        if (workspace.installed_at) {
+          await postPrivateReply(
+            event,
+            event.user,
+            'Payment not sent. Use your workspace’s Tipbot app to send payments here.',
+          )
+          return
+        }
+        const member = await db
+          .selectFrom('member')
+          .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+          .select('member.id')
+          .where('member.workspace_id', '=', workspace.id)
+          .where('member.provider_user_id', '=', raw.user)
+          .where('provider_identity.account_id', 'is not', null)
+          .executeTakeFirst()
+        if (!member) {
+          await postPrivateReply(
+            event,
+            event.user,
+            `Payment not sent. Connect with \`@${getSlackBotDisplayName(env.HOST)} connect\` first.`,
+          )
+          return
+        }
+        await handlers.default(event, {
+          channelProviderId: providerId,
+          db,
+          externalSlackConnect: true,
+          provider: { id: slackConnectActor.providerId, type: 'slack' },
+          settingsProviderId: providerId,
+          text: parseSlackMentionTipText(mentionText) ?? '',
+          threadTs: privateThreadTs,
+          defaultTip: {
+            idempotencyKey: `mention:${providerId}:${raw.channel}:${raw.ts}`,
+            insufficientFundsThreadTs: raw.thread_ts,
+            mention: true,
+            threadTs: publicThreadTs,
+          },
         })
         return
       }
@@ -409,11 +467,13 @@ const actions = {
       providerThreadId: pending.providerThreadId,
       recipients: pending.recipients,
       senderProviderUserId: pending.senderProviderUserId,
+      settingsProviderId: pending.settingsProviderId,
       skippedRecipients: pending.skippedRecipients,
       source: pending.source,
       tokenAddress: pending.tokenAddress,
       usergroupId: pending.usergroupId,
       usergroupLabel: pending.usergroupLabel,
+      workspaceProviderId: pending.workspaceProviderId,
     }).catch(
       (error) =>
         ({
@@ -546,7 +606,7 @@ const handlers = {
       .selectFrom('workspace')
       .selectAll()
       .where('provider', '=', ctx.provider.type)
-      .where('provider_id', '=', ctx.provider.id)
+      .where('provider_id', '=', ctx.settingsProviderId ?? ctx.provider.id)
       .executeTakeFirst()
     if (!workspace) {
       await postPrivateReply(
@@ -618,7 +678,7 @@ const handlers = {
       .selectFrom('workspace')
       .selectAll()
       .where('provider', '=', ctx.provider.type)
-      .where('provider_id', '=', ctx.provider.id)
+      .where('provider_id', '=', ctx.settingsProviderId ?? ctx.provider.id)
       .executeTakeFirst()
     if (!workspace) {
       await postPrivateReply(
@@ -1082,7 +1142,7 @@ const handlers = {
       .selectFrom('workspace')
       .selectAll()
       .where('provider', '=', ctx.provider.type)
-      .where('provider_id', '=', ctx.provider.id)
+      .where('provider_id', '=', ctx.settingsProviderId ?? ctx.provider.id)
       .executeTakeFirst()
     const parsed = Tip.parseTipBatchText(ctx.text, {
       chainId: workspace?.chain_id ?? Tempo.chainLookup.mainnet,
@@ -1158,7 +1218,9 @@ const handlers = {
       Boolean(parsed.usergroups?.length) ||
       (await (async () => {
         // Single-recipient Slack Connect tips still need workspace-safe recipient resolution.
-        const installation = await getSlack().getInstallation(ctx.provider.id)
+        const installation = await getSlack().getInstallation(
+          ctx.channelProviderId ?? ctx.provider.id,
+        )
         if (!installation) return false
         return (await getSlackConversationInfo(installation.botToken, event.channel.id)).isShared
       })().catch(() => false))
@@ -1189,15 +1251,17 @@ const handlers = {
         idempotencyKey: options.idempotencyKey,
         memo: parsed.memo,
         providerChannelId: event.channel.id,
-        providerId: ctx.provider.id,
+        providerId: ctx.channelProviderId ?? ctx.provider.id,
         providerThreadId: options.threadTs,
         recipients: plan.recipients,
         senderProviderUserId: event.user.userId,
+        settingsProviderId: ctx.settingsProviderId,
         skippedRecipients: plan.skippedRecipients,
         source: options.mention ? 'mention' : 'command',
         tokenAddress: tokenAddress ?? undefined,
         usergroupId: plan.usergroupId,
         usergroupLabel: plan.usergroupLabel,
+        workspaceProviderId: ctx.provider.id,
       })
       return
     }
@@ -1217,13 +1281,15 @@ const handlers = {
               memo: parsed.memo,
               provider: ctx.provider.type,
               providerChannelId: event.channel.id,
-              providerId: ctx.provider.id,
+              providerId: ctx.channelProviderId ?? ctx.provider.id,
               providerThreadId: options.threadTs,
               recipientProviderLabel: plan.recipients[0]?.recipientProviderLabel,
               recipientProviderUserId: plan.recipients[0]!.recipientProviderUserId,
               recipientProviderWorkspaceId: plan.recipients[0]?.recipientProviderWorkspaceId,
               senderProviderUserId: event.user.userId,
+              settingsProviderId: ctx.settingsProviderId,
               tokenAddress: tokenAddress ?? undefined,
+              workspaceProviderId: ctx.provider.id,
             })
           : Tip.handleTipBatchRequest(env, {
               amount: parsed.amount,
@@ -1231,15 +1297,17 @@ const handlers = {
               memo: parsed.memo,
               provider: ctx.provider.type,
               providerChannelId: event.channel.id,
-              providerId: ctx.provider.id,
+              providerId: ctx.channelProviderId ?? ctx.provider.id,
               providerThreadId: options.threadTs,
               recipients: plan.recipients,
               senderProviderUserId: event.user.userId,
+              settingsProviderId: ctx.settingsProviderId,
               skippedRecipients: plan.skippedRecipients,
               source: options.mention ? 'mention' : 'command',
               tokenAddress: tokenAddress ?? undefined,
               usergroupId: plan.usergroupId,
               usergroupLabel: plan.usergroupLabel,
+              workspaceProviderId: ctx.provider.id,
             })
       ).catch(
         (error) =>
@@ -1393,6 +1461,7 @@ type HandlerContext = {
   db: DB.Type
   externalSlackConnect?: boolean
   provider: ProviderContext
+  settingsProviderId?: string
   text: string
   threadTs?: string
 }
@@ -1425,11 +1494,13 @@ type PendingSlackTip = {
   providerThreadId?: string
   recipients: Tip.TipRecipientInput[]
   senderProviderUserId: string
+  settingsProviderId?: string
   skippedRecipients?: Tip.TipSkippedRecipient[]
   source: 'command' | 'mention' | 'reaction'
   tokenAddress?: string
   usergroupId?: string
   usergroupLabel?: string
+  workspaceProviderId?: string
 }
 
 type ParsedTipBatch = NonNullable<ReturnType<typeof Tip.parseTipBatchText>>
@@ -1464,7 +1535,7 @@ async function setSlackAssistantThreadStatus(
   status: string,
   options?: { loadingMessages?: readonly string[] },
 ) {
-  const installation = await getSlack().getInstallation(ctx.provider.id)
+  const installation = await getSlack().getInstallation(ctx.channelProviderId ?? ctx.provider.id)
   if (!installation) return
 
   const body = new URLSearchParams()
@@ -1508,7 +1579,7 @@ async function resolveSlackTipPlan(
   )
     return { message: 'Payment not sent. Cannot send a payment to yourself.', ok: false }
 
-  const installation = await getSlack().getInstallation(ctx.provider.id)
+  const installation = await getSlack().getInstallation(ctx.channelProviderId ?? ctx.provider.id)
   if (!installation)
     return {
       ok: true,
@@ -1845,14 +1916,16 @@ async function resolveLocalSlackRecipient(ctx: HandlerContext, recipient: Tip.Ti
 }
 
 async function resolveSlackConnectRecipient(
-  ctx: Pick<HandlerContext, 'db' | 'provider'>,
+  ctx: Pick<HandlerContext, 'channelProviderId' | 'db' | 'provider'>,
   teamIds: Set<string>,
   recipient: Tip.TipRecipientInput,
 ) {
-  const candidates = [...teamIds, ctx.provider.id].map((providerWorkspaceId) => ({
-    providerUserId: recipient.recipientProviderUserId,
-    providerWorkspaceId,
-  }))
+  const candidates = [...teamIds, ctx.channelProviderId, ctx.provider.id]
+    .filter((providerWorkspaceId) => providerWorkspaceId !== undefined)
+    .map((providerWorkspaceId) => ({
+      providerUserId: recipient.recipientProviderUserId,
+      providerWorkspaceId,
+    }))
   for (const tokenTeamId of teamIds) {
     const tokenInstallation = await getSlack().getInstallation(tokenTeamId)
     if (!tokenInstallation) continue
@@ -1907,19 +1980,45 @@ async function resolveSlackConnectRecipient(
 }
 
 async function handleSlackReactionTip(event: SlackReactionEvent, context: ReactionHandlerContext) {
-  const { db, provider, workspace } = context
+  const { db, provider } = context
+  let workspace = context.workspace
 
   const installation = await getSlack().getInstallation(provider.id)
   if (!installation) return
 
-  if (await isExternalSlackConnectActor(provider.id, event.item.channel, event.user)) {
-    await postSlackEphemeral(
-      provider.id,
-      event.item.channel,
-      event.user,
-      `Tipbot can connect your account here, but payments in Slack Connect channels aren’t supported yet unless you install the Tipbot app to your workspace.`,
-    )
-    return
+  const slackConnectActor = await resolveSlackConnectActor(
+    provider.id,
+    event.item.channel,
+    event.user,
+  )
+  if (slackConnectActor.blocked) return
+  if (slackConnectActor.external) {
+    const senderWorkspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', 'slack')
+      .where('provider_id', '=', slackConnectActor.providerId)
+      .executeTakeFirst()
+    if (!senderWorkspace) return
+    if (senderWorkspace.installed_at) {
+      await postSlackEphemeral(
+        provider.id,
+        event.item.channel,
+        event.user,
+        'Payment not sent. Use your workspace’s Tipbot app to send payments here.',
+      )
+      return
+    }
+    const sender = await db
+      .selectFrom('member')
+      .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+      .select('member.id')
+      .where('member.workspace_id', '=', senderWorkspace.id)
+      .where('member.provider_user_id', '=', event.user)
+      .where('provider_identity.account_id', 'is not', null)
+      .executeTakeFirst()
+    if (!sender) return
+    workspace = senderWorkspace
   }
 
   const conversation = await getSlackConversationInfo(installation.botToken, event.item.channel)
@@ -2152,7 +2251,9 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
     providerId: provider.id,
     recipients: [recipient.input],
     senderProviderUserId: sender.providerUserId,
+    settingsProviderId: provider.id,
     source: 'reaction',
+    workspaceProviderId: workspace.provider_id,
   }).catch(
     (error) =>
       ({
@@ -2358,15 +2459,6 @@ async function postSlackPrivateReply(
     await response.json(),
   )
   if (!json.ok) throw Slack.slackApiError(method, json.error)
-}
-
-async function isExternalSlackConnectActor(
-  providerId: string,
-  channelId: string,
-  providerUserId: string,
-) {
-  const actor = await resolveSlackConnectActor(providerId, channelId, providerUserId)
-  return actor.blocked || actor.external
 }
 
 async function resolveSlackConnectActor(
@@ -2735,7 +2827,7 @@ async function postInvalidUsage(
   )
   if (options.threadTs) body.set('thread_ts', options.threadTs)
   await postSlackPrivateReply(
-    ctx.provider.id,
+    ctx.channelProviderId ?? ctx.provider.id,
     event.channel.id.replace(/^slack:/, ''),
     event.user.userId,
     body,
@@ -2749,7 +2841,7 @@ async function postInvalidMentionReply(
   mentionText: string,
   threadTs: string,
 ) {
-  const installation = await getSlack().getInstallation(ctx.provider.id)
+  const installation = await getSlack().getInstallation(ctx.channelProviderId ?? ctx.provider.id)
   if (!installation) throw new Error('Tibot app not installed for this workspace.')
 
   const body = new URLSearchParams()
@@ -2941,7 +3033,7 @@ async function postSlackInsufficientFunds(event: TipEvent, ctx: HandlerContext, 
   body.set('text', message)
   if (threadTs) body.set('thread_ts', threadTs)
   await postSlackPrivateReply(
-    ctx.provider.id,
+    ctx.channelProviderId ?? ctx.provider.id,
     event.channel.id.replace(/^slack:/, ''),
     event.user.userId,
     body,
@@ -2950,7 +3042,7 @@ async function postSlackInsufficientFunds(event: TipEvent, ctx: HandlerContext, 
 }
 
 async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
-  const workspace =
+  let workspace =
     (await ctx.db
       .selectFrom('workspace')
       .selectAll()
@@ -2989,6 +3081,27 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
       'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
     )
     return
+  }
+  if (ctx.settingsProviderId && !workspace.installed_at) {
+    const settingsWorkspace = await ctx.db
+      .selectFrom('workspace')
+      .select(['chain_id', 'default_amount', 'default_token_address'])
+      .where('provider', '=', ctx.provider.type)
+      .where('provider_id', '=', ctx.settingsProviderId)
+      .executeTakeFirst()
+    if (settingsWorkspace) {
+      await ctx.db
+        .updateTable('workspace')
+        .set({
+          chain_id: settingsWorkspace.chain_id,
+          default_amount: settingsWorkspace.default_amount,
+          default_token_address: settingsWorkspace.default_token_address,
+          updated_at: new Date().toISOString(),
+        })
+        .where('id', '=', workspace.id)
+        .execute()
+      workspace = { ...workspace, ...settingsWorkspace }
+    }
   }
 
   let member = await ctx.db
@@ -3306,7 +3419,7 @@ async function postSlackReceiptMessage(
   context?: string,
   threadTs?: string,
 ) {
-  const installation = await getSlack().getInstallation(ctx.provider.id)
+  const installation = await getSlack().getInstallation(ctx.channelProviderId ?? ctx.provider.id)
   if (!installation) throw new Error('Tibot app not installed for this workspace.')
 
   const receiptText = text.replace(/\.$/, '')
@@ -3372,7 +3485,7 @@ async function postSlackMemoReply(
   const creatureMatch = memo.match(creaturePattern)
   if (!creatureMatch) return
 
-  const installation = await getSlack().getInstallation(ctx.provider.id)
+  const installation = await getSlack().getInstallation(ctx.channelProviderId ?? ctx.provider.id)
   if (!installation) return
 
   const fallback = `${creatureMatch[0].toUpperCase()}? Now we are talking.`
