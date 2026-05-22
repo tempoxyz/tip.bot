@@ -2948,7 +2948,7 @@ async function postSlackInsufficientFunds(event: TipEvent, ctx: HandlerContext, 
   body.set('text', message)
   if (threadTs) body.set('thread_ts', threadTs)
   await postSlackPrivateReply(
-    ctx.provider.id,
+    ctx.channelProviderId ?? ctx.provider.id,
     event.channel.id.replace(/^slack:/, ''),
     event.user.userId,
     body,

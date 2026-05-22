@@ -1921,6 +1921,44 @@ test('@Tipbot mention sends Slack Connect external sender tip from sender worksp
   })
 }, 20_000) // 20 seconds
 
+test('@Tipbot mention shows add funds action for Slack Connect external sender with host installation', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  const handleTipRequest = vi.spyOn(Tip, 'handleTipRequest').mockResolvedValue({
+    code: 'insufficient_funds',
+    ok: false,
+  })
+  await deleteSlackConnectWorkspace()
+  const channelId = await getSlackConnectChannelId()
+  const connected = await connectSlackConnectSender()
+  const messageTs = `1700000032.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    channelId,
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}>`,
+    userId: Constants.slackConnect.userId,
+  })
+  const call = await getSlackPostEphemeralCall(
+    fetchSpy,
+    'Payment not sent. Your wallet has insufficient funds.',
+  )
+
+  expect(response.status).toBe(200)
+  expect(handleTipRequest).toHaveBeenCalledWith(
+    env,
+    expect.objectContaining({
+      providerId,
+      settingsProviderId: providerId,
+      workspaceProviderId: connected.senderWorkspace.provider_id,
+    }),
+  )
+  expect(getSlackFetchAuthorization(call)).toBe(`Bearer ${Constants.slack.botToken}`)
+  expect(getSlackFetchAuthorization(call)).not.toBe(`Bearer ${Constants.slackConnect.teamBotToken}`)
+  await expectSlackPostEphemeralCall(fetchSpy, 'Add funds on https://wallet.tempo.xyz')
+  handleTipRequest.mockRestore()
+  fetchSpy.mockRestore()
+}, 20_000) // 20 seconds
+
 test('@Tipbot mention blocks Slack Connect external sender after sender workspace installs', async () => {
   await deleteSlackConnectWorkspace()
   const channelId = await getSlackConnectChannelId()
