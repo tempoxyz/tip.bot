@@ -2293,6 +2293,48 @@ test('@Tipbot mention answers thanks with AI reply', async () => {
   expect(tips).toHaveLength(0)
 })
 
+test('@Tipbot mention wires AI reply author mentions', async () => {
+  aiRunMock.mockResolvedValueOnce({ response: '@admin, anytime.' } as never)
+  const messageTs = `1700000017.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> thank you`,
+  })
+
+  expect(response.status).toBe(200)
+  await expectSlackThreadMessage(messageTs, `<@${Constants.slack.adminUserId}>, anytime.`)
+})
+
+test('@Tipbot mention uses AI for valid payment syntax hints', async () => {
+  aiRunMock.mockResolvedValueOnce({
+    response: 'Close. Try `@Tipbot @account for coffee`.',
+  } as never)
+  const messageTs = `1700000019.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> please pay <@${Constants.slack.memberUserId}>`,
+  })
+
+  expect(response.status).toBe(200)
+  expect(aiRunMock).toHaveBeenCalledOnce()
+  await expectSlackThreadMessage(messageTs, 'Close. Try `@Tipbot @account for coffee`.')
+})
+
+test('@Tipbot mention falls back when AI returns an unwired mention', async () => {
+  aiRunMock.mockResolvedValueOnce({ response: '@Joshie, anytime.' } as never)
+  const messageTs = `1700000018.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> thank you`,
+  })
+
+  expect(response.status).toBe(200)
+  await expectSlackThreadMessage(messageTs, 'Anytime.')
+})
+
 test('@Tipbot mention answers setup questions with AI reply', async () => {
   const messageTs = `1700000014.${Nanoid.generate().slice(0, 6)}`
 
@@ -2472,12 +2514,13 @@ test('@Tipbot mention rejects multi-recipient tips with unconnected recipients',
   await expectSlackThreadMessageNotContaining(messageTs, 'tipped')
 })
 
-test('@Tipbot mention rejects natural language before recipient', async () => {
+test('@Tipbot mention falls back when payment hint AI is not useful', async () => {
+  aiRunMock.mockResolvedValueOnce({ response: 'Anytime.' } as never)
   const messageTs = `1700000004.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
     messageTs,
-    text: `please <@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}>`,
+    text: `my turn <@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}>`,
   })
   const tips = await db
     .selectFrom('tip')
@@ -2488,7 +2531,8 @@ test('@Tipbot mention rejects natural language before recipient', async () => {
 
   expect(response.status).toBe(200)
   expect(tips).toHaveLength(0)
-  await expectSlackThreadMessage(messageTs, 'Ack.')
+  expect(aiRunMock).toHaveBeenCalledOnce()
+  await expectSlackThreadMessage(messageTs, 'Almost. Try `@Tipbot @account for coffee`.')
   await expectSlackThreadMessageNotContaining(messageTs, 'tipped')
 })
 
