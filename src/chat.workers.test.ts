@@ -2027,46 +2027,78 @@ test('@Tipbot mention posts Slack Connect confirmation with host workspace insta
   fetchSpy.mockRestore()
 }, 20_000) // 20 seconds
 
+test('@Tipbot mention confirms Slack Connect external sender tip from sender workspace', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  await deleteSlackConnectWorkspace()
+  const channelId = await getSlackConnectChannelId()
+  const connected = await connectSlackConnectSender()
+  await db.deleteFrom('access_key').where('account_id', '=', connected.senderAccount.id).execute()
+  const messageTs = `1700000033.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    channelId,
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}>`,
+    userId: Constants.slackConnect.userId,
+  })
+  const call = await getSlackPostEphemeralCall(
+    fetchSpy,
+    'Tipbot needs your approval to send this payment.',
+  )
+  const params = await slackFetchCallBodyParams(...call)
+  const token = params.get('text')?.match(/\/confirm\/(0x[0-9a-f]+\.0x[0-9a-f]+)/i)?.[1]
+  if (!token) throw new Error('Expected confirmation token in Slack message.')
+  const confirmation = await client.api.confirm[':token'].$get({ param: { token } })
+  const confirmationJson = await confirmation.json()
+  if (!confirmationJson.ok) throw new Error('Expected confirmation metadata.')
+  const root = Account.fromSecp256k1(Constants.tip.senderRootPrivateKey)
+  const keyAuthorization = await AccountLink.signKeyAuthorization(root, {
+    accessKeyAddress: confirmationJson.accessKeyAddress,
+    chainId: confirmationJson.chainId,
+    expiresAt: confirmationJson.accessKeyExpiry,
+    tokenAddress: confirmationJson.tokenAddress,
+  })
+
+  const confirmResponse = await client.api.confirm[':token'].$post({
+    json: { address: root.address, keyAuthorization },
+    param: { token },
+  })
+  await drainWaitUntil()
+  const tip = await waitForTipByIdempotencyKey(`mention:${providerId}:${channelId}:${messageTs}`)
+  const tipDetails = await db
+    .selectFrom('tip')
+    .select(['amount', 'confirmed_at', 'recipient_member_id', 'sender_member_id', 'workspace_id'])
+    .where('id', '=', tip.id)
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(confirmation.status).toBe(200)
+  expect(confirmationJson).toMatchObject({
+    amount: '0.001',
+    kind: 'reusable_access_key',
+    recipientProviderUserId: Constants.slack.memberUserId,
+  })
+  expect(confirmResponse.status).toBe(200)
+  await expect(confirmResponse.json()).resolves.toMatchObject({ ok: true })
+  expect(tipDetails).toMatchObject({
+    amount: 1000,
+    confirmed_at: expect.any(String),
+    recipient_member_id: connected.hostRecipientMember.id,
+    sender_member_id: connected.senderMember.id,
+    workspace_id: connected.senderWorkspace.id,
+  })
+  await expectSlackThreadMessage(
+    messageTs,
+    `<@${Constants.slackConnect.userId}> tipped <@${Constants.slack.memberUserId}> $0.001 · Receipt`,
+    { channelId, wait: true },
+  )
+  fetchSpy.mockRestore()
+}, 20_000) // 20 seconds
+
 test('@Tipbot mention fails closed when Slack Connect recipient workspace is not installed', async () => {
   const fetchSpy = vi.spyOn(globalThis, 'fetch')
   await connectTipAccounts({ recipient: false })
-  const connectWorkspace = await db
-    .selectFrom('workspace')
-    .select('id')
-    .where('provider', '=', 'slack')
-    .where('provider_id', '=', Constants.slackConnect.teamId)
-    .executeTakeFirst()
-  if (connectWorkspace) {
-    const connectMembers = await db
-      .selectFrom('member')
-      .select(['id', 'provider_identity_id'])
-      .where('workspace_id', '=', connectWorkspace.id)
-      .execute()
-    if (connectMembers.length > 0) {
-      await db
-        .deleteFrom('tip')
-        .where(
-          'recipient_member_id',
-          'in',
-          connectMembers.map((member) => member.id),
-        )
-        .execute()
-      await db
-        .deleteFrom('member')
-        .where(
-          'id',
-          'in',
-          connectMembers.map((member) => member.id),
-        )
-        .execute()
-      const providerIdentityIds = connectMembers
-        .map((member) => member.provider_identity_id)
-        .filter((providerIdentityId) => providerIdentityId !== null)
-      if (providerIdentityIds.length > 0)
-        await db.deleteFrom('provider_identity').where('id', 'in', providerIdentityIds).execute()
-    }
-    await db.deleteFrom('workspace').where('id', '=', connectWorkspace.id).execute()
-  }
+  await deleteSlackConnectWorkspace()
   const channelId = await getSlackConnectChannelId()
   const messageTs = `1700000000.${Nanoid.generate().slice(0, 6)}`
 
@@ -4484,7 +4516,7 @@ async function connectSlackConnectSender() {
     expires_at: accessKeyExpiresAt,
     token_address: Tempo.addressLookup.pathUsd,
   })
-  return { hostRecipientMember, hostWorkspace, senderMember, senderWorkspace }
+  return { hostRecipientMember, hostWorkspace, senderAccount, senderMember, senderWorkspace }
 }
 
 async function findOrCreateAccount(address: string) {
@@ -5168,37 +5200,43 @@ async function createSlashCommandRequestInit(
 }
 
 async function deleteSlackConnectWorkspace() {
-  const workspace = await db
+  const workspaces = await db
     .selectFrom('workspace')
     .select('id')
     .where('provider', '=', 'slack')
     .where('provider_id', '=', Constants.slackConnect.teamId)
-    .executeTakeFirst()
-  if (!workspace) return
-
-  const members = await db
-    .selectFrom('member')
-    .select(['id', 'provider_identity_id'])
-    .where('workspace_id', '=', workspace.id)
     .execute()
-  if (members.length > 0) {
-    const memberIds = members.map((member) => member.id)
-    await db.deleteFrom('reaction_tip').where('sender_member_id', 'in', memberIds).execute()
-    await db.deleteFrom('reaction_tip').where('recipient_member_id', 'in', memberIds).execute()
-    await db.deleteFrom('tip').where('sender_member_id', 'in', memberIds).execute()
-    await db.deleteFrom('tip').where('recipient_member_id', 'in', memberIds).execute()
-    await db.deleteFrom('tip_batch').where('sender_member_id', 'in', memberIds).execute()
-    await db.deleteFrom('member').where('id', 'in', memberIds).execute()
-    await db
-      .deleteFrom('provider_identity')
-      .where(
-        'id',
-        'in',
-        members.map((member) => member.provider_identity_id),
-      )
+
+  for (const workspace of workspaces) {
+    const members = await db
+      .selectFrom('member')
+      .select(['id', 'provider_identity_id'])
+      .where('workspace_id', '=', workspace.id)
       .execute()
+    const memberIds = members.map((member) => member.id)
+    await db.deleteFrom('reaction_tip_thread').where('workspace_id', '=', workspace.id).execute()
+    if (memberIds.length > 0) {
+      await db.deleteFrom('reaction_tip').where('sender_member_id', 'in', memberIds).execute()
+      await db.deleteFrom('reaction_tip').where('recipient_member_id', 'in', memberIds).execute()
+    }
+    await db.deleteFrom('tip').where('workspace_id', '=', workspace.id).execute()
+    if (memberIds.length > 0) {
+      await db.deleteFrom('tip').where('sender_member_id', 'in', memberIds).execute()
+      await db.deleteFrom('tip').where('recipient_member_id', 'in', memberIds).execute()
+    }
+    await db.deleteFrom('tip_batch').where('workspace_id', '=', workspace.id).execute()
+    if (memberIds.length > 0) {
+      await db.deleteFrom('tip_batch').where('sender_member_id', 'in', memberIds).execute()
+      await db.deleteFrom('account_link_token').where('member_id', 'in', memberIds).execute()
+      await db.deleteFrom('member').where('id', 'in', memberIds).execute()
+    }
+    const providerIdentityIds = members
+      .map((member) => member.provider_identity_id)
+      .filter((providerIdentityId) => providerIdentityId !== null)
+    if (providerIdentityIds.length > 0)
+      await db.deleteFrom('provider_identity').where('id', 'in', providerIdentityIds).execute()
+    await db.deleteFrom('workspace').where('id', '=', workspace.id).execute()
   }
-  await db.deleteFrom('workspace').where('id', '=', workspace.id).execute()
 }
 
 async function insertMember(
