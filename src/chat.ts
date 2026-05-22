@@ -1582,32 +1582,43 @@ async function resolveSlackTipPlan(
 
       const activeProviderUserIds = [] as string[]
       for (const providerUserId of providerUserIds) {
-        const body = new URLSearchParams()
-        body.set('user', providerUserId)
-        const response = await getSlack().withBotToken(installation.botToken, () =>
-          fetch(`${env.SLACK_API_URL}/users.getPresence`, {
-            body,
-            headers: { authorization: `Bearer ${installation.botToken}` },
-            method: 'POST',
-          }),
-        )
-        const json = z.parse(
-          z.object({
-            error: z.string().optional(),
-            ok: z.boolean().optional(),
-            presence: z.string().optional(),
-          }),
-          await response.json(),
-        )
-        if (!json.ok)
-          return {
-            message:
-              json.error === 'missing_scope'
-                ? 'Payment not sent. Tipbot could not read active channel members because Tipbot is missing Slack permissions. Reinstall Tipbot and try again.'
-                : `Payment not sent. Tipbot could not read active channel members${json.error ? ` (${json.error})` : ''}.`,
-            ok: false as const,
+        const presence = await (async () => {
+          // Slack Connect can return user_not_found for a shared-channel member when using the
+          // host workspace token. Try every installed shared workspace before skipping that member.
+          for (const providerId of [ctx.provider.id, ...conversation.teamIds]) {
+            const tokenInstallation = await getSlack().getInstallation(providerId)
+            if (!tokenInstallation) continue
+            const body = new URLSearchParams()
+            body.set('user', providerUserId)
+            const response = await getSlack().withBotToken(tokenInstallation.botToken, () =>
+              fetch(`${env.SLACK_API_URL}/users.getPresence`, {
+                body,
+                headers: { authorization: `Bearer ${tokenInstallation.botToken}` },
+                method: 'POST',
+              }),
+            )
+            const json = z.parse(
+              z.object({
+                error: z.string().optional(),
+                ok: z.boolean().optional(),
+                presence: z.string().optional(),
+              }),
+              await response.json(),
+            )
+            if (json.ok) return { ok: true as const, presence: json.presence }
+            if (json.error !== 'user_not_found')
+              return {
+                message:
+                  json.error === 'missing_scope'
+                    ? 'Payment not sent. Tipbot could not read active channel members because Tipbot is missing Slack permissions. Reinstall Tipbot and try again.'
+                    : `Payment not sent. Tipbot could not read active channel members${json.error ? ` (${json.error})` : ''}.`,
+                ok: false as const,
+              }
           }
-        if (json.presence === 'active') activeProviderUserIds.push(providerUserId)
+          return { ok: true as const, presence: 'away' }
+        })()
+        if (!presence.ok) return presence
+        if (presence.presence === 'active') activeProviderUserIds.push(providerUserId)
       }
       return { ok: true as const, providerUserIds: activeProviderUserIds }
     })()

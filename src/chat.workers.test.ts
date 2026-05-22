@@ -1691,6 +1691,11 @@ test('@Tipbot mention sends Slack Connect here tip with active members', async (
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     if (url.endsWith('/users.getPresence')) {
       const params = slackFetchBodyParams(init?.body)
+      if (
+        params.get('user') === Constants.slackConnect.userId &&
+        getSlackFetchAuthorization([input, init]) === `Bearer ${Constants.slack.botToken}`
+      )
+        return Response.json({ error: 'user_not_found', ok: false })
       return Response.json({
         ok: true,
         presence:
