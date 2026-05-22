@@ -1808,6 +1808,14 @@ async function getSlackUserInfo(botToken: string, providerUserId: string) {
           id: z.string().optional(),
           is_app_user: z.boolean().optional(),
           is_bot: z.boolean().optional(),
+          name: z.string().optional(),
+          profile: z
+            .object({
+              display_name: z.string().optional(),
+              real_name: z.string().optional(),
+            })
+            .optional(),
+          real_name: z.string().optional(),
           team_id: z.string().optional(),
         })
         .optional(),
@@ -2679,7 +2687,7 @@ function formatSlackUsergroupMention(usergroupId: string, usergroupLabel?: strin
 }
 
 function hasInvalidMentionIntent(text: string) {
-  return /\b(connect|configure|get started|install|link|mine|set ?up|start|tip|send|pay|sent|paid|for|thank you|thanks|ty|thx|thank u|creature|creatures|dragon|dragons|elf|elves|fae|fairy|goblin|goblins|gnome|gnomes|gremlin|gremlins|kobold|kobolds|monster|monsters|orc|orcs|troll|trolls)\b/i.test(
+  return /\b(connect|configure|get started|install|link|mine|set ?up|start|tip|send|pay|thank you|thanks|ty|thx|thank u|creature|creatures|dragon|dragons|elf|elves|fae|fairy|goblin|goblins|gnome|gnomes|gremlin|gremlins|kobold|kobolds|monster|monsters|orc|orcs|troll|trolls)\b/i.test(
     text,
   )
 }
@@ -2746,7 +2754,32 @@ async function postInvalidMentionReply(
 
   const body = new URLSearchParams()
   body.set('channel', event.channel.id.replace(/^slack:/, ''))
-  body.set('text', await generateInvalidMentionReply(mentionText))
+  body.set(
+    'text',
+    await generateInvalidMentionReply(mentionText, {
+      slackMentions: await (async () => {
+        // AI is only used for chatter; allow it to mention the author and reject other @names.
+        const user = await getSlackUserInfo(installation.botToken, event.user.userId)
+        if (!user) return []
+        const targets = [
+          user.profile?.display_name,
+          user.profile?.real_name,
+          user.real_name,
+          user.name,
+        ]
+          .map((label) => label?.replace(/^@+/, '').trim())
+          .filter((label): label is string => Boolean(label))
+          .map((label) => ({ label, providerUserId: event.user.userId }))
+        const seen = new Set<string>()
+        return targets.filter((target) => {
+          const key = `${target.providerUserId}:${target.label.toLowerCase()}`
+          if (seen.has(key)) return false
+          seen.add(key)
+          return true
+        })
+      })(),
+    }),
+  )
   body.set('thread_ts', threadTs)
   body.set('unfurl_links', 'false')
   body.set('unfurl_media', 'false')
@@ -2767,26 +2800,31 @@ async function postInvalidMentionReply(
   if (!json.ok) throw Slack.slackApiError('chat.postMessage', json.error)
 }
 
-async function generateInvalidMentionReply(mentionText: string) {
+async function generateInvalidMentionReply(
+  mentionText: string,
+  options: { slackMentions?: Array<{ label: string; providerUserId: string }> } = {},
+) {
   const text = mentionText.trim()
   const creatureMatch = text.match(creaturePattern)
-  const isTipText = /<@[A-Z0-9_]+|\b(tip|send|pay|sent|paid)\b/i.test(text)
+  const hasPaymentWord = /\b(tip|send|pay)\b/i.test(text)
+  const hasRecipientMention = /<@[A-Z0-9_]+/.test(text)
   const isSetupText = /\b(connect|configure|get started|install|link|mine|set ?up|start)\b/i.test(
     text,
   )
   const isThanksText = /^(thank you|thanks|ty|thx|thank u)\b/i.test(text)
   const fallback = (() => {
-    if (creatureMatch && isTipText)
+    if (creatureMatch && (hasPaymentWord || hasRecipientMention))
       return `${creatureMatch[0].toUpperCase()}? Excellent. For tips: \`@${getSlackBotDisplayName(env.HOST)} @account for coffee\`.`
     if (creatureMatch) return `${creatureMatch[0].toUpperCase()}? Now we are talking.`
     if (isThanksText) return 'Anytime.'
     if (isSetupText)
       return `Run \`@${getSlackBotDisplayName(env.HOST)} connect\`, then try \`@${getSlackBotDisplayName(env.HOST)} @account for coffee\`.`
-    if (isTipText)
+    if (hasPaymentWord || hasRecipientMention)
       return `Almost. Try \`@${getSlackBotDisplayName(env.HOST)} @account for coffee\`.`
     return 'Anytime.'
   })()
   try {
+    const paymentSyntaxRequired = hasPaymentWord || hasRecipientMention
     const result = z
       .parse(
         z.object({ response: z.string().default('') }),
@@ -2794,7 +2832,9 @@ async function generateInvalidMentionReply(mentionText: string) {
           max_tokens: 48,
           messages: [
             {
-              content: `You are ${getSlackBotDisplayName(env.HOST)} in Slack. Reply to an invalid @${getSlackBotDisplayName(env.HOST)} mention. Keep it under 140 chars. Be short and pithy. Do not mention users. If the user mentions goblins or other creatures, get REALLY EXCITED. If the user seems to be trying to send a tip/payment, include this exact syntax: \`@${getSlackBotDisplayName(env.HOST)} @account for coffee\`. Otherwise just acknowledge or deflect lightly.`,
+              content: paymentSyntaxRequired
+                ? `You are ${getSlackBotDisplayName(env.HOST)} in Slack. Reply to an invalid @${getSlackBotDisplayName(env.HOST)} payment mention. Keep it under 140 chars. Be helpful and concise. You must include this exact syntax: \`@${getSlackBotDisplayName(env.HOST)} @account for coffee\`. Do not mention users.`
+                : `You are ${getSlackBotDisplayName(env.HOST)} in Slack. Reply to an invalid @${getSlackBotDisplayName(env.HOST)} mention. Keep it under 140 chars. Be short and pithy. Do not mention users. If the user mentions goblins or other creatures, get REALLY EXCITED. Otherwise just acknowledge or deflect lightly.`,
               role: 'system',
             },
             { content: text || '(empty mention)', role: 'user' },
@@ -2804,17 +2844,62 @@ async function generateInvalidMentionReply(mentionText: string) {
       .response.replace(/[\r\n]+/g, ' ')
       .trim()
       .replace(/^['"]|['"]$/g, '')
-    if (isValidInvalidMentionAiReply(result)) return result
+    const reply = formatInvalidMentionAiReply(result, { ...options, paymentSyntaxRequired })
+    if (reply) return reply
   } catch (error) {
     console.error('Failed to generate invalid mention reply:', error)
   }
   return fallback
 }
 
-function isValidInvalidMentionAiReply(value: string) {
+function formatInvalidMentionAiReply(
+  value: string,
+  options: {
+    paymentSyntaxRequired?: boolean
+    slackMentions?: Array<{ label: string; providerUserId: string }>
+  } = {},
+) {
+  const reply = (options.slackMentions ?? [])
+    // Convert only known labels to Slack mention tokens; any remaining @name is rejected below.
+    .filter((mention) => mention.label && !/\s/.test(mention.label))
+    .sort((a, b) => b.label.length - a.label.length)
+    .reduce(
+      (text, mention) =>
+        text.replace(
+          new RegExp(
+            `(^|[^\\p{L}\\p{N}_<])@${mention.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|[^\\p{L}\\p{N}._-])`,
+            'giu',
+          ),
+          `$1<@${mention.providerUserId}>`,
+        ),
+      value,
+    )
+  if (!isValidInvalidMentionAiReply(reply, options)) return null
+  return reply
+}
+
+function isValidInvalidMentionAiReply(
+  value: string,
+  options: {
+    paymentSyntaxRequired?: boolean
+    slackMentions?: Array<{ label: string; providerUserId: string }>
+  } = {},
+) {
   if (!value || value.length > 200) return false
   if (/^@?tipbot[.!?]?$/i.test(value)) return false
-  if (value.includes(`@${getSlackBotDisplayName(env.HOST)}`) || /@Tipbot|<@[A-Z0-9_]+/i.test(value))
+  const syntax = `@${getSlackBotDisplayName(env.HOST)} @account for coffee`
+  if (options.paymentSyntaxRequired && !value.includes(syntax)) return false
+  const text = value.replace(syntax, '')
+  if (text.includes(`@${getSlackBotDisplayName(env.HOST)}`) || /@Tipbot/i.test(text)) return false
+  if (/(^|[^\p{L}\p{N}_<])@[\p{L}\p{N}][\p{L}\p{N}._-]*/iu.test(text)) return false
+  const allowedProviderUserIds = new Set(
+    (options.slackMentions ?? []).map((mention) => mention.providerUserId),
+  )
+  if (
+    [...value.matchAll(/<@([A-Z0-9_]+)(?:\|[^>]+)?>/g)].some(
+      (match) => !match[1] || !allowedProviderUserIds.has(match[1]),
+    )
+  )
     return false
   return true
 }
@@ -3311,7 +3396,7 @@ async function postSlackMemoReply(
       .response.replace(/[\r\n]+/g, ' ')
       .trim()
       .replace(/^['"]|['"]$/g, '')
-    if (isValidInvalidMentionAiReply(result)) reply = result
+    reply = formatInvalidMentionAiReply(result) ?? reply
   } catch (error) {
     console.error('Failed to generate memo reply:', error)
   }
