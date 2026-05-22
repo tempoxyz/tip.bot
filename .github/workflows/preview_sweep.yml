@@ -46,8 +46,13 @@ jobs:
           WORKERS=$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts" \
             | jq -r '.result[].id // empty' | grep '^tipbot-pr[0-9][0-9]*$' || true)
-          for worker in $WORKERS; do
-            PR_NUMBER=${worker#tipbot-pr}
+          WORKER_PR_NUMBERS=$(echo "$WORKERS" | sed 's/^tipbot-pr//' || true)
+          COMMENT_PR_NUMBERS=$(gh api "repos/${{ github.repository }}/issues/comments" --paginate \
+            --jq '.[] | select(.body | contains("tipbot-preview")) | .issue_url | split("/")[-1]' \
+            2>/dev/null || true)
+          PR_NUMBERS=$(printf '%s\n%s\n' "$WORKER_PR_NUMBERS" "$COMMENT_PR_NUMBERS" | grep '^[0-9][0-9]*$' | sort -n -u || true)
+          for PR_NUMBER in $PR_NUMBERS; do
+            worker="tipbot-pr${PR_NUMBER}"
             PR_JSON=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '{state: .state, draft: .draft}' 2>/dev/null || echo '{"state":"unknown","draft":false}')
             STATE=$(echo "$PR_JSON" | jq -r '.state')
             DRAFT=$(echo "$PR_JSON" | jq -r '.draft')
@@ -59,15 +64,17 @@ jobs:
             BODY=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --slurp 2>/dev/null | jq -r 'map(.[] | select(.body | contains("tipbot-preview"))) | first | .body // ""' || true)
             META=$(node -e 'const body = process.argv[1] || ""; const match = body.match(/<!-- tipbot-preview: (.*?) -->/); console.log(match?.[1] ?? "{}")' "$BODY")
             D1_ID=$(echo "$META" | jq -r '.d1_id // empty')
-            SLACK_APP_ID=$(echo "$META" | jq -r '.slack_app_id // empty')
+            SLACK_APP_IDS=$(echo "$META" | jq -c '[((.slack_app_ids // [])[]), (.slack_app_id // empty)] | map(select(. != "")) | unique')
 
-            if [ -n "$SLACK_APP_ID" ]; then
-              RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.delete \
-                -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
-                -H "Content-Type: application/json; charset=utf-8" \
-                -d "{\"app_id\":\"${SLACK_APP_ID}\"}" || true)
-              OK=$(echo "$RESPONSE" | jq -r '.ok // false')
-              if [ "$OK" != "true" ]; then echo "$RESPONSE" | jq '{ok,error,errors}'; fi
+            if [ "$SLACK_APP_IDS" != "[]" ]; then
+              echo "$SLACK_APP_IDS" | jq -r '.[]' | while read -r SLACK_APP_ID; do
+                RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.delete \
+                  -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
+                  -H "Content-Type: application/json; charset=utf-8" \
+                  -d "{\"app_id\":\"${SLACK_APP_ID}\"}" || echo '{"ok":false,"error":"request_failed"}')
+                OK=$(echo "$RESPONSE" | jq -r '.ok // false')
+                if [ "$OK" != "true" ]; then echo "$RESPONSE" | jq '{ok,error,errors}'; fi
+              done
             fi
             curl -fsS -X DELETE \
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \

@@ -311,6 +311,45 @@ describe('/tip @account', () => {
     fetchSpy.mockRestore()
   })
 
+  test('skips sender account when channel membership uses alternate Slack account id', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.endsWith('/conversations.members'))
+        return Response.json({
+          members: ['WALTERNATESELF', Constants.slack.memberUserId],
+          ok: true,
+          response_metadata: { next_cursor: '' },
+        })
+      if (url.endsWith('/users.info')) {
+        const params = slackFetchBodyParams(init?.body)
+        if (params.get('user') === 'WALTERNATESELF')
+          return Response.json({
+            ok: true,
+            user: { deleted: false, id: 'WALTERNATESELF', is_app_user: false, is_bot: false },
+          })
+      }
+      return originalFetch(input, init)
+    }) satisfies typeof fetch)
+    const accounts = await connectTipAccounts()
+    await insertMember({
+      account_id: accounts.senderAccount.id,
+      provider_user_id: 'WALTERNATESELF',
+      workspace_id: accounts.workspace.id,
+    })
+
+    const response = await postSlashCommand('<!channel> 0.001 for coffee')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(
+      `<@${Constants.slack.adminUserId}> sent <!channel> 1 accounts $0.001 each for coffee · Receipt`,
+    )
+    await expectSlackMessage(`• <@${Constants.slack.memberUserId}>`)
+    await expectSlackMessageNotContaining('WALTERNATESELF')
+    await expectSlackMessageNotContaining('Payment not sent. Cannot send a payment to yourself.')
+    fetchSpy.mockRestore()
+  }, 20_000) // 20 seconds
+
   test('previews here tip through active channel membership', async () => {
     const originalFetch = globalThis.fetch
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((async (input, init) => {
@@ -339,6 +378,37 @@ describe('/tip @account', () => {
     await expectSlackMessageNotContaining(`• <@${Constants.slack.adminUserId}> (you)`)
     await expectSlackMessageNotContaining(`• <@${unconnectedProviderUserId}> (not connected yet)`)
     await expectSlackMessageNotContaining('Receipt')
+    fetchSpy.mockRestore()
+  })
+
+  test('explains when no online members besides sender are connected for here tip', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.endsWith('/conversations.members'))
+        return Response.json({
+          members: [Constants.slack.adminUserId, Constants.slack.memberUserId],
+          ok: true,
+          response_metadata: { next_cursor: '' },
+        })
+      if (url.endsWith('/users.getPresence')) {
+        const params = slackFetchBodyParams(init?.body)
+        return Response.json({
+          ok: true,
+          presence: params.get('user') === Constants.slack.adminUserId ? 'active' : 'away',
+        })
+      }
+      return originalFetch(input, init)
+    }) satisfies typeof fetch)
+    await connectTipAccounts()
+
+    const response = await postSlashCommand('<!here> 0.001 for coffee')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(
+      'Payment not sent. No online members besides you are connected to Tipbot.',
+    )
+    await expectSlackMessageNotContaining('None of the members of <!here> are connected')
     fetchSpy.mockRestore()
   })
 

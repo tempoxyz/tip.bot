@@ -4,10 +4,6 @@ on:
   push:
     branches: [main]
 
-concurrency:
-  group: slack-config-ci
-  cancel-in-progress: false
-
 permissions: {}
 
 env:
@@ -70,6 +66,25 @@ jobs:
           SLACK_CLIENT_ID: ${{ secrets.SLACK_CLIENT_ID }}
           SLACK_CLIENT_SECRET: ${{ secrets.SLACK_CLIENT_SECRET }}
           SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
+
+  update_slack_app:
+    name: Update Slack App
+    needs: deploy
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: slack-config-ci
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: ./.github/actions/setup-pnpm
 
       - name: Setup Slack config token
         id: slack_token

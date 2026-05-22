@@ -1707,6 +1707,15 @@ async function resolveSlackTipPlan(
 
   const recipients = [] as Tip.TipRecipientInput[]
   const skippedRecipients = [] as Tip.TipSkippedRecipient[]
+  const senderAccount = await ctx.db
+    .selectFrom('workspace')
+    .innerJoin('member', 'member.workspace_id', 'workspace.id')
+    .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .select('provider_identity.account_id')
+    .where('workspace.provider', '=', 'slack')
+    .where('workspace.provider_id', '=', ctx.provider.id)
+    .where('member.provider_user_id', '=', event.user.userId)
+    .executeTakeFirst()
   const seen = new Set<string>()
   for (const target of targets) {
     if (seen.has(target.recipient.recipientProviderUserId)) continue
@@ -1729,6 +1738,11 @@ async function resolveSlackTipPlan(
       })
       continue
     }
+    if (recipient.accountId && recipient.accountId === senderAccount?.account_id) {
+      if (target.source === 'explicit')
+        return { message: 'Payment not sent. Cannot send a payment to yourself.', ok: false }
+      continue
+    }
     recipients.push(recipient.value)
   }
 
@@ -1736,7 +1750,9 @@ async function resolveSlackTipPlan(
     const usergroup = parsed.usergroups?.[0]
     return {
       message: usergroup
-        ? `Payment not sent. None of the members of ${formatSlackUsergroupMention(usergroup.providerUsergroupId, usergroup.providerUsergroupLabel)} are connected to Tipbot yet.`
+        ? usergroup.providerUsergroupId === 'here'
+          ? 'Payment not sent. No online members besides you are connected to Tipbot.'
+          : `Payment not sent. None of the members of ${formatSlackUsergroupMention(usergroup.providerUsergroupId, usergroup.providerUsergroupLabel)} are connected to Tipbot yet.`
         : 'Payment not sent. None of the mentioned accounts are connected to Tipbot yet.',
       ok: false,
     }
@@ -1884,11 +1900,11 @@ async function resolveLocalSlackRecipient(ctx: HandlerContext, recipient: Tip.Ti
     .selectFrom('member')
     .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
     .innerJoin('account', 'account.id', 'provider_identity.account_id')
-    .select('member.id')
+    .select(['member.id', 'provider_identity.account_id'])
     .where('member.provider_user_id', '=', recipient.recipientProviderUserId)
     .where('member.workspace_id', '=', workspace.id)
     .executeTakeFirst()
-  return { value: member ? recipient : null }
+  return { accountId: member?.account_id, value: member ? recipient : null }
 }
 
 async function resolveSlackConnectRecipient(
@@ -1914,7 +1930,11 @@ async function resolveSlackConnectRecipient(
   }
 
   const seen = new Set<string>()
-  const matches = [] as Array<{ providerUserId: string; providerWorkspaceId: string }>
+  const matches = [] as Array<{
+    accountId: string | null
+    providerUserId: string
+    providerWorkspaceId: string
+  }>
   for (const candidate of candidates) {
     const key = `${candidate.providerWorkspaceId}:${candidate.providerUserId}`
     if (seen.has(key)) continue
@@ -1930,11 +1950,11 @@ async function resolveSlackConnectRecipient(
       .selectFrom('member')
       .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
       .innerJoin('account', 'account.id', 'provider_identity.account_id')
-      .select('member.id')
+      .select(['member.id', 'provider_identity.account_id'])
       .where('member.provider_user_id', '=', candidate.providerUserId)
       .where('member.workspace_id', '=', candidateWorkspace.id)
       .executeTakeFirst()
-    if (candidateMember) matches.push(candidate)
+    if (candidateMember) matches.push({ ...candidate, accountId: candidateMember.account_id })
   }
   if (matches.length > 1)
     return {
@@ -1942,6 +1962,7 @@ async function resolveSlackConnectRecipient(
     }
   if (matches.length === 0) return { value: null }
   return {
+    accountId: matches[0]!.accountId,
     value: {
       ...recipient,
       recipientProviderUserId: matches[0]!.providerUserId,
