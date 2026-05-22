@@ -464,19 +464,23 @@ jobs:
           REACTION_TIP_EMOJI="${SEEDED_REACTION_TIP_EMOJI:-$REACTION_TIP_EMOJI}"
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           PREVIEW="[${PREVIEW_HOST}](https://${PREVIEW_HOST})"
+          STATUS="[![Ready](https://vercel.com/static/status/ready.svg) Ready](${RUN_URL})"
+          if [ "$JOB_STATUS" != "success" ]; then STATUS="[![Error](https://vercel.com/static/status/error.svg) Error](${RUN_URL})"; fi
+          DETAILS=""
           SLACK_APP_CONFIG=""
           if [ -n "${SLACK_APP_ID:-$STATE_SLACK_APP_ID}" ]; then
             SLACK_APP_CONFIG=" &nbsp; <a href=\"https://api.slack.com/apps/${SLACK_APP_ID:-$STATE_SLACK_APP_ID}\">Slack app config</a>"
           fi
           INSTALL="<a href=\"https://${PREVIEW_HOST}/install/slack\"><img alt=\"Add to Slack\" height=\"38\" width=\"auto\" src=\"https://platform.slack-edge.com/img/add_to_slack@2x.png\" /></a>${SLACK_APP_CONFIG}"
           COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message with ${REACTION_TIP_EMOJI_NATIVE} \`:${REACTION_TIP_EMOJI}:\`."
-          STATUS="[![Ready](https://vercel.com/static/status/ready.svg) Ready](${RUN_URL})"
-          if [ "$JOB_STATUS" != "success" ]; then STATUS="[![Error](https://vercel.com/static/status/error.svg) Error](${RUN_URL})"; fi
           REINSTALL=""
           if [ "$SLACK_APP_CREATED" = "true" ]; then
             REINSTALL=$(printf '\n\n> [!IMPORTANT]\n> %s' "Slack preview app changed. Reinstall the Slack preview.")
           elif [ -n "$STATE_SCOPES_HASH" ] && [ "$STATE_SCOPES_HASH" != "$MANIFEST_SCOPES_HASH" ]; then
             REINSTALL=$(printf '\n\n> [!IMPORTANT]\n> %s' "OAuth scopes changed. Reinstall the Slack preview.")
+          fi
+          if [ "$JOB_STATUS" = "success" ]; then
+            DETAILS=$(printf '\n\n%s\n\n%s%s' "${INSTALL}" "${COMMANDS}" "${REINSTALL}")
           fi
           STATE=$(jq -nc \
             --arg pr "$PR_NUMBER" \
@@ -490,14 +494,12 @@ jobs:
             --arg state_slack_app_id "$STATE_SLACK_APP_ID" \
             --argjson state_slack_app_ids "${STATE_SLACK_APP_IDS:-[]}" \
             '([$state_slack_app_ids[], $state_slack_app_id, $replaced_slack_app_id, $slack_app_id] | map(select(. != "")) | unique) as $slack_app_ids | {pr: ($pr | tonumber), d1_id: $d1_id, reaction_tip_emoji: $reaction_tip_emoji, scopes_hash: $scopes_hash, seeded_at: $seeded_at, slack_app_id: $slack_app_id, slack_app_ids: $slack_app_ids, slack_credentials: $slack_credentials}')
-          BODY=$(printf '%s\n\n%s\n%s\n%s\n\n%s\n\n%s%s\n%s' \
+          BODY=$(printf '%s\n\n%s\n%s\n%s%s\n%s' \
             "The latest Tipbot preview deployment for ${SHA_SHORT}" \
             "| Name | Status | Preview | Updated (UTC) |" \
             "| :--- | :----- | :------ | :------------ |" \
             "| ${PREVIEW_APEX} | ${STATUS} | ${PREVIEW} | ${UPDATED} |" \
-            "${INSTALL}" \
-            "${COMMANDS}" \
-            "${REINSTALL}" \
+            "${DETAILS}" \
             "<!-- tipbot-preview: ${STATE} -->")
           COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --jq '.[] | select(.body | contains("tipbot-preview") or contains("Tipbot preview deployment")) | .id' | head -1)
           if [ -n "$COMMENT_ID" ]; then
