@@ -1679,7 +1679,9 @@ async function resolveSlackTipPlan(
     const usergroup = parsed.usergroups?.[0]
     return {
       message: usergroup
-        ? `Payment not sent. None of the members of ${formatSlackUsergroupMention(usergroup.providerUsergroupId, usergroup.providerUsergroupLabel)} are connected to Tipbot yet.`
+        ? usergroup.providerUsergroupId === 'here'
+          ? 'Payment not sent. No online members besides you are connected to Tipbot.'
+          : `Payment not sent. None of the members of ${formatSlackUsergroupMention(usergroup.providerUsergroupId, usergroup.providerUsergroupLabel)} are connected to Tipbot yet.`
         : 'Payment not sent. None of the mentioned accounts are connected to Tipbot yet.',
       ok: false,
     }
