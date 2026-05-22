@@ -2653,13 +2653,7 @@ function parseSlackMentionTipText(text: string) {
 }
 
 function formatSlackUsergroupMention(usergroupId: string, usergroupLabel?: string) {
-  if (
-    (() => {
-      // Slack special mentions are formatted without subteam syntax.
-      return ['channel', 'here'].includes(usergroupId)
-    })()
-  )
-    return `<!${usergroupId}>`
+  if (['channel', 'here'].includes(usergroupId)) return `<!${usergroupId}>`
   return `<!subteam^${usergroupId}${usergroupLabel ? `|@${usergroupLabel}` : ''}>`
 }
 

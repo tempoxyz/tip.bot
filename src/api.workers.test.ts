@@ -159,7 +159,7 @@ describe('/api/chat/slack', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
       if (url.startsWith(env.SLACK_API_URL) && url.includes('/conversations.info'))
-        return Promise.resolve(Response.json({ error: 'not_in_channel', ok: false }))
+        return Promise.resolve(Response.json({ channel: { is_member: false }, ok: true }))
       return originalFetch(input, init)
     })
     await Chat.getChat().initialize()
@@ -199,6 +199,46 @@ describe('/api/chat/slack', () => {
       ].join('\n'),
     })
     expect(executionCtx.waitUntil).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
+
+  test('slash command does not return invite instructions when shared channel membership is ambiguous', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.startsWith(env.SLACK_API_URL) && url.includes('/conversations.info'))
+        return Promise.resolve(Response.json({ error: 'not_in_channel', ok: false }))
+      return originalFetch(input, init)
+    })
+    await Chat.getChat().initialize()
+    await Chat.getSlack().setInstallation(Constants.slack.teamId, {
+      botToken: Constants.slack.botToken,
+      botUserId: Constants.slack.botUserId,
+      teamName: Constants.slack.teamName,
+    })
+    const body = new URLSearchParams({
+      channel_id: Constants.slack.channelId,
+      command: '/tip',
+      team_id: Constants.slack.teamId,
+      text: 'status',
+      trigger_id: 'trigger-ambiguous-channel',
+      user_id: Constants.slack.adminUserId,
+    }).toString()
+
+    const response = await client.api.chat.slack.$post(
+      {},
+      {
+        headers: {
+          ...(await createSlackHeaders(body, env.SLACK_SIGNING_SECRET)),
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        init: { body },
+      },
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe('')
+    expect(executionCtx.waitUntil).toHaveBeenCalled()
     fetchSpy.mockRestore()
   })
 })
