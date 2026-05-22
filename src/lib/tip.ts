@@ -510,7 +510,7 @@ export function parseTipBatchText(value: string, options: { chainId?: number } =
     const usergroup = remaining.match(/^<!subteam\^([A-Z0-9_]+)(?:\|([^>]+))?>\s*/)
     const vanityUsergroup = usergroup
       ? null
-      : remaining.match(/^<!(channel|here|everyone)(?:\|([^>]+))?>\s*/)
+      : remaining.match(/^<!(channel|here)(?:\|([^>]+))?>\s*/)
     if (!usergroup && !vanityUsergroup) break
     const providerUsergroupId = (usergroup?.[1] ?? vanityUsergroup?.[1])!
     const providerUsergroupLabel =
@@ -524,7 +524,7 @@ export function parseTipBatchText(value: string, options: { chainId?: number } =
   }
   if (recipients.length === 0 && usergroups.length === 0) return null
   if (
-    /<@[A-Z0-9_]+(?:\|[^>]+)?>|<!subteam\^[A-Z0-9_]+(?:\|[^>]+)?>|<!(?:channel|here|everyone)(?:\|[^>]+)?>/.test(
+    /<@[A-Z0-9_]+(?:\|[^>]+)?>|<!subteam\^[A-Z0-9_]+(?:\|[^>]+)?>|<!(?:channel|here)(?:\|[^>]+)?>/.test(
       remaining,
     )
   )
