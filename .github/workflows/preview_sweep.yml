@@ -46,8 +46,13 @@ jobs:
           WORKERS=$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts" \
             | jq -r '.result[].id // empty' | grep '^tipbot-pr[0-9][0-9]*$' || true)
-          for worker in $WORKERS; do
-            PR_NUMBER=${worker#tipbot-pr}
+          WORKER_PR_NUMBERS=$(echo "$WORKERS" | sed 's/^tipbot-pr//' || true)
+          COMMENT_PR_NUMBERS=$(gh api "repos/${{ github.repository }}/issues/comments" --paginate \
+            --jq '.[] | select(.body | contains("tipbot-preview")) | .issue_url | split("/")[-1]' \
+            2>/dev/null || true)
+          PR_NUMBERS=$(printf '%s\n%s\n' "$WORKER_PR_NUMBERS" "$COMMENT_PR_NUMBERS" | grep '^[0-9][0-9]*$' | sort -n -u || true)
+          for PR_NUMBER in $PR_NUMBERS; do
+            worker="tipbot-pr${PR_NUMBER}"
             PR_JSON=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '{state: .state, draft: .draft}' 2>/dev/null || echo '{"state":"unknown","draft":false}')
             STATE=$(echo "$PR_JSON" | jq -r '.state')
             DRAFT=$(echo "$PR_JSON" | jq -r '.draft')

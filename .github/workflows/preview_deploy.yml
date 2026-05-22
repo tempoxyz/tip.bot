@@ -27,10 +27,6 @@ on:
       SLACK_CONFIG_REFRESH_TOKEN:
         required: false
 
-concurrency:
-  group: slack-config-ci
-  cancel-in-progress: false
-
 permissions:
   contents: read
   issues: write
@@ -74,6 +70,9 @@ jobs:
     needs: gate
     runs-on: ubuntu-latest
     environment: preview
+    concurrency:
+      group: slack-config-ci
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
@@ -465,7 +464,11 @@ jobs:
           REACTION_TIP_EMOJI="${SEEDED_REACTION_TIP_EMOJI:-$REACTION_TIP_EMOJI}"
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           PREVIEW="[${PREVIEW_HOST}](https://${PREVIEW_HOST})"
-          INSTALL="<a href=\"https://${PREVIEW_HOST}/install/slack\"><img alt=\"Add to Slack\" height=\"38\" width=\"auto\" src=\"https://platform.slack-edge.com/img/add_to_slack@2x.png\" /></a>"
+          SLACK_APP_CONFIG=""
+          if [ -n "${SLACK_APP_ID:-$STATE_SLACK_APP_ID}" ]; then
+            SLACK_APP_CONFIG=" &nbsp; <a href=\"https://api.slack.com/apps/${SLACK_APP_ID:-$STATE_SLACK_APP_ID}\">Slack app config</a>"
+          fi
+          INSTALL="<a href=\"https://${PREVIEW_HOST}/install/slack\"><img alt=\"Add to Slack\" height=\"38\" width=\"auto\" src=\"https://platform.slack-edge.com/img/add_to_slack@2x.png\" /></a>${SLACK_APP_CONFIG}"
           COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message with ${REACTION_TIP_EMOJI_NATIVE} \`:${REACTION_TIP_EMOJI}:\`."
           STATUS="[![Ready](https://vercel.com/static/status/ready.svg) Ready](${RUN_URL})"
           if [ "$JOB_STATUS" != "success" ]; then STATUS="[![Error](https://vercel.com/static/status/error.svg) Error](${RUN_URL})"; fi
