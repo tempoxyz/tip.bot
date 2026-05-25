@@ -80,6 +80,68 @@ export async function skip(options: {
   return { ...json, ok: true, status: res.status }
 }
 
+export type UpcomingTrack = Track & { vetoPotUsd: number }
+
+export type PartySnapshot = {
+  current: Track | null
+  currentTrack: number
+  isPlaying: boolean
+  playbackPosition: number
+  skipBidPotUsd: number
+  upcoming: UpcomingTrack[]
+}
+
+export async function getState(options: {
+  djboxUrl: string
+  partyId: string
+  secret: string
+}): Promise<PartySnapshot | null> {
+  const url = new URL(`/api/parties/${encodeURIComponent(options.partyId)}/state`, options.djboxUrl)
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { authorization: `Bearer ${options.secret}` },
+  })
+  if (!res.ok) return null
+  return (await res.json().catch(() => null)) as PartySnapshot | null
+}
+
+export async function veto(options: {
+  amountUsd: number
+  bidderName?: string
+  djboxUrl: string
+  partyId: string
+  secret: string
+  trackId: string
+}): Promise<{
+  cleared?: boolean
+  ok: boolean
+  potUsd?: number
+  reason?: string
+  status: number
+  thresholdUsd?: number
+}> {
+  const url = new URL(`/api/parties/${encodeURIComponent(options.partyId)}/veto`, options.djboxUrl)
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${options.secret}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      amountUsd: options.amountUsd,
+      bidderName: options.bidderName,
+      trackId: options.trackId,
+    }),
+  })
+  const json = (await res.json().catch(() => null)) as {
+    cleared?: boolean
+    potUsd?: number
+    reason?: string
+    thresholdUsd?: number
+  } | null
+  return { ...json, ok: res.ok, status: res.status }
+}
+
 const youtubeIdPattern =
   /(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|v\/|shorts\/))([\w-]{11})/
 

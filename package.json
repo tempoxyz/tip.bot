@@ -22,7 +22,6 @@
     "prepare": "vp config && pnpm gen:types",
     "preview": "vp build && vp preview",
     "slack:app": "node --experimental-strip-types scripts/slack.ts",
-    "spotify:setup": "node --experimental-strip-types scripts/spotify:setup.ts",
     "test": "vp test",
     "test:e2e": "playwright test --config test/e2e.config.ts"
   },

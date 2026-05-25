@@ -8,7 +8,6 @@ import * as Emoji from '#/lib/emoji.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Slack from '#/lib/slack.ts'
-import * as Spotify from '#/lib/spotify.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
 import { createCloudflareState } from '#/vendor/chatStateCloudflareDO.ts'
@@ -656,31 +655,23 @@ const handlers = {
     const djboxUrl = env.DJBOX_URL
     const djboxPartyId = env.DJBOX_PARTY_ID
     const djboxSecret = env.DJBOX_SECRET
-    const spotifyClientId = env.SPOTIFY_CLIENT_ID
-    const spotifyClientSecret = env.SPOTIFY_CLIENT_SECRET
-    const spotifyRefreshToken = env.SPOTIFY_REFRESH_TOKEN
     const houseProviderUserId = env.DJ_HOUSE_PROVIDER_USER_ID
     const queuePriceUsd = Number(env.DJ_QUEUE_PRICE_USD ?? '0.005')
     const skipPriceUsd = Number(env.DJ_SKIP_PRICE_USD ?? '0.0002')
+    const vetoPriceUsd = Number(env.DJ_VETO_PRICE_USD ?? String(queuePriceUsd))
 
-    const hasDjbox = !!(djboxUrl && djboxPartyId && djboxSecret)
-    const hasSpotify = !!(spotifyClientId && spotifyClientSecret && spotifyRefreshToken)
-    if (!hasDjbox && !hasSpotify) {
+    if (!djboxUrl || !djboxPartyId || !djboxSecret) {
       await postPrivateReply(event, event.user, 'DJ not configured for this workspace.')
       return
     }
 
     const text = ctx.text.trim()
-    const match = text.match(/^(queue|skip|nowplaying|where|help)(?:\s+([\s\S]*))?$/)
+    const match = text.match(/^(queue|skip|veto|list|nowplaying|where|help)(?:\s+([\s\S]*))?$/)
     const subcommand = match?.[1] ?? 'help'
     const rest = match?.[2]?.trim() ?? ''
 
     if (subcommand === 'where') {
-      const lines = [
-        ...(hasSpotify ? ['Spotify Jam: ask the venue host for the Jam link.'] : []),
-        ...(hasDjbox ? [`Djbox party: ${djboxUrl}/p/${djboxPartyId}`] : []),
-      ]
-      await postPrivateReply(event, event.user, lines.join('\n'))
+      await postPrivateReply(event, event.user, `Djbox party: ${djboxUrl}/p/${djboxPartyId}`)
       return
     }
 
@@ -690,65 +681,58 @@ const handlers = {
         event.user,
         [
           `${getDjCommand(env.HOST)} queue <youtube/spotify url or search>  Add a track ($${queuePriceUsd})`,
-          `${getDjCommand(env.HOST)} skip  Skip the current track ($${skipPriceUsd})`,
+          `${getDjCommand(env.HOST)} skip  Bid to skip the current track ($${skipPriceUsd})`,
+          `${getDjCommand(env.HOST)} list  Show what's playing and what's queued`,
+          `${getDjCommand(env.HOST)} veto <position>  Bid to remove an upcoming track ($${vetoPriceUsd})`,
           `${getDjCommand(env.HOST)} nowplaying  Show what's on right now`,
-          `${getDjCommand(env.HOST)} where  Show party URLs`,
+          `${getDjCommand(env.HOST)} where  Show party URL`,
         ].join('\n'),
       )
       return
     }
 
-    if (subcommand === 'nowplaying') {
-      if (!hasSpotify) {
-        await postPrivateReply(event, event.user, 'Spotify not configured.')
+    if (subcommand === 'list' || subcommand === 'nowplaying') {
+      const snap = await Djbox.getState({
+        djboxUrl,
+        partyId: djboxPartyId,
+        secret: djboxSecret,
+      })
+      if (!snap) {
+        await postPrivateReply(event, event.user, 'Could not reach djbox.')
         return
       }
-      const accessToken = await Spotify.getAccessToken({
-        clientId: spotifyClientId,
-        clientSecret: spotifyClientSecret,
-        refreshToken: spotifyRefreshToken,
-      }).catch(() => null)
-      if (!accessToken) {
-        await postPrivateReply(event, event.user, 'Spotify auth failed.')
-        return
+      const lines: string[] = []
+      if (snap.current) {
+        const artist = snap.current.artist ? ` by ${snap.current.artist}` : ''
+        lines.push(`*Now playing:* ${snap.current.title}${artist}`)
+      } else {
+        lines.push('Nothing is playing right now.')
       }
-      const np = await Spotify.nowPlaying({ accessToken })
-      if (!np?.track) {
-        await postPrivateReply(event, event.user, 'Nothing playing.')
-        return
+      if (subcommand === 'list') {
+        if (snap.upcoming.length === 0) {
+          lines.push('_Queue is empty. Be the first to queue something._')
+        } else {
+          lines.push('*Up next:*')
+          snap.upcoming.slice(0, 10).forEach((t, i) => {
+            const artist = t.artist ? ` — ${t.artist}` : ''
+            const pot =
+              t.vetoPotUsd > 0 ? ` (veto pot $${t.vetoPotUsd.toFixed(4)}/$${vetoPriceUsd})` : ''
+            lines.push(`${i + 1}. ${t.title}${artist}${pot}`)
+          })
+        }
       }
-      const mins = Math.floor(np.progressMs / 60_000)
-      const secs = Math.floor((np.progressMs % 60_000) / 1_000)
-        .toString()
-        .padStart(2, '0')
-      await event.channel.post(
-        `Now playing: *${np.track.title}* by ${np.track.artist} (${mins}:${secs})`,
-      )
+      await event.channel.post(lines.join('\n'))
       return
     }
 
-    // Routing: a YouTube URL goes to djbox; everything else (Spotify URL or
-    // free-text search) goes to Spotify. Falls back to djbox if Spotify is
-    // not configured, and vice versa.
-    const wantsDjbox = !!Djbox.parseYouTubeId(rest)
-    const target =
-      subcommand === 'queue' && wantsDjbox && hasDjbox
-        ? 'djbox'
-        : hasSpotify
-          ? 'spotify'
-          : hasDjbox
-            ? 'djbox'
-            : null
-    if (!target) {
-      await postPrivateReply(event, event.user, 'No DJ backend available.')
+    if (!houseProviderUserId) {
+      await postPrivateReply(event, event.user, 'DJ_HOUSE_PROVIDER_USER_ID not configured.')
       return
     }
+
+    const bidderName = event.user.fullName || event.user.userName || event.user.userId
 
     if (subcommand === 'skip') {
-      if (!houseProviderUserId) {
-        await postPrivateReply(event, event.user, 'DJ_HOUSE_PROVIDER_USER_ID not configured.')
-        return
-      }
       const tip = await Tip.handleTipRequest(env, {
         amount: Math.round(skipPriceUsd * 1_000_000),
         idempotencyKey: Nanoid.generate(),
@@ -764,70 +748,97 @@ const handlers = {
         await postDjTipError(event, tip)
         return
       }
-      const bidderName = event.user.fullName || event.user.userName || event.user.userId
-      const skipped =
-        target === 'spotify'
-          ? await (async () => {
-              const accessToken = await Spotify.getAccessToken({
-                clientId: spotifyClientId!,
-                clientSecret: spotifyClientSecret!,
-                refreshToken: spotifyRefreshToken!,
-              }).catch(() => null)
-              if (!accessToken) return { ok: false as const }
-              return await Spotify.skip({ accessToken })
-            })()
-          : await Djbox.skip({
-              amountUsd: skipPriceUsd,
-              bidderName,
-              djboxUrl: djboxUrl!,
-              partyId: djboxPartyId!,
-              secret: djboxSecret!,
-            })
+      const skipped = await Djbox.skip({
+        amountUsd: skipPriceUsd,
+        bidderName,
+        djboxUrl,
+        partyId: djboxPartyId,
+        secret: djboxSecret,
+      })
       if (!skipped.ok) {
-        await postPrivateReply(event, event.user, `${target} skip failed.`)
+        await postPrivateReply(event, event.user, 'djbox skip failed.')
         return
       }
+      const cleared = skipped.cleared
+      const potNote =
+        !cleared && skipped.potUsd !== undefined && skipped.thresholdUsd !== undefined
+          ? ` (pot $${skipped.potUsd.toFixed(4)}/$${skipped.thresholdUsd.toFixed(4)})`
+          : ''
+      const verb = cleared ? 'skipped current track' : `bid to skip${potNote}`
       await event.channel.post(
-        `${event.channel.mentionUser(event.user.userId)} skipped on ${target} ($${skipPriceUsd}, tx ${truncateTxHash(tip.transactionHash)}).`,
+        `${event.channel.mentionUser(event.user.userId)} ${verb} ($${skipPriceUsd}, tx ${truncateTxHash(tip.transactionHash)}).`,
+      )
+      return
+    }
+
+    if (subcommand === 'veto') {
+      const position = Number.parseInt(rest, 10)
+      if (!Number.isInteger(position) || position < 1) {
+        await postPrivateReply(
+          event,
+          event.user,
+          'Usage: `/dj veto <position>` — see positions with `/dj list`.',
+        )
+        return
+      }
+      const snap = await Djbox.getState({
+        djboxUrl,
+        partyId: djboxPartyId,
+        secret: djboxSecret,
+      })
+      const target = snap?.upcoming[position - 1]
+      if (!target) {
+        await postPrivateReply(event, event.user, `No track at position ${position}.`)
+        return
+      }
+      const tip = await Tip.handleTipRequest(env, {
+        amount: Math.round(vetoPriceUsd * 1_000_000),
+        idempotencyKey: Nanoid.generate(),
+        memo: `dj veto: ${target.title}`.slice(0, 100),
+        provider: ctx.provider.type,
+        providerChannelId: event.channel.id.replace(/^slack:/, ''),
+        providerId: ctx.provider.id,
+        providerThreadId: ctx.threadTs,
+        recipientProviderUserId: houseProviderUserId,
+        senderProviderUserId: event.user.userId,
+      })
+      if (!tip.ok) {
+        await postDjTipError(event, tip)
+        return
+      }
+      const vetoed = await Djbox.veto({
+        amountUsd: vetoPriceUsd,
+        bidderName,
+        djboxUrl,
+        partyId: djboxPartyId,
+        secret: djboxSecret,
+        trackId: target.id,
+      })
+      if (!vetoed.ok) {
+        await postPrivateReply(event, event.user, `Veto failed (${vetoed.reason ?? 'unknown'}).`)
+        return
+      }
+      const cleared = vetoed.cleared
+      const potNote =
+        !cleared && vetoed.potUsd !== undefined && vetoed.thresholdUsd !== undefined
+          ? ` (pot $${vetoed.potUsd.toFixed(4)}/$${vetoed.thresholdUsd.toFixed(4)})`
+          : ''
+      const verb = cleared ? `vetoed *${target.title}*` : `bid to veto *${target.title}*${potNote}`
+      await event.channel.post(
+        `${event.channel.mentionUser(event.user.userId)} ${verb} ($${vetoPriceUsd}, tx ${truncateTxHash(tip.transactionHash)}).`,
       )
       return
     }
 
     // subcommand === 'queue'
-    if (!houseProviderUserId) {
-      await postPrivateReply(event, event.user, 'DJ_HOUSE_PROVIDER_USER_ID not configured.')
-      return
-    }
-
     const resolved = await (async () => {
-      if (target === 'djbox') {
-        const youtubeId = Djbox.parseYouTubeId(rest)
-        if (youtubeId) {
-          const track = await Djbox.trackFromYouTubeId(youtubeId)
-          return track ? { djbox: track, kind: 'djbox' as const } : null
-        }
-        const spotifyId = Djbox.parseSpotifyTrackId(rest)
-        const query = spotifyId ? await Djbox.spotifyTrackToYouTubeQuery(spotifyId) : rest
-        if (!query) return null
-        const tracks = await Djbox.search({ djboxUrl: djboxUrl!, query })
-        return tracks[0] ? { djbox: tracks[0], kind: 'djbox' as const } : null
-      }
-      const accessToken = await Spotify.getAccessToken({
-        clientId: spotifyClientId!,
-        clientSecret: spotifyClientSecret!,
-        refreshToken: spotifyRefreshToken!,
-      }).catch(() => null)
-      if (!accessToken) return null
-      const trackId = Spotify.parseTrackId(rest)
-      if (trackId) {
-        const track = await Spotify.trackFromUri({
-          accessToken,
-          uri: `spotify:track:${trackId}`,
-        })
-        return track ? { accessToken, kind: 'spotify' as const, spotify: track } : null
-      }
-      const tracks = await Spotify.search({ accessToken, query: rest })
-      return tracks[0] ? { accessToken, kind: 'spotify' as const, spotify: tracks[0] } : null
+      const youtubeId = Djbox.parseYouTubeId(rest)
+      if (youtubeId) return await Djbox.trackFromYouTubeId(youtubeId)
+      const spotifyId = Djbox.parseSpotifyTrackId(rest)
+      const query = spotifyId ? await Djbox.spotifyTrackToYouTubeQuery(spotifyId) : rest
+      if (!query) return null
+      const tracks = await Djbox.search({ djboxUrl, query })
+      return tracks[0] ?? null
     })()
 
     if (!resolved) {
@@ -835,14 +846,10 @@ const handlers = {
       return
     }
 
-    const trackTitle = resolved.kind === 'spotify' ? resolved.spotify.title : resolved.djbox.title
-    const trackArtist =
-      resolved.kind === 'spotify' ? resolved.spotify.artist : resolved.djbox.artist
-
     const tip = await Tip.handleTipRequest(env, {
       amount: Math.round(queuePriceUsd * 1_000_000),
       idempotencyKey: Nanoid.generate(),
-      memo: `dj queue: ${trackTitle}`.slice(0, 100),
+      memo: `dj queue: ${resolved.title}`.slice(0, 100),
       provider: ctx.provider.type,
       providerChannelId: event.channel.id.replace(/^slack:/, ''),
       providerId: ctx.provider.id,
@@ -855,25 +862,21 @@ const handlers = {
       return
     }
 
-    const queued =
-      resolved.kind === 'spotify'
-        ? await Spotify.addToQueue({ accessToken: resolved.accessToken, uri: resolved.spotify.uri })
-        : await Djbox.enqueue({
-            djboxUrl: djboxUrl!,
-            partyId: djboxPartyId!,
-            requesterName: event.user.fullName || event.user.userName || event.user.userId,
-            secret: djboxSecret!,
-            track: resolved.djbox,
-          })
+    const queued = await Djbox.enqueue({
+      djboxUrl,
+      partyId: djboxPartyId,
+      requesterName: bidderName,
+      secret: djboxSecret,
+      track: resolved,
+    })
     if (!queued.ok) {
-      await postPrivateReply(event, event.user, `${resolved.kind} enqueue failed.`)
+      await postPrivateReply(event, event.user, 'djbox enqueue failed.')
       return
     }
 
+    const artist = resolved.artist ? ` by ${resolved.artist}` : ''
     await event.channel.post(
-      `${event.channel.mentionUser(event.user.userId)} queued *${trackTitle}*${
-        trackArtist ? ` by ${trackArtist}` : ''
-      } on ${resolved.kind} ($${queuePriceUsd}, tx ${truncateTxHash(tip.transactionHash)}).`,
+      `${event.channel.mentionUser(event.user.userId)} queued *${resolved.title}*${artist} ($${queuePriceUsd}, tx ${truncateTxHash(tip.transactionHash)}).`,
     )
   },
   async help(event, ctx) {

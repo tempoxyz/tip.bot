@@ -98,7 +98,7 @@ function createManifest() {
           command: djCommand,
           description: 'Queue music in the djbox jukebox',
           should_escape: true,
-          usage_hint: 'queue <youtube/spotify url or search>, skip, where, help',
+          usage_hint: 'queue <url or search>, skip, list, veto <position>, where, help',
           url: `${baseUrl}/api/chat/slack`,
         },
       ],
