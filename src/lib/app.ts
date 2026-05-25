@@ -8,6 +8,11 @@ export function getSlackCommand(host: string) {
   return previewPrNumber ? `/tippr${previewPrNumber}` : '/tip'
 }
 
+export function getDjCommand(host: string) {
+  const previewPrNumber = getPreviewPrNumber(host)
+  return previewPrNumber ? `/djpr${previewPrNumber}` : '/dj'
+}
+
 export function getTipbotImagePath(host: string) {
   return getPreviewPrNumber(host) ? '/tipbot-preview.png' : '/tipbot.png'
 }

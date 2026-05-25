@@ -2,11 +2,13 @@ import * as DB from '#db/client.ts'
 import type { DB as DB_gen } from '#db/types.gen.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as AccessKey from '#/lib/accessKey.ts'
-import { getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
+import { getDjCommand, getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
+import * as Djbox from '#/lib/djbox.ts'
 import * as Emoji from '#/lib/emoji.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Slack from '#/lib/slack.ts'
+import * as Spotify from '#/lib/spotify.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
 import { createCloudflareState } from '#/vendor/chatStateCloudflareDO.ts'
@@ -207,6 +209,19 @@ export function getChat() {
       return
     }
     await handlers.default(event, context)
+  })
+  bot.onSlashCommand(getDjCommand(env.HOST), async (event) => {
+    if (event.adapter !== getSlack()) throw new Error('Provider not implemented yet.')
+
+    const context = {
+      db: DB.create(env.DB),
+      provider: getProvider(event),
+      text: event.text.trim(),
+      threadTs: z.looseObject({ thread_ts: z.string().min(1).optional() }).parse(event.raw)
+        .thread_ts,
+    } satisfies HandlerContext
+
+    await handlers.dj(event, context)
   })
   return bot
 }
@@ -636,6 +651,230 @@ const handlers = {
       .where('id', '=', member.provider_identity_id)
       .execute()
     await postPrivateReply(event, event.user, 'Disconnected')
+  },
+  async dj(event, ctx) {
+    const djboxUrl = env.DJBOX_URL
+    const djboxPartyId = env.DJBOX_PARTY_ID
+    const djboxSecret = env.DJBOX_SECRET
+    const spotifyClientId = env.SPOTIFY_CLIENT_ID
+    const spotifyClientSecret = env.SPOTIFY_CLIENT_SECRET
+    const spotifyRefreshToken = env.SPOTIFY_REFRESH_TOKEN
+    const houseProviderUserId = env.DJ_HOUSE_PROVIDER_USER_ID
+    const queuePriceUsd = Number(env.DJ_QUEUE_PRICE_USD ?? '0.005')
+    const skipPriceUsd = Number(env.DJ_SKIP_PRICE_USD ?? '0.0002')
+
+    const hasDjbox = !!(djboxUrl && djboxPartyId && djboxSecret)
+    const hasSpotify = !!(spotifyClientId && spotifyClientSecret && spotifyRefreshToken)
+    if (!hasDjbox && !hasSpotify) {
+      await postPrivateReply(event, event.user, 'DJ not configured for this workspace.')
+      return
+    }
+
+    const text = ctx.text.trim()
+    const match = text.match(/^(queue|skip|nowplaying|where|help)(?:\s+([\s\S]*))?$/)
+    const subcommand = match?.[1] ?? 'help'
+    const rest = match?.[2]?.trim() ?? ''
+
+    if (subcommand === 'where') {
+      const lines = [
+        ...(hasSpotify ? ['Spotify Jam: ask the venue host for the Jam link.'] : []),
+        ...(hasDjbox ? [`Djbox party: ${djboxUrl}/p/${djboxPartyId}`] : []),
+      ]
+      await postPrivateReply(event, event.user, lines.join('\n'))
+      return
+    }
+
+    if (subcommand === 'help' || (subcommand === 'queue' && !rest)) {
+      await postPrivateReply(
+        event,
+        event.user,
+        [
+          `${getDjCommand(env.HOST)} queue <youtube/spotify url or search>  Add a track ($${queuePriceUsd})`,
+          `${getDjCommand(env.HOST)} skip  Skip the current track ($${skipPriceUsd})`,
+          `${getDjCommand(env.HOST)} nowplaying  Show what's on right now`,
+          `${getDjCommand(env.HOST)} where  Show party URLs`,
+        ].join('\n'),
+      )
+      return
+    }
+
+    if (subcommand === 'nowplaying') {
+      if (!hasSpotify) {
+        await postPrivateReply(event, event.user, 'Spotify not configured.')
+        return
+      }
+      const accessToken = await Spotify.getAccessToken({
+        clientId: spotifyClientId,
+        clientSecret: spotifyClientSecret,
+        refreshToken: spotifyRefreshToken,
+      }).catch(() => null)
+      if (!accessToken) {
+        await postPrivateReply(event, event.user, 'Spotify auth failed.')
+        return
+      }
+      const np = await Spotify.nowPlaying({ accessToken })
+      if (!np?.track) {
+        await postPrivateReply(event, event.user, 'Nothing playing.')
+        return
+      }
+      const mins = Math.floor(np.progressMs / 60_000)
+      const secs = Math.floor((np.progressMs % 60_000) / 1_000)
+        .toString()
+        .padStart(2, '0')
+      await event.channel.post(
+        `Now playing: *${np.track.title}* by ${np.track.artist} (${mins}:${secs})`,
+      )
+      return
+    }
+
+    // Routing: a YouTube URL goes to djbox; everything else (Spotify URL or
+    // free-text search) goes to Spotify. Falls back to djbox if Spotify is
+    // not configured, and vice versa.
+    const wantsDjbox = !!Djbox.parseYouTubeId(rest)
+    const target =
+      subcommand === 'queue' && wantsDjbox && hasDjbox
+        ? 'djbox'
+        : hasSpotify
+          ? 'spotify'
+          : hasDjbox
+            ? 'djbox'
+            : null
+    if (!target) {
+      await postPrivateReply(event, event.user, 'No DJ backend available.')
+      return
+    }
+
+    if (subcommand === 'skip') {
+      if (!houseProviderUserId) {
+        await postPrivateReply(event, event.user, 'DJ_HOUSE_PROVIDER_USER_ID not configured.')
+        return
+      }
+      const tip = await Tip.handleTipRequest(env, {
+        amount: Math.round(skipPriceUsd * 1_000_000),
+        idempotencyKey: Nanoid.generate(),
+        memo: 'dj skip',
+        provider: ctx.provider.type,
+        providerChannelId: event.channel.id.replace(/^slack:/, ''),
+        providerId: ctx.provider.id,
+        providerThreadId: ctx.threadTs,
+        recipientProviderUserId: houseProviderUserId,
+        senderProviderUserId: event.user.userId,
+      })
+      if (!tip.ok) {
+        await postDjTipError(event, tip)
+        return
+      }
+      const bidderName = event.user.fullName || event.user.userName || event.user.userId
+      const skipped =
+        target === 'spotify'
+          ? await (async () => {
+              const accessToken = await Spotify.getAccessToken({
+                clientId: spotifyClientId!,
+                clientSecret: spotifyClientSecret!,
+                refreshToken: spotifyRefreshToken!,
+              }).catch(() => null)
+              if (!accessToken) return { ok: false as const }
+              return await Spotify.skip({ accessToken })
+            })()
+          : await Djbox.skip({
+              amountUsd: skipPriceUsd,
+              bidderName,
+              djboxUrl: djboxUrl!,
+              partyId: djboxPartyId!,
+              secret: djboxSecret!,
+            })
+      if (!skipped.ok) {
+        await postPrivateReply(event, event.user, `${target} skip failed.`)
+        return
+      }
+      await event.channel.post(
+        `${event.channel.mentionUser(event.user.userId)} skipped on ${target} ($${skipPriceUsd}, tx ${truncateTxHash(tip.transactionHash)}).`,
+      )
+      return
+    }
+
+    // subcommand === 'queue'
+    if (!houseProviderUserId) {
+      await postPrivateReply(event, event.user, 'DJ_HOUSE_PROVIDER_USER_ID not configured.')
+      return
+    }
+
+    const resolved = await (async () => {
+      if (target === 'djbox') {
+        const youtubeId = Djbox.parseYouTubeId(rest)
+        if (youtubeId) {
+          const track = await Djbox.trackFromYouTubeId(youtubeId)
+          return track ? { djbox: track, kind: 'djbox' as const } : null
+        }
+        const spotifyId = Djbox.parseSpotifyTrackId(rest)
+        const query = spotifyId ? await Djbox.spotifyTrackToYouTubeQuery(spotifyId) : rest
+        if (!query) return null
+        const tracks = await Djbox.search({ djboxUrl: djboxUrl!, query })
+        return tracks[0] ? { djbox: tracks[0], kind: 'djbox' as const } : null
+      }
+      const accessToken = await Spotify.getAccessToken({
+        clientId: spotifyClientId!,
+        clientSecret: spotifyClientSecret!,
+        refreshToken: spotifyRefreshToken!,
+      }).catch(() => null)
+      if (!accessToken) return null
+      const trackId = Spotify.parseTrackId(rest)
+      if (trackId) {
+        const track = await Spotify.trackFromUri({
+          accessToken,
+          uri: `spotify:track:${trackId}`,
+        })
+        return track ? { accessToken, kind: 'spotify' as const, spotify: track } : null
+      }
+      const tracks = await Spotify.search({ accessToken, query: rest })
+      return tracks[0] ? { accessToken, kind: 'spotify' as const, spotify: tracks[0] } : null
+    })()
+
+    if (!resolved) {
+      await postPrivateReply(event, event.user, `No track found for "${rest}".`)
+      return
+    }
+
+    const trackTitle = resolved.kind === 'spotify' ? resolved.spotify.title : resolved.djbox.title
+    const trackArtist =
+      resolved.kind === 'spotify' ? resolved.spotify.artist : resolved.djbox.artist
+
+    const tip = await Tip.handleTipRequest(env, {
+      amount: Math.round(queuePriceUsd * 1_000_000),
+      idempotencyKey: Nanoid.generate(),
+      memo: `dj queue: ${trackTitle}`.slice(0, 100),
+      provider: ctx.provider.type,
+      providerChannelId: event.channel.id.replace(/^slack:/, ''),
+      providerId: ctx.provider.id,
+      providerThreadId: ctx.threadTs,
+      recipientProviderUserId: houseProviderUserId,
+      senderProviderUserId: event.user.userId,
+    })
+    if (!tip.ok) {
+      await postDjTipError(event, tip)
+      return
+    }
+
+    const queued =
+      resolved.kind === 'spotify'
+        ? await Spotify.addToQueue({ accessToken: resolved.accessToken, uri: resolved.spotify.uri })
+        : await Djbox.enqueue({
+            djboxUrl: djboxUrl!,
+            partyId: djboxPartyId!,
+            requesterName: event.user.fullName || event.user.userName || event.user.userId,
+            secret: djboxSecret!,
+            track: resolved.djbox,
+          })
+    if (!queued.ok) {
+      await postPrivateReply(event, event.user, `${resolved.kind} enqueue failed.`)
+      return
+    }
+
+    await event.channel.post(
+      `${event.channel.mentionUser(event.user.userId)} queued *${trackTitle}*${
+        trackArtist ? ` by ${trackArtist}` : ''
+      } on ${resolved.kind} ($${queuePriceUsd}, tx ${truncateTxHash(tip.transactionHash)}).`,
+    )
   },
   async help(event, ctx) {
     const workspace = await ctx.db
@@ -1299,6 +1538,7 @@ const commandNames = [
   'config',
   'connect',
   'disconnect',
+  'dj',
   'help',
   'leaderboard',
   'stats',
@@ -3223,4 +3463,28 @@ function slackTableUserCell(providerUserId: string) {
     ],
     type: 'rich_text',
   }
+}
+
+async function postDjTipError(event: TipEvent, tip: Extract<Tip.TipResult, { ok: false }>) {
+  const message = (() => {
+    if (tip.code === 'sender_unconnected')
+      return `Connect first: \`${getSlackCommand(env.HOST)} connect\``
+    if (tip.code === 'recipient_unconnected')
+      return 'House DJ wallet is not connected. Ping an admin.'
+    if (tip.code === 'self_tip') return 'You are the house DJ; you cannot queue your own tracks.'
+    if (tip.code === 'insufficient_funds')
+      return `Insufficient funds. Top up your wallet and try again.`
+    if (tip.code === 'confirmation_required')
+      return `Confirm the payment: ${tip.confirmUrl ?? 'check your DMs'}`
+    if (tip.code === 'missing_sender_access_key')
+      return 'Your access key is missing. Reconnect with `/tip connect`.'
+    if (tip.code === 'pending') return 'Payment pending. Try again in a moment.'
+    return `Payment failed (${tip.code}).`
+  })()
+  await postPrivateReply(event, event.user, message)
+}
+
+function truncateTxHash(hash: string) {
+  if (hash.length <= 10) return hash
+  return `${hash.slice(0, 6)}…${hash.slice(-4)}`
 }

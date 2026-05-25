@@ -61,6 +61,7 @@ function createManifest() {
     (appEnv === 'production' ? 'Tipbot' : appEnv === 'preview' ? 'Tipbot Preview' : 'Tipbot (dev)')
   const botDisplayName = process.env.SLACK_BOT_DISPLAY_NAME ?? 'Tipbot'
   const slackCommand = process.env.SLACK_COMMAND ?? '/tip'
+  const djCommand = process.env.DJ_COMMAND ?? '/dj'
   const eventSubscriptions =
     process.env.SLACK_EVENT_SUBSCRIPTIONS === '0'
       ? undefined
@@ -91,6 +92,13 @@ function createManifest() {
           description: 'Tip teammates and manage Tipbot',
           should_escape: true,
           usage_hint: '@account, connect, disconnect, help, leaderboard, status',
+          url: `${baseUrl}/api/chat/slack`,
+        },
+        {
+          command: djCommand,
+          description: 'Queue music in the djbox jukebox',
+          should_escape: true,
+          usage_hint: 'queue <youtube/spotify url or search>, skip, where, help',
           url: `${baseUrl}/api/chat/slack`,
         },
       ],
