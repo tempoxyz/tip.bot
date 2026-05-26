@@ -133,15 +133,11 @@ describe('/api/chat/slack', () => {
       default_amount: 5_000_000,
       provider_id: providerId,
     })
-    await db
-      .insertInto('reaction_tip_config')
-      .values({
-        amount: 1000,
-        emoji: 'tip',
-        id: Nanoid.generate(),
-        workspace_id: workspace.id,
-      })
-      .execute()
+    await factory.reaction_tip_config.insert({
+      amount: 1000,
+      emoji: 'tip',
+      workspace_id: workspace.id,
+    })
     const fetchSpy = setupSlackViewsPublishFetchSpy()
 
     const response = await postSlackAppHomeOpened({
@@ -364,15 +360,11 @@ describe('/api/account/link/:token', () => {
     const workspace = await factory.workspace.insert({
       provider_id: providerId,
     })
-    await db
-      .insertInto('reaction_tip_config')
-      .values({
-        amount: 2_000_000, // $2
-        emoji: 'bell',
-        id: Nanoid.generate(),
-        workspace_id: workspace.id,
-      })
-      .execute()
+    await factory.reaction_tip_config.insert({
+      amount: 2_000_000,
+      emoji: 'bell',
+      workspace_id: workspace.id,
+    })
     const pending = await createPendingAccountLink({
       providerChannelId: channelId,
       providerUserId: Constants.slack.adminUserId,
