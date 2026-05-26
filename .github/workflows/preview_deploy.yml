@@ -450,7 +450,7 @@ jobs:
             echo "Preview workspace seeding disabled."
             exit 0
           fi
-          node --experimental-strip-types scripts/preview-seed.ts
+          pnpm exec jiti scripts/preview-seed.ts
 
       - name: Comment deploy status
         if: always()
