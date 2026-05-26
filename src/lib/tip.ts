@@ -16,6 +16,7 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { Account as TempoAccount, Actions } from 'viem/tempo'
 import { getNodeError } from 'viem/utils'
 
+// Keep in sync with db/migrations/0008_reaction_tip_config.sql.
 export const defaultReactionTipConfigs = [
   { amount: 1000, emoji: 'money_with_wings' }, // $0.001
   { amount: 10_000, emoji: 'dollar' }, // $0.01
