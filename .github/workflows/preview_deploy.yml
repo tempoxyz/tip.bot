@@ -107,7 +107,14 @@ jobs:
           if (!match) process.exit(0)
           const state = JSON.parse(match[1])
           const output = (name, value) => {
-            if (value) fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`)
+            if (!value) return
+            const text = String(value)
+            if (!text.includes('\n')) {
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${text}\n`)
+              return
+            }
+            const delimiter = `OUTPUT_${crypto.randomUUID()}`
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}<<${delimiter}\n${text}\n${delimiter}\n`)
           }
           output('d1_id', state.d1_id)
           output('reaction_tip_text', state.reaction_tip_text)
