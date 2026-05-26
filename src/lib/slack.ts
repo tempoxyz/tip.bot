@@ -248,7 +248,16 @@ async function buildHomeView(input: {
     .orderBy('amount', 'asc')
     .orderBy('emoji', 'asc')
     .execute()
-  const reactionTipText = formatReactionTipConfigs(reactionTipConfigs)
+  const reactionTipText = (
+    reactionTipConfigs.length
+      ? reactionTipConfigs
+      : [
+          { amount: 1000, emoji: 'money_with_wings' }, // $0.001
+          { amount: 1_000_000, emoji: 'money_mouth_face' }, // $1
+        ]
+  )
+    .map((config) => `:${config.emoji}: (${formatAmount(config.amount)})`)
+    .join(', ')
 
   const member = await db
     .selectFrom('member')
@@ -620,16 +629,6 @@ async function buildHomeView(input: {
       type: 'home',
     }
   })()
-}
-
-function formatReactionTipConfigs(configs: Array<{ amount: number; emoji: string }>) {
-  const values = configs.length
-    ? configs
-    : [
-        { amount: 1000, emoji: 'money_with_wings' },
-        { amount: 1_000_000, emoji: 'money_mouth_face' },
-      ]
-  return values.map((config) => `:${config.emoji}: (${formatAmount(config.amount)})`).join(', ')
 }
 
 function getSlackCommand(host: string) {
