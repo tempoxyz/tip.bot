@@ -12,10 +12,6 @@ export function getTipbotImagePath(host: string) {
   return getPreviewPrNumber(host) ? '/tipbot-preview.png' : '/tipbot.png'
 }
 
-export function getPreviewReactionTipEmoji(host: string) {
-  return getPreviewReactionTipEmojis(host)?.[0]
-}
-
 export function getPreviewReactionTipEmojis(host: string) {
   const previewPrNumber = getPreviewPrNumber(host)
   if (!previewPrNumber) return undefined
