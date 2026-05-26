@@ -1,8 +1,8 @@
 import fs from 'node:fs'
 import * as DB from '#db/client.ts'
 import { getPreviewReactionTipEmojis } from '#/lib/app.ts'
+import * as Constants from '#/lib/constants.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
-import * as Tip from '#/lib/tip.ts'
 import { sql } from 'kysely'
 import JSONC from 'tiny-jsonc'
 import { z } from 'zod'
@@ -85,7 +85,7 @@ try {
       await previewDb
         .insertInto('reaction_tip_config')
         .values(
-          Tip.defaultReactionTipConfigs.map((config, index) => ({
+          Constants.defaultReactionTipConfigs.map((config, index) => ({
             amount: config.amount,
             created_at: now,
             emoji: previewReactionTipEmojis[index]!,
@@ -140,7 +140,7 @@ try {
   await previewDb
     .insertInto('reaction_tip_config')
     .values(
-      Tip.defaultReactionTipConfigs.map((config, index) => ({
+      Constants.defaultReactionTipConfigs.map((config, index) => ({
         amount: config.amount,
         created_at: now,
         emoji: previewReactionTipEmojis[index]!,
