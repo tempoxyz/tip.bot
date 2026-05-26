@@ -157,11 +157,14 @@ jobs:
             return `$${amount >= 10_000 ? Number(value).toFixed(2) : value}`
           }
           console.log(`name=${emojis[0]}`)
-          console.log(
-            `text=${defaultReactionTipConfigs
-              .map((config, index) => `${replaceEmojiShortcodes(`:${emojis[index]}:`)} \`:${emojis[index]}:\` (${formatReactionTipAmount(config.amount)})`)
-              .join(' · ')}`,
-          )
+          console.log('text<<REACTION_TIPS')
+          console.log('| Emoji | Emoji code | Amount |')
+          console.log('| :---- | :--------- | -----: |')
+          for (const [index, config] of defaultReactionTipConfigs.entries())
+            console.log(
+              `| ${replaceEmojiShortcodes(`:${emojis[index]}:`)} | \`:${emojis[index]}:\` | ${formatReactionTipAmount(config.amount)} |`,
+            )
+          console.log('REACTION_TIPS')
           NODE
 
       - name: Comment building status
@@ -181,13 +184,14 @@ jobs:
           SHA_SHORT=$(echo "$SHA" | cut -c1-7)
           UPDATED=$(date -u +"%b %-d, %Y, %-I:%M %p")
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message. Reaction tips: ${REACTION_TIP_TEXT}."
-          BODY=$(printf '%s\n\n%s\n%s\n%s\n\n%s' \
+          COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message."
+          BODY=$(printf '%s\n\n%s\n%s\n%s\n\n%s\n\nReaction tips:\n\n%s' \
             "The latest Tipbot preview deployment for ${SHA_SHORT}" \
             "| Name | Status | Preview | Updated (UTC) |" \
             "| :--- | :----- | :------ | :------------ |" \
             "| ${PREVIEW_APEX} | [![Building](https://vercel.com/static/status/building.svg) Building](${RUN_URL}) | — | ${UPDATED} |" \
-            "${COMMANDS}")
+            "${COMMANDS}" \
+            "${REACTION_TIP_TEXT}")
           if [ -n "${STATE_D1_ID}${STATE_SLACK_APP_ID}" ]; then
             STATE=$(jq -nc \
               --arg pr "$PR_NUMBER" \
@@ -486,7 +490,7 @@ jobs:
             SLACK_APP_CONFIG=" &nbsp; <a href=\"https://api.slack.com/apps/${SLACK_APP_ID:-$STATE_SLACK_APP_ID}\">Slack app config</a>"
           fi
           INSTALL="<a href=\"https://${PREVIEW_HOST}/install/slack\"><img alt=\"Add to Slack\" height=\"38\" width=\"auto\" src=\"https://platform.slack-edge.com/img/add_to_slack@2x.png\" /></a>${SLACK_APP_CONFIG}"
-          COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message. Reaction tips: ${REACTION_TIP_TEXT}."
+          COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message."
           REINSTALL=""
           if [ "$SLACK_APP_CREATED" = "true" ]; then
             REINSTALL=$(printf '\n\n> [!IMPORTANT]\n> %s' "Slack preview app changed. Reinstall the Slack preview.")
@@ -494,7 +498,7 @@ jobs:
             REINSTALL=$(printf '\n\n> [!IMPORTANT]\n> %s' "OAuth scopes changed. Reinstall the Slack preview.")
           fi
           if [ "$JOB_STATUS" = "success" ]; then
-            DETAILS=$(printf '\n\n%s\n\n%s%s' "${INSTALL}" "${COMMANDS}" "${REINSTALL}")
+            DETAILS=$(printf '\n\n%s\n\n%s\n\nReaction tips:\n\n%s%s' "${INSTALL}" "${COMMANDS}" "${REACTION_TIP_TEXT}" "${REINSTALL}")
           fi
           STATE=$(jq -nc \
             --arg pr "$PR_NUMBER" \
