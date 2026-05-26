@@ -2,11 +2,12 @@ diff --git a/dist/dist-CE6BUCWQ.js b/dist/dist-CE6BUCWQ.js
 index 6876d0e..57d3549 100644
 --- a/dist/dist-CE6BUCWQ.js
 +++ b/dist/dist-CE6BUCWQ.js
-@@ -11,6 +11,7 @@
+@@ -11,6 +11,8 @@
    return {
      teams: store.collection("slack.teams", ["team_id"]),
      users: store.collection("slack.users", ["user_id", "email"]),
 +    usergroups: store.collection("slack.usergroups", ["usergroup_id", "handle"]),
++    emojis: store.collection("slack.emojis", ["name"]),
      channels: store.collection("slack.channels", ["channel_id", "name"]),
      messages: store.collection("slack.messages", ["ts", "channel_id"]),
      bots: store.collection("slack.bots", ["bot_id"]),
@@ -74,7 +75,7 @@ index 6876d0e..57d3549 100644
      ...msg.thread_ts ? { thread_ts: msg.thread_ts } : {},
      ...msg.reply_count > 0 ? { reply_count: msg.reply_count, reply_users: msg.reply_users } : {},
      ...msg.reactions.length > 0 ? { reactions: msg.reactions } : {}
-@@ -404,11 +448,29 @@
+@@ -404,11 +448,40 @@
      name: u.name,
      real_name: u.real_name,
      is_admin: u.is_admin,
@@ -98,6 +99,17 @@ index 6876d0e..57d3549 100644
 +    return slackOk(c, {
 +      users: Array.isArray(usergroup.users) ? usergroup.users : [],
 +      response_metadata: { next_cursor: "" }
++    });
++  });
++}
++function emojiRoutes(ctx) {
++  const { app, store } = ctx;
++  const ss = () => getSlackStore(store);
++  app.get("/api/emoji.list", (c) => {
++    const authUser = c.get("authUser");
++    if (!authUser) return slackError(c, "not_authed");
++    return slackOk(c, {
++      emoji: Object.fromEntries(ss().emojis.all().map((emoji) => [emoji.name, emoji.url]))
 +    });
 +  });
 +}
@@ -205,7 +217,7 @@ index 6876d0e..57d3549 100644
          topic: { value: ch.topic ?? "", creator, last_set: now },
          purpose: { value: ch.purpose ?? "", creator, last_set: now },
          members: ss.users.all().map((u) => u.user_id),
-@@ -1367,6 +1485,30 @@
+@@ -1367,6 +1496,37 @@
        });
      }
    }
@@ -233,14 +245,22 @@ index 6876d0e..57d3549 100644
 +      });
 +    }
 +  }
++  if (config.emojis) {
++    for (const [name, url] of Object.entries(config.emojis)) {
++      const existing = ss.emojis.findOneBy("name", name);
++      if (existing) ss.emojis.update(existing.id, { url });
++      else ss.emojis.insert({ name, url });
++    }
++  }
    if (config.bots) {
      for (const b of config.bots) {
        const existing = ss.bots.all().find((eb) => eb.name === b.name);
-@@ -1418,6 +1560,7 @@
+@@ -1418,6 +1578,8 @@
      chatRoutes(ctx);
      conversationsRoutes(ctx);
      usersRoutes(ctx);
 +    usergroupsRoutes(ctx);
++    emojiRoutes(ctx);
      reactionsRoutes(ctx);
      teamRoutes(ctx);
      oauthRoutes(ctx);
