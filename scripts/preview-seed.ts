@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 import * as DB from '#db/client.ts'
-import { getPreviewReactionTipEmoji } from '#/lib/app.ts'
+import { getPreviewReactionTipEmojis } from '#/lib/app.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
+import * as Tip from '#/lib/tip.ts'
 import { sql } from 'kysely'
 import JSONC from 'tiny-jsonc'
 import { z } from 'zod'
@@ -17,10 +18,10 @@ const env = z.parse(
   }),
   process.env,
 )
-const previewReactionTipEmoji = (() => {
-  const emoji = getPreviewReactionTipEmoji(env.PREVIEW_HOST)
-  if (!emoji) throw new Error(`Expected preview host, got ${env.PREVIEW_HOST}.`)
-  return emoji
+const previewReactionTipEmojis = (() => {
+  const emojis = getPreviewReactionTipEmojis(env.PREVIEW_HOST)
+  if (!emojis) throw new Error(`Expected preview host, got ${env.PREVIEW_HOST}.`)
+  return emojis
 })()
 
 const config = z.parse(
@@ -83,16 +84,18 @@ try {
         .execute()
       await previewDb
         .insertInto('reaction_tip_config')
-        .values({
-          amount: 1000, // $0.001
-          created_at: now,
-          emoji: previewReactionTipEmoji,
-          id: Nanoid.generate(),
-          updated_at: now,
-          workspace_id: previewWorkspace.id,
-        })
+        .values(
+          Tip.defaultReactionTipConfigs.map((config, index) => ({
+            amount: config.amount,
+            created_at: now,
+            emoji: previewReactionTipEmojis[index]!,
+            id: Nanoid.generate(),
+            updated_at: now,
+            workspace_id: previewWorkspace.id,
+          })),
+        )
         .execute()
-      output('reaction_tip_emoji', previewReactionTipEmoji)
+      output('reaction_tip_emoji', previewReactionTipEmojis[0])
       output('seeded_at', env.STATE_SEEDED_AT)
       console.log(`Preview workspace already seeded with ${linkedCount} linked members.`)
       process.exit(0)
@@ -136,14 +139,16 @@ try {
     .execute()
   await previewDb
     .insertInto('reaction_tip_config')
-    .values({
-      amount: 1000, // $0.001
-      created_at: now,
-      emoji: previewReactionTipEmoji,
-      id: Nanoid.generate(),
-      updated_at: now,
-      workspace_id: workspace.id,
-    })
+    .values(
+      Tip.defaultReactionTipConfigs.map((config, index) => ({
+        amount: config.amount,
+        created_at: now,
+        emoji: previewReactionTipEmojis[index]!,
+        id: Nanoid.generate(),
+        updated_at: now,
+        workspace_id: workspace.id,
+      })),
+    )
     .execute()
 
   const members = await productionDb
@@ -261,7 +266,7 @@ try {
   }
 
   const seededAt = new Date().toISOString()
-  output('reaction_tip_emoji', previewReactionTipEmoji)
+  output('reaction_tip_emoji', previewReactionTipEmojis[0])
   output('seeded_at', seededAt)
   console.log(
     `Seeded preview workspace ${env.PREVIEW_SEED_SLACK_TEAM_ID} with ${members.length} linked members.`,

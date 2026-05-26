@@ -4,7 +4,7 @@ import * as chat from 'chat'
 import { z } from 'zod'
 import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
-import { getPreviewReactionTipEmoji, getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
+import { getPreviewReactionTipEmojis, getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as hono from '#/lib/hono.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
@@ -1004,7 +1004,7 @@ export const api = new Hono<{
           .where('provider_id', '=', result.teamId)
           .executeTakeFirst()
         const now = new Date().toISOString()
-        const previewReactionTipEmoji = getPreviewReactionTipEmoji(c.env.HOST)
+        const previewReactionTipEmojis = getPreviewReactionTipEmojis(c.env.HOST)
         const workspaceId = workspace?.id ?? Nanoid.generate()
         if (workspace)
           await c.var.db
@@ -1033,23 +1033,25 @@ export const api = new Hono<{
             })
             .execute()
         }
-        if (previewReactionTipEmoji) {
-          // Preview Slack apps use a PR-specific reaction emoji, so replace default fallback
-          // behavior with a single preview-specific reaction tip config.
+        if (previewReactionTipEmojis) {
+          // Preview Slack apps use PR-specific reaction emojis, so replace default fallback
+          // behavior with preview-specific reaction tip configs.
           await c.var.db
             .deleteFrom('reaction_tip_config')
             .where('workspace_id', '=', workspaceId)
             .execute()
           await c.var.db
             .insertInto('reaction_tip_config')
-            .values({
-              amount: Tip.defaultReactionTipConfigs[0].amount,
-              created_at: now,
-              emoji: previewReactionTipEmoji,
-              id: Nanoid.generate(),
-              updated_at: now,
-              workspace_id: workspaceId,
-            })
+            .values(
+              Tip.defaultReactionTipConfigs.map((config, index) => ({
+                amount: config.amount,
+                created_at: now,
+                emoji: previewReactionTipEmojis[index]!,
+                id: Nanoid.generate(),
+                updated_at: now,
+                workspace_id: workspaceId,
+              })),
+            )
             .execute()
         }
 
