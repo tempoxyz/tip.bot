@@ -24,7 +24,8 @@ const creaturePattern =
 
 const defaultReactionTipConfigs = [
   { amount: 1000, emoji: 'money_with_wings' }, // $0.001
-  { amount: 1_000_000, emoji: 'money_mouth_face' }, // $1
+  { amount: 10_000, emoji: 'dollar' }, // $0.01
+  { amount: 100_000, emoji: 'moneybag' }, // $0.10
 ] as const
 
 type ReactionTipConfig = Pick<DB_gen.Selectable.reaction_tip_config, 'amount' | 'emoji'>
@@ -557,7 +558,7 @@ const modalSubmits = {
       errors.default_amount = 'Enter a positive amount with up to 6 decimal places. Example: 0.005'
     if (!reactionTipConfigs)
       errors.reaction_tip_configs =
-        'Enter emoji and positive amount pairs. Example: :money_with_wings: 0.001, :money_mouth_face: 1'
+        'Enter emoji and positive amount pairs. Example: :money_with_wings: 0.001, :dollar: 0.01, :moneybag: 0.10'
     else if (
       !(await (async () => {
         const customEmojiNames = reactionTipConfigs.filter(

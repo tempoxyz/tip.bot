@@ -269,8 +269,10 @@ export const api = new Hono<{
                   : [
                       // $0.001
                       { amount: 1000, emoji: 'money_with_wings' },
-                      // $1
-                      { amount: 1_000_000, emoji: 'money_mouth_face' },
+                      // $0.01
+                      { amount: 10_000, emoji: 'dollar' },
+                      // $0.10
+                      { amount: 100_000, emoji: 'moneybag' },
                     ]
               )
                 .map(

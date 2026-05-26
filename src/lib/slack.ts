@@ -253,7 +253,8 @@ async function buildHomeView(input: {
       ? reactionTipConfigs
       : [
           { amount: 1000, emoji: 'money_with_wings' }, // $0.001
-          { amount: 1_000_000, emoji: 'money_mouth_face' }, // $1
+          { amount: 10_000, emoji: 'dollar' }, // $0.01
+          { amount: 100_000, emoji: 'moneybag' }, // $0.10
         ]
   )
     .map((config) => `:${config.emoji}: (${formatAmount(config.amount)})`)

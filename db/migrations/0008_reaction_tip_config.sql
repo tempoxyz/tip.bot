@@ -27,7 +27,16 @@ INSERT INTO "reaction_tip_config" (
   "emoji",
   "amount"
 )
-SELECT lower(hex(randomblob(16))), "id", 'money_mouth_face', 1000000
+SELECT lower(hex(randomblob(16))), "id", 'dollar', 10000
+FROM "workspace";
+
+INSERT INTO "reaction_tip_config" (
+  "id",
+  "workspace_id",
+  "emoji",
+  "amount"
+)
+SELECT lower(hex(randomblob(16))), "id", 'moneybag', 100000
 FROM "workspace";
 
 INSERT INTO "reaction_tip_config" (
@@ -38,4 +47,4 @@ INSERT INTO "reaction_tip_config" (
 )
 SELECT lower(hex(randomblob(16))), "id", "reaction_tip_emoji", "default_amount"
 FROM "workspace"
-WHERE "reaction_tip_emoji" NOT IN ('money_with_wings', 'money_mouth_face');
+WHERE "reaction_tip_emoji" NOT IN ('money_with_wings', 'dollar', 'moneybag');
