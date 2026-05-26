@@ -1,11 +1,11 @@
 import fs from 'node:fs'
-import * as DB from '#db/client.ts'
-import { getPreviewReactionTipEmojis } from '#/lib/app.ts'
-import * as Nanoid from '#/lib/nanoid.ts'
-import * as Tip from '#/lib/tip.ts'
 import { sql } from 'kysely'
 import JSONC from 'tiny-jsonc'
 import { z } from 'zod'
+import * as DB from '../db/client.ts'
+import { getPreviewReactionTipEmojis } from '../src/lib/app.ts'
+import * as Nanoid from '../src/lib/nanoid.ts'
+import * as Tip from '../src/lib/tip.ts'
 
 const env = z.parse(
   z.object({

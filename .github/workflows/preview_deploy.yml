@@ -145,7 +145,7 @@ jobs:
         env:
           PREVIEW_HOST: ${{ env.PREVIEW_HOST }}
         run: |
-          cat > .tmp-preview-reaction-tip.ts <<'NODE'
+          node --experimental-strip-types --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
           import { getPreviewReactionTipEmojis } from './src/lib/app.ts'
           import { replaceEmojiShortcodes } from './src/lib/emoji.ts'
           import { formatAmount } from './src/lib/format.ts'
@@ -163,8 +163,6 @@ jobs:
               .join(' · ')}`,
           )
           NODE
-          pnpm exec jiti .tmp-preview-reaction-tip.ts >> "$GITHUB_OUTPUT"
-          rm .tmp-preview-reaction-tip.ts
 
       - name: Comment building status
         env:
@@ -447,7 +445,7 @@ jobs:
             echo "Preview workspace seeding disabled."
             exit 0
           fi
-          pnpm exec jiti scripts/preview-seed.ts
+          node --experimental-strip-types scripts/preview-seed.ts
 
       - name: Comment deploy status
         if: always()
