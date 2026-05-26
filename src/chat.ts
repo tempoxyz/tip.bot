@@ -19,11 +19,6 @@ import { createClient, http } from 'viem'
 import { Actions } from 'viem/tempo'
 import { z } from 'zod'
 
-const creaturePattern =
-  /\b(creature|creatures|dragon|dragons|elf|elves|fae|fairy|goblin|goblins|gnome|gnomes|gremlin|gremlins|kobold|kobolds|monster|monsters|orc|orcs|troll|trolls)\b/i
-
-type ReactionTipConfig = Pick<DB_gen.Selectable.reaction_tip_config, 'amount' | 'emoji'>
-
 let bot: chat.Chat | null = null
 export function getChat() {
   if (bot) return bot
@@ -271,12 +266,9 @@ export function getChat() {
 
     const context = await (async () => {
       const db = DB.create(env.DB)
-      const reactionTipConfig = await db
+      const workspace = await db
         .selectFrom('workspace')
-        .innerJoin('reaction_tip_config', 'reaction_tip_config.workspace_id', 'workspace.id')
         .select([
-          'reaction_tip_config.amount',
-          'reaction_tip_config.emoji',
           'workspace.chain_id',
           'workspace.created_at',
           'workspace.default_amount',
@@ -291,8 +283,16 @@ export function getChat() {
         ])
         .where('workspace.provider', '=', 'slack')
         .where('workspace.provider_id', '=', reaction.team_id)
-        .where('reaction_tip_config.emoji', '=', reaction.reaction)
         .executeTakeFirst()
+      if (!workspace) return
+      const reactionTipConfigs = await db
+        .selectFrom('reaction_tip_config')
+        .select(['amount', 'emoji'])
+        .where('workspace_id', '=', workspace.id)
+        .execute()
+      const reactionTipConfig = (
+        reactionTipConfigs.length ? reactionTipConfigs : Tip.defaultReactionTipConfigs
+      ).find((config) => config.emoji === reaction.reaction)
       if (!reactionTipConfig) return
       return {
         db,
@@ -301,7 +301,7 @@ export function getChat() {
           amount: reactionTipConfig.amount,
           emoji: reactionTipConfig.emoji,
         },
-        workspace: reactionTipConfig,
+        workspace,
       } satisfies ReactionHandlerContext
     })()
     if (!context) return
@@ -1501,6 +1501,8 @@ type ReactionHandlerContext = {
   workspace: DB_gen.Selectable.workspace
 }
 
+type ReactionTipConfig = Pick<DB_gen.Selectable.reaction_tip_config, 'amount' | 'emoji'>
+
 type LeaderboardRow = {
   providerUserId: string
   tipCount: number
@@ -1530,26 +1532,6 @@ export const reactionTipIdempotencyPrefix = 'reaction:'
 
 export function isReactionTipIdempotencyKey(value: string) {
   return value.startsWith(reactionTipIdempotencyPrefix)
-}
-
-export async function seedDefaultReactionTipConfigs(
-  db: DB.Type,
-  workspaceId: string,
-  now = new Date().toISOString(),
-) {
-  await db
-    .insertInto('reaction_tip_config')
-    .values(
-      Tip.defaultReactionTipConfigs.map((config) => ({
-        amount: config.amount,
-        created_at: now,
-        emoji: config.emoji,
-        id: Nanoid.generate(),
-        updated_at: now,
-        workspace_id: workspaceId,
-      })),
-    )
-    .execute()
 }
 
 const slackReactionEventSchema = z.object({
@@ -2933,6 +2915,9 @@ async function postInvalidMentionReply(
   )
   if (!json.ok) throw Slack.slackApiError('chat.postMessage', json.error)
 }
+
+const creaturePattern =
+  /\b(creature|creatures|dragon|dragons|elf|elves|fae|fairy|goblin|goblins|gnome|gnomes|gremlin|gremlins|kobold|kobolds|monster|monsters|orc|orcs|troll|trolls)\b/i
 
 async function generateInvalidMentionReply(
   mentionText: string,

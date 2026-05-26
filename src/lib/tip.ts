@@ -137,19 +137,6 @@ export async function handleTipRequest(
           updated_at: now,
         })
         .execute()
-      await db
-        .insertInto('reaction_tip_config')
-        .values(
-          defaultReactionTipConfigs.map((config) => ({
-            amount: config.amount,
-            created_at: now,
-            emoji: config.emoji,
-            id: Nanoid.generate(),
-            updated_at: now,
-            workspace_id: id,
-          })),
-        )
-        .execute()
       return await db
         .selectFrom('workspace')
         .selectAll()

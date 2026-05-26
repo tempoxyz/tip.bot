@@ -62,11 +62,10 @@ beforeEach(async () => {
     botUserId: Constants.slack.botUserId,
     teamName: Constants.slack.teamName,
   })
-  const workspace = await factory.workspace.insert({
+  await factory.workspace.insert({
     chain_id: Tempo.chainLookup.localnet,
     provider_id: providerId,
   })
-  await Chat.seedDefaultReactionTipConfigs(db, workspace.id)
 })
 
 describe('/tip @account', () => {

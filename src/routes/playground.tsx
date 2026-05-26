@@ -644,7 +644,6 @@ const installEmulateWorkspace = createServerFn({ method: 'POST' })
           updated_at: now,
         })
         .execute()
-      await Chat.seedDefaultReactionTipConfigs(db, workspaceId, now)
     }
     const [actors, app, transcript] = await Promise.all([
       getSlackActors(),

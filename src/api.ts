@@ -1049,7 +1049,7 @@ export const api = new Hono<{
               workspace_id: workspaceId,
             })
             .execute()
-        } else if (!workspace) await Chat.seedDefaultReactionTipConfigs(c.var.db, workspaceId, now)
+        }
 
         const url = new URL(c.req.url)
         return Response.redirect(
