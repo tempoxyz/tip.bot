@@ -2333,7 +2333,6 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
       .execute()
     await updateReactionTipAggregate(provider.id, {
       channelId: event.item.channel,
-      reaction: event.reaction,
       threadTs: message.thread_ts ?? event.item.ts,
       workspaceId: workspace.id,
     }).catch((error) => {
@@ -2637,7 +2636,6 @@ export async function updateReactionTipAggregate(
   providerId: string,
   options: {
     channelId: string
-    reaction: string
     threadTs: string
     workspaceId: string
   },
@@ -2664,7 +2662,6 @@ export async function updateReactionTipAggregate(
     .where('reaction_tip.workspace_id', '=', options.workspaceId)
     .where('reaction_tip.channel_id', '=', options.channelId)
     .where('reaction_tip.thread_ts', '=', options.threadTs)
-    .where('reaction_tip.reaction', '=', options.reaction)
     .where('tip.confirmed_at', 'is not', null)
     .where('tip_batch.transaction_hash', 'is not', null)
     .orderBy('reaction_tip.created_at', 'asc')
@@ -2687,7 +2684,7 @@ export async function updateReactionTipAggregate(
       return {
         messageTs: row.message_ts,
         recipientProviderUserId: row.recipient_provider_user_id,
-        text: `• <@${row.sender_provider_user_id}> tipped ${displayAmount} · <${Tempo.formatTxLink(row.chain_id, row.transaction_hash!)}|Receipt>`,
+        text: `• :${row.reaction}: <@${row.sender_provider_user_id}> tipped ${displayAmount} · <${Tempo.formatTxLink(row.chain_id, row.transaction_hash!)}|Receipt>`,
       }
     }),
   )
@@ -2708,7 +2705,7 @@ export async function updateReactionTipAggregate(
     [] as Array<{ lines: string[]; messageTs: string; recipientProviderUserId: string }>,
   )
   const text = (() => {
-    const title = `:${rows[0]!.reaction}: Reaction tips received`
+    const title = 'Reaction tips received'
     if (messageGroups.length === 1) {
       const reactedMessageUrl = new URL('slack://channel')
       reactedMessageUrl.searchParams.set('team', providerId)
@@ -2732,7 +2729,6 @@ export async function updateReactionTipAggregate(
     .where('workspace_id', '=', options.workspaceId)
     .where('channel_id', '=', options.channelId)
     .where('message_ts', '=', options.threadTs)
-    .where('reaction', '=', options.reaction)
     .executeTakeFirst()
 
   if (existing) {
@@ -2795,7 +2791,6 @@ export async function updateReactionTipAggregate(
         created_at: now,
         id: Nanoid.generate(),
         message_ts: options.threadTs,
-        reaction: options.reaction,
         reply_ts: json.ts,
         updated_at: now,
         workspace_id: options.workspaceId,

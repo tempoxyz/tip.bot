@@ -504,7 +504,6 @@ export const api = new Hono<{
                 .execute()
               await Chat.updateReactionTipAggregate(data.payload.providerId, {
                 channelId: reactionTip.channel_id,
-                reaction: reactionTip.reaction,
                 threadTs: reactionTip.thread_ts,
                 workspaceId: reactionTip.workspace_id,
               })

@@ -109,7 +109,6 @@ type reaction_tip_thread = {
   created_at: k.Generated<string>
   id: string
   message_ts: string
-  reaction: string
   reply_ts: string
   updated_at: k.Generated<string>
   workspace_id: string
