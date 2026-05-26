@@ -1,11 +1,41 @@
 import fs from 'node:fs'
-import { sql } from 'kysely'
+import { customAlphabet } from 'nanoid'
+import { Kysely, sql } from 'kysely'
 import JSONC from 'tiny-jsonc'
 import { z } from 'zod'
-import * as DB from '../db/client.ts'
-import { getPreviewReactionTipEmojis } from '../src/lib/app.ts'
-import * as Nanoid from '../src/lib/nanoid.ts'
-import * as Tip from '../src/lib/tip.ts'
+import type { DB as DB_gen } from '../db/types.gen.ts'
+import { D1Dialect } from '../src/vendor/kyselyD1.ts'
+
+const generateNanoid = customAlphabet('0123456789abcdefghijklmnopqrstuvwxyz', 12)
+
+// Keep in sync with src/lib/tip.ts. This script runs with plain Node, which cannot load #/ aliases.
+const defaultReactionTipConfigs = [
+  { amount: 1000, emoji: 'money_with_wings' }, // $0.001
+  { amount: 10_000, emoji: 'dollar' }, // $0.01
+  { amount: 100_000, emoji: 'moneybag' }, // $0.10
+] as const
+
+// Keep in sync with src/lib/app.ts. This script runs with plain Node, which cannot load #/ aliases.
+const previewReactionTipEmojiPool = [
+  'eyes',
+  'rocket',
+  'tada',
+  'white_check_mark',
+  'heart',
+  'fire',
+  'wave',
+  'clap',
+  'pray',
+  'raised_hands',
+  'thinking_face',
+  'dart',
+  'coffee',
+  'pizza',
+  'cake',
+  'cookie',
+  'memo',
+  'bell',
+] as const
 
 const env = z.parse(
   z.object({
@@ -85,11 +115,11 @@ try {
       await previewDb
         .insertInto('reaction_tip_config')
         .values(
-          Tip.defaultReactionTipConfigs.map((config, index) => ({
+          defaultReactionTipConfigs.map((config, index) => ({
             amount: config.amount,
             created_at: now,
             emoji: previewReactionTipEmojis[index]!,
-            id: Nanoid.generate(),
+            id: generateNanoid(),
             updated_at: now,
             workspace_id: previewWorkspace.id,
           })),
@@ -109,7 +139,7 @@ try {
       created_at: sourceWorkspace.created_at,
       default_amount: sourceWorkspace.default_amount,
       default_token_address: sourceWorkspace.default_token_address,
-      id: previewWorkspace?.id ?? Nanoid.generate(),
+      id: previewWorkspace?.id ?? generateNanoid(),
       name: sourceWorkspace.name,
       provider: sourceWorkspace.provider,
       provider_id: sourceWorkspace.provider_id,
@@ -140,11 +170,11 @@ try {
   await previewDb
     .insertInto('reaction_tip_config')
     .values(
-      Tip.defaultReactionTipConfigs.map((config, index) => ({
+      defaultReactionTipConfigs.map((config, index) => ({
         amount: config.amount,
         created_at: now,
         emoji: previewReactionTipEmojis[index]!,
-        id: Nanoid.generate(),
+        id: generateNanoid(),
         updated_at: now,
         workspace_id: workspace.id,
       })),
@@ -189,7 +219,7 @@ try {
         .select('id')
         .where('id', '=', accountId)
         .executeTakeFirst()
-      if (conflictingAccount) accountId = Nanoid.generate()
+      if (conflictingAccount) accountId = generateNanoid()
       await previewDb
         .insertInto('account')
         .values({
@@ -223,7 +253,7 @@ try {
         .where('id', '=', identity.id)
         .execute()
     else {
-      identity = { id: Nanoid.generate() }
+      identity = { id: generateNanoid() }
       await previewDb
         .insertInto('provider_identity')
         .values({
@@ -246,7 +276,7 @@ try {
       .insertInto('member')
       .values({
         created_at: member.member_created_at,
-        id: Nanoid.generate(),
+        id: generateNanoid(),
         login: member.login,
         name: member.name,
         provider_identity_id: identity.id,
@@ -277,65 +307,82 @@ try {
 }
 
 function createRemoteDb(databaseId: string) {
-  return DB.create({
-    prepare: (statement) => ({
-      bind: (...params) => ({
-        async all() {
-          const response = await fetch(
-            `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/d1/database/${databaseId}/query`,
-            {
-              body: JSON.stringify({ params, sql: statement }),
-              headers: {
-                Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
-                'Content-Type': 'application/json',
-              },
-              method: 'POST',
-            },
-          )
-          const d1ResultSchema = z.looseObject({
-            error: z.string().optional(),
-            meta: z
-              .looseObject({
-                changes: z.number().optional(),
-                last_row_id: z.number().nullable().optional(),
+  return new Kysely<DB_gen>({
+    dialect: new D1Dialect({
+      database: {
+        prepare: (statement) => ({
+          bind: (...params) => ({
+            async all() {
+              const response = await fetch(
+                `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/d1/database/${databaseId}/query`,
+                {
+                  body: JSON.stringify({ params, sql: statement }),
+                  headers: {
+                    Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
+                    'Content-Type': 'application/json',
+                  },
+                  method: 'POST',
+                },
+              )
+              const d1ResultSchema = z.looseObject({
+                error: z.string().optional(),
+                meta: z
+                  .looseObject({
+                    changes: z.number().optional(),
+                    last_row_id: z.number().nullable().optional(),
+                  })
+                  .optional(),
+                results: z
+                  .array(
+                    z.record(z.string(), z.union([z.boolean(), z.null(), z.number(), z.string()])),
+                  )
+                  .optional(),
               })
-              .optional(),
-            results: z
-              .array(z.record(z.string(), z.union([z.boolean(), z.null(), z.number(), z.string()])))
-              .optional(),
-          })
-          const json = z.parse(
-            z.looseObject({
-              errors: z.unknown().optional(),
-              messages: z.unknown().optional(),
-              result: z.union([d1ResultSchema, z.array(d1ResultSchema)]).optional(),
-              success: z.boolean().optional(),
-            }),
-            await response.json(),
-          )
-          if (!response.ok || !json.success)
-            throw new Error(
-              JSON.stringify({
-                errors: json.errors,
-                messages: json.messages,
-                status: response.status,
-              }),
-            )
+              const json = z.parse(
+                z.looseObject({
+                  errors: z.unknown().optional(),
+                  messages: z.unknown().optional(),
+                  result: z.union([d1ResultSchema, z.array(d1ResultSchema)]).optional(),
+                  success: z.boolean().optional(),
+                }),
+                await response.json(),
+              )
+              if (!response.ok || !json.success)
+                throw new Error(
+                  JSON.stringify({
+                    errors: json.errors,
+                    messages: json.messages,
+                    status: response.status,
+                  }),
+                )
 
-          const result = Array.isArray(json.result) ? json.result[0] : json.result
-          return {
-            error: result?.error,
-            meta: {
-              changes: result?.meta?.changes ?? 0,
-              last_row_id: result?.meta?.last_row_id,
+              const result = Array.isArray(json.result) ? json.result[0] : json.result
+              return {
+                error: result?.error,
+                meta: {
+                  changes: result?.meta?.changes ?? 0,
+                  last_row_id: result?.meta?.last_row_id,
+                },
+                results: result?.results ?? [],
+                success: true,
+              }
             },
-            results: result?.results ?? [],
-            success: true,
-          }
-        },
-      }),
+          }),
+        }),
+      } as D1Database,
     }),
-  } as D1Database)
+  })
+}
+
+function getPreviewReactionTipEmojis(host: string) {
+  const previewPrNumber = host.match(/^pr(\d+)\.tip\.bot$/)?.[1]
+  if (!previewPrNumber) return undefined
+  const startIndex = Number(previewPrNumber) % previewReactionTipEmojiPool.length
+  return Array.from(
+    { length: 3 },
+    (_value, index) =>
+      previewReactionTipEmojiPool[(startIndex + index) % previewReactionTipEmojiPool.length]!,
+  )
 }
 
 function output(name: string, value: string) {

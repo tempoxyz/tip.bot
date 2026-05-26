@@ -1,5 +1,5 @@
 import { Kysely } from 'kysely'
-import { D1Dialect } from '../src/vendor/kyselyD1.ts'
+import { D1Dialect } from '#/vendor/kyselyD1.ts'
 import type { DB as DB_gen } from './types.gen.ts'
 
 export function create(database: D1Database | D1DatabaseSession) {

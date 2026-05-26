@@ -3,7 +3,7 @@ import { KeyAuthorization, SignatureEnvelope } from 'ox/tempo'
 import { createClient, http, parseUnits } from 'viem'
 import { verifyHash } from 'viem/actions'
 import { Account as TempoAccount } from 'viem/tempo'
-import * as Tempo from './tempo.ts'
+import * as Tempo from '#/lib/tempo.ts'
 
 export const reusableAccessKeyLimit = 10_000_000
 export const reusableAccessKeyLimitText = '10'

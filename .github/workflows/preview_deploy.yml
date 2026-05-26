@@ -149,7 +149,12 @@ jobs:
           import { getPreviewReactionTipEmojis } from './src/lib/app.ts'
           import { replaceEmojiShortcodes } from './src/lib/emoji.ts'
           import { formatAmount } from './src/lib/format.ts'
-          import { defaultReactionTipConfigs } from './src/lib/tip.ts'
+          // Keep in sync with src/lib/tip.ts. This snippet runs with plain Node, which cannot load #/ aliases.
+          const defaultReactionTipConfigs = [
+            { amount: 1000, emoji: 'money_with_wings' }, // $0.001
+            { amount: 10_000, emoji: 'dollar' }, // $0.01
+            { amount: 100_000, emoji: 'moneybag' }, // $0.10
+          ]
           const emojis = getPreviewReactionTipEmojis(process.env.PREVIEW_HOST)
           if (!emojis) throw new Error(`Expected preview host, got ${process.env.PREVIEW_HOST}.`)
           const formatReactionTipAmount = (amount) => {
