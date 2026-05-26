@@ -427,7 +427,9 @@ const actions = {
           }),
           chat.TextInput({
             id: 'reaction_tip_configs',
-            initialValue: reactionTipConfigsInputText(reactionTipConfigs),
+            initialValue: reactionTipConfigs
+              .map((config) => `:${config.emoji}: ${formatAmount(config.amount)}`)
+              .join(', '),
             label: 'Reaction tips',
           }),
         ],
@@ -544,7 +546,23 @@ const modalSubmits = {
       workspaceTokenOptions().find((option) => option.value === event.values.default_token)
         ?.address ?? null
     const amount = Tip.parseAmount(event.values.default_amount ?? '')
-    const reactionTipConfigs = parseReactionTipConfigs(event.values.reaction_tip_configs ?? '')
+    const reactionTipConfigs = (() => {
+      const configs: ReactionTipConfig[] = []
+      for (const rawPart of (event.values.reaction_tip_configs ?? '').split(/[\n,]+/)) {
+        const part = rawPart.trim()
+        if (!part) continue
+        const match = part.match(
+          /^:?([a-z0-9_+-]+):?\s*(?:(?:->|=|→)\s*)?(\$?(?:0|[1-9]\d*)(?:\.\d+)?)$/i,
+        )
+        if (!match) return null
+        const amount = Tip.parseAmount(match[2]!)
+        const emoji = match[1]!.toLowerCase()
+        if (amount === null || configs.some((config) => config.emoji === emoji)) return null
+        configs.push({ amount, emoji })
+      }
+      if (configs.length === 0) return null
+      return configs
+    })()
     const errors: Record<string, string> = {}
     if (chainId === null) errors.network = 'Choose Mainnet or Testnet.'
     if (tokenAddress === null) errors.default_token = 'Choose a default token.'
@@ -604,7 +622,20 @@ const modalSubmits = {
       .where('provider', '=', 'slack')
       .where('provider_id', '=', metadata.providerId)
       .executeTakeFirstOrThrow()
-    await replaceReactionTipConfigs(db, workspace.id, reactionTipConfigs, now)
+    await db.deleteFrom('reaction_tip_config').where('workspace_id', '=', workspace.id).execute()
+    await db
+      .insertInto('reaction_tip_config')
+      .values(
+        reactionTipConfigs.map((config) => ({
+          amount: config.amount,
+          created_at: now,
+          emoji: config.emoji,
+          id: Nanoid.generate(),
+          updated_at: now,
+          workspace_id: workspace.id,
+        })),
+      )
+      .execute()
     if (event.relatedMessage)
       await event.relatedMessage.edit(
         await configCard(db, workspace, { canEdit: true, updated: true }),
@@ -3632,50 +3663,6 @@ async function getReactionTipConfigs(db: DB.Type, workspaceId: string | undefine
   return [...Tip.defaultReactionTipConfigs]
 }
 
-async function replaceReactionTipConfigs(
-  db: DB.Type,
-  workspaceId: string,
-  configs: ReactionTipConfig[],
-  now: string,
-) {
-  await db.deleteFrom('reaction_tip_config').where('workspace_id', '=', workspaceId).execute()
-  await db
-    .insertInto('reaction_tip_config')
-    .values(
-      configs.map((config) => ({
-        amount: config.amount,
-        created_at: now,
-        emoji: config.emoji,
-        id: Nanoid.generate(),
-        updated_at: now,
-        workspace_id: workspaceId,
-      })),
-    )
-    .execute()
-}
-
-function reactionTipConfigsInputText(configs: ReactionTipConfig[]) {
-  return configs.map((config) => `:${config.emoji}: ${formatAmount(config.amount)}`).join(', ')
-}
-
-function parseReactionTipConfigs(value: string): ReactionTipConfig[] | null {
-  const configs: ReactionTipConfig[] = []
-  for (const rawPart of value.split(/[\n,]+/)) {
-    const part = rawPart.trim()
-    if (!part) continue
-    const match = part.match(
-      /^:?([a-z0-9_+-]+):?\s*(?:(?:->|=|→)\s*)?(\$?(?:0|[1-9]\d*)(?:\.\d+)?)$/i,
-    )
-    if (!match) return null
-    const amount = Tip.parseAmount(match[2]!)
-    const emoji = match[1]!.toLowerCase()
-    if (amount === null || configs.some((config) => config.emoji === emoji)) return null
-    configs.push({ amount, emoji })
-  }
-  if (configs.length === 0) return null
-  return configs
-}
-
 function reactionTipConfigsText(configs: ReactionTipConfig[]) {
   return configs
     .map((config) => `:${config.emoji}: \`:${config.emoji}:\` → ${formatAmount(config.amount)}`)
@@ -3746,7 +3733,24 @@ async function postConfigEphemeral(
             slackTableCell('Default amount'),
             slackTableCell(formatAmount(workspace.default_amount)),
           ],
-          [slackTableCell('Reaction tips'), slackTableReactionTipsCell(reactionTipConfigs)],
+          [
+            slackTableCell('Reaction tips'),
+            {
+              elements: [
+                {
+                  elements: reactionTipConfigs.flatMap((config, index) => [
+                    ...(index ? [{ text: '\n', type: 'text' }] : []),
+                    { name: config.emoji, type: 'emoji' },
+                    { text: ' ', type: 'text' },
+                    { style: { code: true }, text: `:${config.emoji}:`, type: 'text' },
+                    { text: ` → ${formatAmount(config.amount)}`, type: 'text' },
+                  ]),
+                  type: 'rich_text_section',
+                },
+              ],
+              type: 'rich_text',
+            },
+          ],
         ],
         type: 'table',
       },
@@ -3811,29 +3815,6 @@ function slackTableCell(text: string, style?: { code?: boolean }) {
   }
 }
 
-function slackTableReactionTipsCell(configs: ReactionTipConfig[]) {
-  return slackTableRichCell(
-    configs.flatMap((config, index) => [
-      ...(index ? [{ text: '\n', type: 'text' }] : []),
-      { name: config.emoji, type: 'emoji' },
-      { text: ' ', type: 'text' },
-      { style: { code: true }, text: `:${config.emoji}:`, type: 'text' },
-      { text: ` → ${formatAmount(config.amount)}`, type: 'text' },
-    ]),
-  )
-}
-
-function slackTableRichCell(elements: unknown[]) {
-  return {
-    elements: [
-      {
-        elements,
-        type: 'rich_text_section',
-      },
-    ],
-    type: 'rich_text',
-  }
-}
 function slackTableUserCell(providerUserId: string) {
   return {
     elements: [
