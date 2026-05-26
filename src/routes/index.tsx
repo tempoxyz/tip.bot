@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import * as z from 'zod/mini'
+import { slackBotDisplayName, slackCommand, tipbotImagePath } from '#/lib/app.ts'
 import IconLogosSlackIcon from '~icons/logos/slack-icon.jsx'
 
 export const Route = createFileRoute('/')({
@@ -35,8 +36,8 @@ function Component() {
               Chat-native stablecoin micropayments.
             </p>
             <p className="max-w-lg text-lg leading-8 text-gray9">
-              Mention Tipbot in Slack to tip a teammate. The payment status and receipt stay right
-              in the conversation.
+              Mention {slackBotDisplayName} in Slack to tip a teammate. The payment status and
+              receipt stay right in the conversation.
             </p>
           </div>
           <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
@@ -57,7 +58,9 @@ function Component() {
                 Add to Slack
               </a>
             )}
-            <span className="text-sm font-medium text-gray8">Try `/tip @account for coffee`</span>
+            <span className="text-sm font-medium text-gray8">
+              Try `{slackCommand} @account for coffee`
+            </span>
           </div>
         </div>
         <div className="overflow-hidden rounded-xl border border-gray4 bg-bg1 shadow-xl shadow-gray-a2">
@@ -89,7 +92,9 @@ function Component() {
                       gakonst <span className="font-normal text-gray8">10:28 AM</span>
                     </div>
                     <p className="text-gray10">
-                      <span className="rounded bg-blue2 px-1 font-medium text-blue10">@Tipbot</span>{' '}
+                      <span className="rounded bg-blue2 px-1 font-medium text-blue10">
+                        @{slackBotDisplayName}
+                      </span>{' '}
                       <span className="rounded bg-blue2 px-1 font-medium text-blue10">@jxom</span>{' '}
                       $5 for coffee
                     </p>
@@ -100,12 +105,13 @@ function Component() {
                     alt="Tipbot"
                     className="size-10 shrink-0 rounded-md object-cover"
                     height={40}
-                    src="/tipbot.png"
+                    src={tipbotImagePath}
                     width={40}
                   />
                   <div className="min-w-0">
                     <div className="font-semibold text-gray10">
-                      Tipbot <span className="rounded bg-gray2 px-1 text-xs text-gray8">APP</span>
+                      {slackBotDisplayName}{' '}
+                      <span className="rounded bg-gray2 px-1 text-xs text-gray8">APP</span>
                     </div>
                     <p className="text-gray9">
                       <span className="rounded bg-blue2 px-1 font-medium text-blue10">

@@ -4,9 +4,7 @@ on:
   push:
     branches: [main]
 
-concurrency:
-  group: production
-  cancel-in-progress: false
+permissions: {}
 
 env:
   WRANGLER_SEND_METRICS: false
@@ -14,6 +12,8 @@ env:
 jobs:
   check:
     name: Check
+    permissions:
+      contents: read
     uses: ./.github/workflows/check.yml
 
   deploy:
@@ -66,3 +66,36 @@ jobs:
           SLACK_CLIENT_ID: ${{ secrets.SLACK_CLIENT_ID }}
           SLACK_CLIENT_SECRET: ${{ secrets.SLACK_CLIENT_SECRET }}
           SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
+
+  update_slack_app:
+    name: Update Slack App
+    needs: deploy
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: slack-config-ci
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: ./.github/actions/setup-pnpm
+
+      - name: Setup Slack config token
+        id: slack_token
+        uses: ./.github/actions/setup-slack-config-token
+        with:
+          github-token: ${{ secrets.SLACK_GH_TOKEN }}
+          slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
+          slack-config-access-token: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
+
+      - name: Update Slack production app
+        env:
+          SLACK_APP_ID: ${{ vars.SLACK_APP_ID }}
+          SLACK_CONFIG_ACCESS_TOKEN: ${{ steps.slack_token.outputs.token }}
+        run: pnpm slack:app update production tip.bot "$SLACK_APP_ID"

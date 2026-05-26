@@ -5,8 +5,11 @@ import { expect, test } from 'vitest'
 test('parses positive decimal amounts', () => {
   expect(Tip.parseAmount('1')).toBe(1_000_000)
   expect(Tip.parseAmount('$1')).toBe(1_000_000)
+  expect(Tip.parseAmount('.25')).toBe(250_000)
+  expect(Tip.parseAmount('$.25')).toBe(250_000)
   expect(Tip.parseAmount('1.5')).toBe(1_500_000)
   expect(Tip.parseAmount('$1.5')).toBe(1_500_000)
+  expect(Tip.parseAmount('.000001')).toBe(1)
   expect(Tip.parseAmount('0.000001')).toBe(1)
   expect(Tip.parseAmount('123.456789')).toBe(123_456_789)
 })
@@ -23,6 +26,8 @@ test('rejects invalid decimal amounts', () => {
   expect(Tip.parseAmount('0.000000')).toBe(null)
   expect(Tip.parseAmount('-1')).toBe(null)
   expect(Tip.parseAmount('01')).toBe(null)
+  expect(Tip.parseAmount('.')).toBe(null)
+  expect(Tip.parseAmount('$.')).toBe(null)
   expect(Tip.parseAmount('1.')).toBe(null)
   expect(Tip.parseAmount('abc')).toBe(null)
   expect(Tip.parseAmount('9007199255')).toBe(null)
@@ -63,6 +68,12 @@ test('parses tip mentions and memos', () => {
   expect(Tip.parseTipText('<@UMEMBER> $0.002')).toEqual({
     amount: 2_000,
     memo: null,
+    recipientProviderUserId: 'UMEMBER',
+    token: null,
+  })
+  expect(Tip.parseTipText('<@UMEMBER> $.25 for coffee')).toEqual({
+    amount: 250_000,
+    memo: 'coffee',
     recipientProviderUserId: 'UMEMBER',
     token: null,
   })
@@ -136,7 +147,67 @@ test('parses tip mentions and memos', () => {
     recipientProviderUserId: 'UMEMBER',
     token: null,
   })
+  expect(Tip.parseTipText("<@UMEMBER> $.00000001 let's see")).toBe(null)
   expect(Tip.parseTipText("<@UMEMBER> $0.00000001 let's see")).toBe(null)
+})
+
+test('parses multi-recipient tip mentions', () => {
+  expect(Tip.parseTipBatchText('<@UFOO> <@UBAR>')).toEqual({
+    amount: undefined,
+    memo: null,
+    recipients: [{ recipientProviderUserId: 'UFOO' }, { recipientProviderUserId: 'UBAR' }],
+    token: null,
+  })
+  expect(Tip.parseTipBatchText('<@UFOO|foo> <@UBAR|bar> for coffee')).toEqual({
+    amount: undefined,
+    memo: 'coffee',
+    recipients: [
+      { recipientProviderLabel: 'foo', recipientProviderUserId: 'UFOO' },
+      { recipientProviderLabel: 'bar', recipientProviderUserId: 'UBAR' },
+    ],
+    token: null,
+  })
+  expect(Tip.parseTipBatchText('<@UFOO> <@UBAR> 0.005 USDC for launch')).toEqual({
+    amount: 5000,
+    memo: 'launch',
+    recipients: [{ recipientProviderUserId: 'UFOO' }, { recipientProviderUserId: 'UBAR' }],
+    token: 'USDC',
+  })
+  expect(Tip.parseTipBatchText('<@UFOO> <@UFOO> <@UBAR> coffee')).toEqual({
+    amount: undefined,
+    memo: 'coffee',
+    recipients: [{ recipientProviderUserId: 'UFOO' }, { recipientProviderUserId: 'UBAR' }],
+    token: null,
+  })
+  expect(Tip.parseTipBatchText('<!subteam^SENGINEERING|engineering> 0.001 for coffee')).toEqual({
+    amount: 1000,
+    memo: 'coffee',
+    recipients: [],
+    token: null,
+    usergroups: [{ providerUsergroupId: 'SENGINEERING', providerUsergroupLabel: 'engineering' }],
+  })
+  expect(Tip.parseTipBatchText('<!subteam^SENGINEERING|@engineering>')).toEqual({
+    amount: undefined,
+    memo: null,
+    recipients: [],
+    token: null,
+    usergroups: [{ providerUsergroupId: 'SENGINEERING', providerUsergroupLabel: 'engineering' }],
+  })
+  expect(Tip.parseTipBatchText('<!channel> 0.001 for coffee')).toEqual({
+    amount: 1000,
+    memo: 'coffee',
+    recipients: [],
+    token: null,
+    usergroups: [{ providerUsergroupId: 'channel' }],
+  })
+  expect(Tip.parseTipBatchText('<!here|@here>')).toEqual({
+    amount: undefined,
+    memo: null,
+    recipients: [],
+    token: null,
+    usergroups: [{ providerUsergroupId: 'here', providerUsergroupLabel: 'here' }],
+  })
+  expect(Tip.parseTipBatchText('<@UFOO> for <@UBAR>')).toBe(null)
 })
 
 test('rejects text without tip mentions', () => {
@@ -158,5 +229,8 @@ test('encodes transfer memos as bytes32', () => {
 })
 
 test('rejects transfer memos longer than bytes32', () => {
+  expect(Tip.isTransferMemoTooLong('x'.repeat(32))).toBe(false)
+  expect(Tip.isTransferMemoTooLong('x'.repeat(33))).toBe(true)
+  expect(Tip.isTransferMemoTooLong(':wine_glass:'.repeat(11))).toBe(true)
   expect(() => Tip.encodeTransferMemo('x'.repeat(33))).toThrow('Memo must be at most 32 bytes.')
 })

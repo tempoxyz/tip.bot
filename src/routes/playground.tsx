@@ -620,7 +620,12 @@ const installEmulateWorkspace = createServerFn({ method: 'POST' })
     if (workspace)
       await db
         .updateTable('workspace')
-        .set({ name: slackDefaults.teamName, updated_at: now })
+        .set({
+          installed_at: now,
+          name: slackDefaults.teamName,
+          uninstalled_at: null,
+          updated_at: now,
+        })
         .where('id', '=', workspace.id)
         .execute()
     else {
@@ -631,9 +636,11 @@ const installEmulateWorkspace = createServerFn({ method: 'POST' })
           created_at: now,
           default_amount: 1000,
           id: workspaceId,
+          installed_at: now,
           name: slackDefaults.teamName,
           provider: data.provider,
           provider_id: data.workspace,
+          uninstalled_at: null,
           updated_at: now,
         })
         .execute()
@@ -825,10 +832,11 @@ async function getAppState(search: Required<EmulateSearch>) {
 
   const members = await db
     .selectFrom('member')
-    .leftJoin('account', 'account.id', 'member.account_id')
+    .leftJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .leftJoin('account', 'account.id', 'provider_identity.account_id')
     .select([
       'account.address as account_address',
-      'member.account_id',
+      'provider_identity.account_id',
       'member.login',
       'member.name',
       'member.provider_user_id',
@@ -851,6 +859,7 @@ async function getAppState(search: Required<EmulateSearch>) {
     .execute()
   const recentTips = await db
     .selectFrom('tip')
+    .innerJoin('tip_batch', 'tip_batch.id', 'tip.batch_id')
     .innerJoin('member as sender', 'sender.id', 'tip.sender_member_id')
     .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
     .select([
@@ -859,7 +868,7 @@ async function getAppState(search: Required<EmulateSearch>) {
       'tip.amount',
       'tip.created_at',
       'tip.memo',
-      'tip.transaction_hash',
+      'tip_batch.transaction_hash as batch_transaction_hash',
     ])
     .where('tip.workspace_id', '=', workspace.id)
     .orderBy('tip.created_at', 'desc')
@@ -894,7 +903,7 @@ async function getAppState(search: Required<EmulateSearch>) {
           memo: tip.memo,
           recipientProviderUserId: tip.recipient_provider_user_id,
           senderProviderUserId: tip.sender_provider_user_id,
-          transactionHash: tip.transaction_hash,
+          transactionHash: tip.batch_transaction_hash,
         }) as const,
     ),
     workspace: {

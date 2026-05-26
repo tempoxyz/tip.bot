@@ -1,0 +1,509 @@
+name: Preview Deploy
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+    secrets:
+      CLOUDFLARE_ACCOUNT_ID:
+        required: true
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      FEE_PAYER_PRIVATE_KEY_MAINNET:
+        required: true
+      FEE_PAYER_PRIVATE_KEY_TESTNET:
+        required: true
+      SLACK_GH_TOKEN:
+        required: false
+      SECRET_KEY:
+        required: true
+      SLACK_CONFIG_ACCESS_TOKEN:
+        required: false
+      SLACK_CONFIG_REFRESH_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+env:
+  PREVIEW_APEX: pr${{ inputs.pr_number }}
+  PREVIEW_HOST: pr${{ inputs.pr_number }}.tip.bot
+  PREVIEW_NAME: tipbot-pr${{ inputs.pr_number }}
+  SLACK_BOT_DISPLAY_NAME: Tipbot PR ${{ inputs.pr_number }}
+  SLACK_COMMAND: /tippr${{ inputs.pr_number }}
+  SLACK_APP_NAME: Tipbot PR ${{ inputs.pr_number }}
+  WRANGLER_SEND_METRICS: false
+
+jobs:
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.pr.outputs.should_deploy }}
+    steps:
+      - name: Check PR state
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          PR_JSON=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '{state: .state, draft: .draft}')
+          STATE=$(echo "$PR_JSON" | jq -r '.state')
+          DRAFT=$(echo "$PR_JSON" | jq -r '.draft')
+          if [ "$STATE" = "open" ] && [ "$DRAFT" != "true" ]; then
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Skipping preview deploy; PR ${PR_NUMBER} is ${STATE}."
+          echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy
+    if: needs.gate.outputs.should_deploy == 'true'
+    needs: gate
+    runs-on: ubuntu-latest
+    environment: preview
+    concurrency:
+      group: slack-config-ci
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.sha }}
+
+      - name: Setup pnpm
+        uses: ./.github/actions/setup-pnpm
+
+      - name: Setup Slack config token
+        id: slack_token
+        uses: ./.github/actions/setup-slack-config-token
+        with:
+          github-token: ${{ secrets.SLACK_GH_TOKEN }}
+          slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
+          slack-config-access-token: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
+
+      - name: Read preview state
+        id: state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          STATE_KEY: ${{ secrets.SECRET_KEY }}
+        run: |
+          BODY=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --slurp | jq -r 'map(.[] | select(.body | contains("tipbot-preview"))) | first | .body // ""')
+          node - "$BODY" <<'NODE'
+          import crypto from 'node:crypto'
+          import fs from 'node:fs'
+          const body = process.argv[2] || ''
+          const match = body.match(/<!-- tipbot-preview: (.*?) -->/)
+          if (!match) process.exit(0)
+          const state = JSON.parse(match[1])
+          const output = (name, value) => {
+            if (value) fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`)
+          }
+          output('d1_id', state.d1_id)
+          output('scopes_hash', state.scopes_hash)
+          output('seeded_at', state.seeded_at)
+          output('slack_app_id', state.slack_app_id)
+          output('slack_credentials', state.slack_credentials)
+          output('reaction_tip_emoji', state.reaction_tip_emoji)
+          const slackAppIds = [
+            ...(Array.isArray(state.slack_app_ids) ? state.slack_app_ids : []),
+            state.slack_app_id,
+          ].filter((value, index, array) => value && array.indexOf(value) === index)
+          if (slackAppIds.length) output('slack_app_ids', JSON.stringify(slackAppIds))
+          if (state.slack_credentials) {
+            const key = crypto.createHash('sha256').update(process.env.STATE_KEY).digest()
+            const payload = JSON.parse(Buffer.from(state.slack_credentials, 'base64url').toString('utf8'))
+            const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(payload.iv, 'base64url'))
+            decipher.setAuthTag(Buffer.from(payload.tag, 'base64url'))
+            const credentials = JSON.parse(
+              Buffer.concat([
+                decipher.update(Buffer.from(payload.data, 'base64url')),
+                decipher.final(),
+              ]).toString('utf8'),
+            )
+            console.log(`::add-mask::${credentials.client_secret}`)
+            console.log(`::add-mask::${credentials.signing_secret}`)
+            output('client_id', credentials.client_id)
+            output('client_secret', credentials.client_secret)
+            output('signing_secret', credentials.signing_secret)
+          }
+          NODE
+
+      - name: Choose preview reaction emoji
+        id: reaction_tip_emoji
+        env:
+          PREVIEW_HOST: ${{ env.PREVIEW_HOST }}
+        run: |
+          node --experimental-strip-types --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import { getPreviewReactionTipEmoji } from './src/lib/app.ts'
+          import { replaceEmojiShortcodes } from './src/lib/emoji.ts'
+          const emoji = getPreviewReactionTipEmoji(process.env.PREVIEW_HOST)
+          if (!emoji) throw new Error(`Expected preview host, got ${process.env.PREVIEW_HOST}.`)
+          console.log(`name=${emoji}`)
+          console.log(`native=${replaceEmojiShortcodes(`:${emoji}:`)}`)
+          NODE
+
+      - name: Comment building status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REACTION_TIP_EMOJI: ${{ steps.reaction_tip_emoji.outputs.name }}
+          REACTION_TIP_EMOJI_NATIVE: ${{ steps.reaction_tip_emoji.outputs.native }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SHA: ${{ inputs.sha }}
+          STATE_D1_ID: ${{ steps.state.outputs.d1_id }}
+          STATE_SCOPES_HASH: ${{ steps.state.outputs.scopes_hash }}
+          STATE_SEEDED_AT: ${{ steps.state.outputs.seeded_at }}
+          STATE_SLACK_APP_ID: ${{ steps.state.outputs.slack_app_id }}
+          STATE_SLACK_APP_IDS: ${{ steps.state.outputs.slack_app_ids }}
+          STATE_SLACK_CREDENTIALS: ${{ steps.state.outputs.slack_credentials }}
+        run: |
+          SHA_SHORT=$(echo "$SHA" | cut -c1-7)
+          UPDATED=$(date -u +"%b %-d, %Y, %-I:%M %p")
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message with ${REACTION_TIP_EMOJI_NATIVE} \`:${REACTION_TIP_EMOJI}:\`."
+          BODY=$(printf '%s\n\n%s\n%s\n%s\n\n%s' \
+            "The latest Tipbot preview deployment for ${SHA_SHORT}" \
+            "| Name | Status | Preview | Updated (UTC) |" \
+            "| :--- | :----- | :------ | :------------ |" \
+            "| ${PREVIEW_APEX} | [![Building](https://vercel.com/static/status/building.svg) Building](${RUN_URL}) | — | ${UPDATED} |" \
+            "${COMMANDS}")
+          if [ -n "${STATE_D1_ID}${STATE_SLACK_APP_ID}" ]; then
+            STATE=$(jq -nc \
+              --arg pr "$PR_NUMBER" \
+              --arg d1_id "$STATE_D1_ID" \
+              --arg scopes_hash "$STATE_SCOPES_HASH" \
+              --arg seeded_at "$STATE_SEEDED_AT" \
+              --arg reaction_tip_emoji "$REACTION_TIP_EMOJI" \
+              --arg slack_credentials "$STATE_SLACK_CREDENTIALS" \
+              --arg slack_app_id "$STATE_SLACK_APP_ID" \
+              --argjson slack_app_ids "${STATE_SLACK_APP_IDS:-[]}" \
+              '{pr: ($pr | tonumber), d1_id: $d1_id, reaction_tip_emoji: $reaction_tip_emoji, scopes_hash: $scopes_hash, seeded_at: $seeded_at, slack_app_id: $slack_app_id, slack_app_ids: $slack_app_ids, slack_credentials: $slack_credentials}')
+            BODY=$(printf '%s\n\n<!-- tipbot-preview: %s -->' "$BODY" "$STATE")
+          fi
+          COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --jq '.[] | select(.body | contains("tipbot-preview") or contains("Tipbot preview deployment")) | .id' | head -1)
+          if [ -n "$COMMENT_ID" ]; then
+            gh api "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}" -X PATCH -f body="$BODY"
+          else
+            gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -X POST -f body="$BODY"
+          fi
+
+      - name: Render Slack manifests
+        id: manifest
+        run: |
+          SLACK_EVENT_SUBSCRIPTIONS=0 pnpm slack:app manifest preview "$PREVIEW_HOST" > /tmp/slack-manifest-bootstrap.json
+          pnpm slack:app manifest preview "$PREVIEW_HOST" > /tmp/slack-manifest.json
+          SCOPES_HASH=$(jq -c '.oauth_config.scopes.bot | sort' /tmp/slack-manifest.json | shasum -a 256 | cut -d' ' -f1)
+          echo "scopes_hash=$SCOPES_HASH" >> "$GITHUB_OUTPUT"
+
+      - name: Configure Slack preview app
+        id: slack
+        env:
+          APP_ID: ${{ steps.state.outputs.slack_app_id }}
+          STATE_KEY: ${{ secrets.SECRET_KEY }}
+          SLACK_CONFIG_ACCESS_TOKEN: ${{ steps.slack_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          METHOD="apps.manifest.update"
+          MANIFEST=/tmp/slack-manifest.json
+          REPLACED_APP_ID=""
+          if [ -z "$APP_ID" ]; then
+            METHOD="apps.manifest.create"
+            MANIFEST=/tmp/slack-manifest-bootstrap.json
+          fi
+          BODY=$(jq -nc --rawfile manifest "$MANIFEST" --arg app_id "$APP_ID" 'if $app_id == "" then {manifest: $manifest} else {app_id: $app_id, manifest: $manifest} end')
+          for attempt in 1 2 3; do
+            RESPONSE=$(curl -fsS -X POST "https://slack.com/api/${METHOD}" \
+              -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
+              -H "Content-Type: application/json; charset=utf-8" \
+              -d "$BODY")
+            OK=$(echo "$RESPONSE" | jq -r '.ok')
+            ERROR=$(echo "$RESPONSE" | jq -r '.error // empty')
+            if [ "$OK" = "true" ] || [ "$ERROR" != "internal_error" ] || [ "$attempt" = "3" ]; then break; fi
+            sleep 5 # 5 seconds
+          done
+          OK=$(echo "$RESPONSE" | jq -r '.ok')
+          if [ "$OK" != "true" ]; then
+            ERROR=$(echo "$RESPONSE" | jq -r '.error // empty')
+            if [ -n "$APP_ID" ] && [ "$ERROR" = "internal_error" ]; then
+              echo "Stored Slack app ${APP_ID} could not be updated; creating a replacement preview app."
+              REPLACED_APP_ID="$APP_ID"
+              APP_ID=""
+              METHOD="apps.manifest.create"
+              MANIFEST=/tmp/slack-manifest-bootstrap.json
+              BODY=$(jq -nc --rawfile manifest "$MANIFEST" '{manifest: $manifest}')
+              for attempt in 1 2 3; do
+                RESPONSE=$(curl -fsS -X POST "https://slack.com/api/${METHOD}" \
+                  -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
+                  -H "Content-Type: application/json; charset=utf-8" \
+                  -d "$BODY")
+                OK=$(echo "$RESPONSE" | jq -r '.ok')
+                ERROR=$(echo "$RESPONSE" | jq -r '.error // empty')
+                if [ "$OK" = "true" ] || [ "$ERROR" != "internal_error" ] || [ "$attempt" = "3" ]; then break; fi
+                sleep 5 # 5 seconds
+              done
+            fi
+          fi
+          OK=$(echo "$RESPONSE" | jq -r '.ok')
+          if [ "$OK" != "true" ]; then
+            echo "$RESPONSE" | jq '{ok,error,errors}'
+            exit 1
+          fi
+          if [ -z "$APP_ID" ]; then
+            APP_ID=$(echo "$RESPONSE" | jq -r '.app_id')
+            CLIENT_ID=$(echo "$RESPONSE" | jq -r '.credentials.client_id')
+            CLIENT_SECRET=$(echo "$RESPONSE" | jq -r '.credentials.client_secret')
+            SIGNING_SECRET=$(echo "$RESPONSE" | jq -r '.credentials.signing_secret')
+            echo "::add-mask::$CLIENT_SECRET"
+            echo "::add-mask::$SIGNING_SECRET"
+            echo "created=true" >> "$GITHUB_OUTPUT"
+            echo "client_id=$CLIENT_ID" >> "$GITHUB_OUTPUT"
+            echo "client_secret=$CLIENT_SECRET" >> "$GITHUB_OUTPUT"
+            echo "signing_secret=$SIGNING_SECRET" >> "$GITHUB_OUTPUT"
+            STATE_CREDENTIALS=$(CLIENT_ID="$CLIENT_ID" CLIENT_SECRET="$CLIENT_SECRET" SIGNING_SECRET="$SIGNING_SECRET" node --input-type=module -e '
+              import crypto from "node:crypto"
+              const credentials = {
+                client_id: process.env.CLIENT_ID,
+                client_secret: process.env.CLIENT_SECRET,
+                signing_secret: process.env.SIGNING_SECRET,
+              }
+              const key = crypto.createHash("sha256").update(process.env.STATE_KEY).digest()
+              const iv = crypto.randomBytes(12)
+              const cipher = crypto.createCipheriv("aes-256-gcm", key, iv)
+              const data = Buffer.concat([
+                cipher.update(JSON.stringify(credentials), "utf8"),
+                cipher.final(),
+              ])
+              console.log(
+                Buffer.from(
+                  JSON.stringify({
+                    data: data.toString("base64url"),
+                    iv: iv.toString("base64url"),
+                    tag: cipher.getAuthTag().toString("base64url"),
+                  }),
+                ).toString("base64url"),
+              )
+            ')
+            echo "state_credentials=$STATE_CREDENTIALS" >> "$GITHUB_OUTPUT"
+          else
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$REPLACED_APP_ID" ]; then
+            BODY=$(jq -nc --arg app_id "$REPLACED_APP_ID" '{app_id: $app_id}')
+            RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.delete \
+              -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
+              -H "Content-Type: application/json; charset=utf-8" \
+              -d "$BODY" || echo '{"ok":false,"error":"request_failed"}')
+            OK=$(echo "$RESPONSE" | jq -r '.ok // false')
+            if [ "$OK" != "true" ]; then echo "$RESPONSE" | jq '{ok,error,errors}'; fi
+          fi
+          echo "app_id=$APP_ID" >> "$GITHUB_OUTPUT"
+          echo "replaced_app_id=$REPLACED_APP_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Setup preview D1
+        id: d1
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          STATE_D1_ID: ${{ steps.state.outputs.d1_id }}
+        run: |
+          AUTH="Authorization: Bearer ${CLOUDFLARE_API_TOKEN}"
+          API="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database"
+          D1_ID="$STATE_D1_ID"
+          if [ -z "$D1_ID" ]; then
+            D1_ID=$(curl -fsS -H "$AUTH" "$API" | jq -r --arg name "$PREVIEW_NAME" '.result[] | select(.name == $name) | .uuid // empty' | head -1)
+          fi
+          if [ -z "$D1_ID" ]; then
+            D1_ID=$(curl -fsS -X POST -H "$AUTH" -H "Content-Type: application/json" "$API" -d "{\"name\":\"${PREVIEW_NAME}\"}" | jq -r '.result.uuid')
+          fi
+          echo "id=$D1_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Setup preview wrangler config
+        env:
+          D1_ID: ${{ steps.d1.outputs.id }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          sed -i.bak \
+            -e "s|__PREVIEW_NAME__|${PREVIEW_NAME}|g" \
+            -e "s|__PREVIEW_APEX__|${PREVIEW_APEX}|g" \
+            -e "s|__PREVIEW_PR_NUMBER__|${PR_NUMBER}|g" \
+            -e "s|__PREVIEW_D1_ID__|${D1_ID}|g" \
+            wrangler.jsonc
+
+      - name: Run migrations
+        run: pnpm exec wrangler d1 migrations apply "$PREVIEW_NAME" --env preview --remote
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: Build
+        run: pnpm build
+        env:
+          CLOUDFLARE_ENV: preview
+          EMULATE_SLACK: 0
+          SLACK_APP_ID: ${{ steps.slack.outputs.app_id }}
+
+      - name: Deploy preview
+        uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # v3.14.1
+        with:
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          command: deploy --env preview
+          environment: preview
+          secrets: |
+            FEE_PAYER_PRIVATE_KEY_MAINNET
+            FEE_PAYER_PRIVATE_KEY_TESTNET
+            SECRET_KEY
+            SLACK_CLIENT_ID
+            SLACK_CLIENT_SECRET
+            SLACK_SIGNING_SECRET
+        env:
+          FEE_PAYER_PRIVATE_KEY_MAINNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_MAINNET }}
+          FEE_PAYER_PRIVATE_KEY_TESTNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_TESTNET }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          SLACK_CLIENT_ID: ${{ steps.slack.outputs.client_id || steps.state.outputs.client_id }}
+          SLACK_CLIENT_SECRET: ${{ steps.slack.outputs.client_secret || steps.state.outputs.client_secret }}
+          SLACK_SIGNING_SECRET: ${{ steps.slack.outputs.signing_secret || steps.state.outputs.signing_secret }}
+
+      - name: Enable Slack event subscriptions
+        if: steps.slack.outputs.created == 'true'
+        env:
+          APP_ID: ${{ steps.slack.outputs.app_id }}
+          SLACK_CONFIG_ACCESS_TOKEN: ${{ steps.slack_token.outputs.token }}
+        run: |
+          BODY=$(jq -nc --rawfile manifest /tmp/slack-manifest.json --arg app_id "$APP_ID" '{app_id: $app_id, manifest: $manifest}')
+          for attempt in 1 2 3; do
+            RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.update \
+              -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
+              -H "Content-Type: application/json; charset=utf-8" \
+              -d "$BODY")
+            OK=$(echo "$RESPONSE" | jq -r '.ok')
+            ERROR=$(echo "$RESPONSE" | jq -r '.error // empty')
+            if [ "$OK" = "true" ] || [ "$ERROR" != "internal_error" ] || [ "$attempt" = "3" ]; then break; fi
+            sleep 5 # 5 seconds
+          done
+          OK=$(echo "$RESPONSE" | jq -r '.ok')
+          if [ "$OK" != "true" ]; then
+            echo "$RESPONSE" | jq '{ok,error,errors}'
+            exit 1
+          fi
+
+      - name: Set Slack preview icon
+        env:
+          APP_ID: ${{ steps.slack.outputs.app_id }}
+          SLACK_CONFIG_ACCESS_TOKEN: ${{ steps.slack_token.outputs.token }}
+        run: |
+          for attempt in 1 2 3; do
+            RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.icon.set \
+              -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
+              -H "Content-Type: application/x-www-form-urlencoded" \
+              --data-urlencode "app_id=${APP_ID}" \
+              --data-urlencode "url=https://${PREVIEW_HOST}/tipbot-preview.png")
+            OK=$(echo "$RESPONSE" | jq -r '.ok')
+            ERROR=$(echo "$RESPONSE" | jq -r '.error // empty')
+            if [ "$OK" = "true" ] || [ "$ERROR" != "internal_error" ] || [ "$attempt" = "3" ]; then break; fi
+            sleep 5 # 5 seconds
+          done
+          OK=$(echo "$RESPONSE" | jq -r '.ok')
+          if [ "$OK" != "true" ]; then
+            echo "$RESPONSE" | jq '{ok,error,errors}'
+            exit 1
+          fi
+
+      - name: Seed preview workspace
+        id: seed
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          PREVIEW_D1_ID: ${{ steps.d1.outputs.id }}
+          PREVIEW_HOST: ${{ env.PREVIEW_HOST }}
+          PREVIEW_SEED_SLACK_TEAM_ID: ${{ vars.PREVIEW_SEED_SLACK_TEAM_ID }}
+          STATE_SEEDED_AT: ${{ steps.state.outputs.seeded_at }}
+        run: |
+          if [ -z "$PREVIEW_SEED_SLACK_TEAM_ID" ]; then
+            echo "Preview workspace seeding disabled."
+            exit 0
+          fi
+          node --experimental-strip-types scripts/preview-seed.ts
+
+      - name: Comment deploy status
+        if: always()
+        env:
+          D1_ID: ${{ steps.d1.outputs.id }}
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+          MANIFEST_SCOPES_HASH: ${{ steps.manifest.outputs.scopes_hash }}
+          REACTION_TIP_EMOJI: ${{ steps.reaction_tip_emoji.outputs.name }}
+          REACTION_TIP_EMOJI_NATIVE: ${{ steps.reaction_tip_emoji.outputs.native }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SEEDED_REACTION_TIP_EMOJI: ${{ steps.seed.outputs.reaction_tip_emoji }}
+          SHA: ${{ inputs.sha }}
+          SEEDED_AT: ${{ steps.seed.outputs.seeded_at }}
+          SLACK_APP_ID: ${{ steps.slack.outputs.app_id }}
+          SLACK_APP_CREATED: ${{ steps.slack.outputs.created }}
+          SLACK_REPLACED_APP_ID: ${{ steps.slack.outputs.replaced_app_id }}
+          SLACK_STATE_CREDENTIALS: ${{ steps.slack.outputs.state_credentials }}
+          STATE_D1_ID: ${{ steps.state.outputs.d1_id }}
+          STATE_SCOPES_HASH: ${{ steps.state.outputs.scopes_hash }}
+          STATE_SEEDED_AT: ${{ steps.state.outputs.seeded_at }}
+          STATE_SLACK_APP_ID: ${{ steps.state.outputs.slack_app_id }}
+          STATE_SLACK_APP_IDS: ${{ steps.state.outputs.slack_app_ids }}
+          STATE_SLACK_CREDENTIALS: ${{ steps.state.outputs.slack_credentials }}
+        run: |
+          SHA_SHORT=$(echo "$SHA" | cut -c1-7)
+          UPDATED=$(date -u +"%b %-d, %Y, %-I:%M %p")
+          REACTION_TIP_EMOJI="${SEEDED_REACTION_TIP_EMOJI:-$REACTION_TIP_EMOJI}"
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PREVIEW="[${PREVIEW_HOST}](https://${PREVIEW_HOST})"
+          STATUS="[![Ready](https://vercel.com/static/status/ready.svg) Ready](${RUN_URL})"
+          if [ "$JOB_STATUS" != "success" ]; then STATUS="[![Error](https://vercel.com/static/status/error.svg) Error](${RUN_URL})"; fi
+          DETAILS=""
+          SLACK_APP_CONFIG=""
+          if [ -n "${SLACK_APP_ID:-$STATE_SLACK_APP_ID}" ]; then
+            SLACK_APP_CONFIG=" &nbsp; <a href=\"https://api.slack.com/apps/${SLACK_APP_ID:-$STATE_SLACK_APP_ID}\">Slack app config</a>"
+          fi
+          INSTALL="<a href=\"https://${PREVIEW_HOST}/install/slack\"><img alt=\"Add to Slack\" height=\"38\" width=\"auto\" src=\"https://platform.slack-edge.com/img/add_to_slack@2x.png\" /></a>${SLACK_APP_CONFIG}"
+          COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message with ${REACTION_TIP_EMOJI_NATIVE} \`:${REACTION_TIP_EMOJI}:\`."
+          REINSTALL=""
+          if [ "$SLACK_APP_CREATED" = "true" ]; then
+            REINSTALL=$(printf '\n\n> [!IMPORTANT]\n> %s' "Slack preview app changed. Reinstall the Slack preview.")
+          elif [ -n "$STATE_SCOPES_HASH" ] && [ "$STATE_SCOPES_HASH" != "$MANIFEST_SCOPES_HASH" ]; then
+            REINSTALL=$(printf '\n\n> [!IMPORTANT]\n> %s' "OAuth scopes changed. Reinstall the Slack preview.")
+          fi
+          if [ "$JOB_STATUS" = "success" ]; then
+            DETAILS=$(printf '\n\n%s\n\n%s%s' "${INSTALL}" "${COMMANDS}" "${REINSTALL}")
+          fi
+          STATE=$(jq -nc \
+            --arg pr "$PR_NUMBER" \
+            --arg d1_id "${D1_ID:-$STATE_D1_ID}" \
+            --arg scopes_hash "${MANIFEST_SCOPES_HASH:-$STATE_SCOPES_HASH}" \
+            --arg seeded_at "${SEEDED_AT:-$STATE_SEEDED_AT}" \
+            --arg reaction_tip_emoji "$REACTION_TIP_EMOJI" \
+            --arg slack_credentials "${SLACK_STATE_CREDENTIALS:-$STATE_SLACK_CREDENTIALS}" \
+            --arg slack_app_id "${SLACK_APP_ID:-$STATE_SLACK_APP_ID}" \
+            --arg replaced_slack_app_id "$SLACK_REPLACED_APP_ID" \
+            --arg state_slack_app_id "$STATE_SLACK_APP_ID" \
+            --argjson state_slack_app_ids "${STATE_SLACK_APP_IDS:-[]}" \
+            '([$state_slack_app_ids[], $state_slack_app_id, $replaced_slack_app_id, $slack_app_id] | map(select(. != "")) | unique) as $slack_app_ids | {pr: ($pr | tonumber), d1_id: $d1_id, reaction_tip_emoji: $reaction_tip_emoji, scopes_hash: $scopes_hash, seeded_at: $seeded_at, slack_app_id: $slack_app_id, slack_app_ids: $slack_app_ids, slack_credentials: $slack_credentials}')
+          BODY=$(printf '%s\n\n%s\n%s\n%s%s\n%s' \
+            "The latest Tipbot preview deployment for ${SHA_SHORT}" \
+            "| Name | Status | Preview | Updated (UTC) |" \
+            "| :--- | :----- | :------ | :------------ |" \
+            "| ${PREVIEW_APEX} | ${STATUS} | ${PREVIEW} | ${UPDATED} |" \
+            "${DETAILS}" \
+            "<!-- tipbot-preview: ${STATE} -->")
+          COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --jq '.[] | select(.body | contains("tipbot-preview") or contains("Tipbot preview deployment")) | .id' | head -1)
+          if [ -n "$COMMENT_ID" ]; then
+            gh api "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}" -X PATCH -f body="$BODY"
+          else
+            gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -X POST -f body="$BODY"
+          fi

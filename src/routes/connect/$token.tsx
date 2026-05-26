@@ -9,6 +9,7 @@ import { useConnect, useConnection, useConnectors } from 'wagmi'
 import * as z from 'zod/mini'
 import { api } from '#/api.ts'
 import { WalletProviders } from '#/components/WalletProviders.tsx'
+import { slackCommand, tipbotImagePath } from '#/lib/app.ts'
 import { getErrorMessage } from '#/lib/error.ts'
 import { formatCurrencyAmount, formatPeriod } from '#/lib/format.ts'
 import { rpc } from '#/lib/rpc.ts'
@@ -33,13 +34,15 @@ function Component() {
             alt="Tipbot"
             className="size-28 rounded-3xl object-cover shadow-lg sm:size-36"
             height={160}
-            src="/tipbot.png"
+            src={tipbotImagePath}
             width={160}
           />
           <div className="max-w-sm space-y-3 text-center">
             <h1 className="text-3xl font-bold text-gray10">Connection link unavailable</h1>
             <p className="text-base text-gray9">{data.message}</p>
-            <p className="text-base text-gray9">Run `/tip connect` in Slack to get a new link.</p>
+            <p className="text-base text-gray9">
+              Run `{slackCommand} connect` in Slack to get a new link.
+            </p>
           </div>
         </section>
       </main>
@@ -87,7 +90,10 @@ function ConnectPanel(props: {
       }
 
       const result = (await connect.connectAsync({
-        capabilities: { authorizeAccessKey: getAuthorizeAccessKey(data) },
+        capabilities: {
+          authorizeAccessKey: getAuthorizeAccessKey(data),
+          showDeposit: { amount: '1', token: 'USDC.e' },
+        },
         chainId: data.chainId,
         connector,
         withCapabilities: true,
@@ -149,7 +155,7 @@ function ConnectPanel(props: {
           alt="Tipbot"
           className="size-28 rounded-3xl object-cover shadow-lg sm:size-36"
           height={160}
-          src="/tipbot.png"
+          src={tipbotImagePath}
           width={160}
         />
         {status === 'connected' ? (

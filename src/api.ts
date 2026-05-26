@@ -4,6 +4,7 @@ import * as chat from 'chat'
 import { z } from 'zod'
 import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
+import { getPreviewReactionTipEmoji, getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as hono from '#/lib/hono.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
@@ -94,7 +95,9 @@ export const api = new Hono<{
           'account_link_token.id',
           'account_link_token.member_id',
           'account_link_token.provider_channel_id',
+          'account_link_token.channel_provider_id',
           'account_link_token.used_at',
+          'member.provider_identity_id as member_provider_identity_id',
           'member.provider_user_id as member_provider_user_id',
           'workspace.chain_id',
           'workspace.default_token_address',
@@ -162,10 +165,11 @@ export const api = new Hono<{
 
         const duplicate = await c.var.db
           .selectFrom('member')
-          .select(['id'])
-          .where('workspace_id', '=', link.workspace_id)
-          .where('account_id', '=', account.id)
-          .where('id', '!=', link.member_id)
+          .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+          .select(['member.id', 'member.provider_identity_id'])
+          .where('member.workspace_id', '=', link.workspace_id)
+          .where('member.id', '!=', link.member_id)
+          .where('provider_identity.account_id', '=', account.id)
           .executeTakeFirst()
         if (duplicate && !body.disconnectExistingAccount)
           return c.json(
@@ -176,14 +180,22 @@ export const api = new Hono<{
             },
             409,
           )
-        if (duplicate && body.disconnectExistingAccount)
-          await c.var.db
-            .updateTable('member')
-            .set({ account_id: null, updated_at: now })
-            .where('workspace_id', '=', link.workspace_id)
-            .where('account_id', '=', account.id)
-            .where('id', '!=', link.member_id)
+        if (duplicate && body.disconnectExistingAccount) {
+          const duplicateIdentities = await c.var.db
+            .selectFrom('member')
+            .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+            .select('member.provider_identity_id')
+            .where('member.workspace_id', '=', link.workspace_id)
+            .where('member.id', '!=', link.member_id)
+            .where('provider_identity.account_id', '=', account.id)
             .execute()
+          const duplicateIdentityIds = duplicateIdentities.map((row) => row.provider_identity_id)
+          await c.var.db
+            .updateTable('provider_identity')
+            .set({ account_id: null, updated_at: now })
+            .where('id', 'in', duplicateIdentityIds)
+            .execute()
+        }
 
         await c.var.db
           .deleteFrom('access_key')
@@ -219,11 +231,12 @@ export const api = new Hono<{
             updated_at: now,
           })
           .execute()
-        await c.var.db
-          .updateTable('member')
-          .set({ account_id: account.id, updated_at: now })
-          .where('id', '=', link.member_id)
-          .execute()
+        if (link.member_provider_identity_id)
+          await c.var.db
+            .updateTable('provider_identity')
+            .set({ account_id: account.id, updated_at: now })
+            .where('id', '=', link.member_provider_identity_id)
+            .execute()
         await c.var.db
           .updateTable('account_link_token')
           .set({
@@ -238,8 +251,33 @@ export const api = new Hono<{
           c.executionCtx.waitUntil(
             (async () => {
               await Chat.getChat().initialize()
-              const installation = await Chat.getSlack().getInstallation(link.provider_id)
+              const installation = await Chat.getSlack().getInstallation(
+                link.channel_provider_id ?? link.provider_id,
+              )
               if (!installation) return
+
+              const reactionTipConfigs = await c.var.db
+                .selectFrom('reaction_tip_config')
+                .select(['amount', 'emoji'])
+                .where('workspace_id', '=', link.workspace_id)
+                .orderBy('amount', 'asc')
+                .orderBy('emoji', 'asc')
+                .execute()
+              const reactionTipConfigsText = (
+                reactionTipConfigs.length
+                  ? reactionTipConfigs
+                  : [
+                      // $0.001
+                      { amount: 1000, emoji: 'money_with_wings' },
+                      // $1
+                      { amount: 1_000_000, emoji: 'money_mouth_face' },
+                    ]
+              )
+                .map(
+                  (config) =>
+                    `:${config.emoji}: \`:${config.emoji}:\` (${formatAmount(config.amount)})`,
+                )
+                .join(', ')
 
               const channelRef = Chat.getChat().channel(
                 link.provider_channel_id!.startsWith('slack:')
@@ -257,12 +295,12 @@ export const api = new Hono<{
                       children: [
                         chat.CardText(`Connected \`${truncatedAddress}\` <${explorerUrl}|View>`),
                         chat.CardText(
-                          'Mention `@Tipbot @user` or use `/tip @user` to send a payment. React with a configured tip emoji to tip a message.',
+                          `Mention \`@${getSlackBotDisplayName(c.env.HOST)} @user\` or use \`${getSlackCommand(c.env.HOST)} @user\` to send a payment. React with ${reactionTipConfigsText} to tip a message.`,
                           { style: 'muted' },
                         ),
                       ],
                     }),
-                    fallbackText: `Connected\nWallet: ${account.address}\nUse /tip @user to send your first tip.`,
+                    fallbackText: `Connected\nWallet: ${account.address}\nUse ${getSlackCommand(c.env.HOST)} @user to send your first tip.`,
                   },
                   { fallbackToDM: false },
                 ),
@@ -366,7 +404,9 @@ export const api = new Hono<{
             : data.payload.expiresAt,
         accessKeyLimit:
           data.payload.kind === 'reusable_access_key'
-            ? AccountLink.reusableAccessKeyLimitText
+            ? formatAmount(
+                Number(data.payload.accessKeyLimit ?? AccountLink.reusableAccessKeyLimit),
+              )
             : formatAmount(data.payload.amount),
         accessKeyLimitPeriodSeconds:
           data.payload.kind === 'reusable_access_key'
@@ -375,11 +415,20 @@ export const api = new Hono<{
         accessKeyPublicKey: data.accessKey.publicKey as `0x${string}`,
         amount: formatAmount(data.payload.amount),
         chainId: data.payload.chainId,
+        groupId: data.payload.groupId,
+        groupLabel: data.payload.groupLabel,
         kind: data.payload.kind,
         memo: data.payload.memo,
         ok: true as const,
         recipientProviderLabel,
         recipientProviderUserId: data.payload.recipientProviderUserId,
+        recipients: data.payload.recipients ?? [
+          {
+            recipientProviderLabel,
+            recipientProviderUserId: data.payload.recipientProviderUserId,
+          },
+        ],
+        skippedRecipients: data.payload.skippedRecipients ?? [],
         tokenAddress: Address.checksum(data.payload.tokenAddress),
         tokenCurrency: metadata.currency,
         tokenSymbol: metadata.symbol,
@@ -448,7 +497,7 @@ export const api = new Hono<{
                   'reaction_tip.workspace_id',
                   'tip.id as tip_id',
                 ])
-                .where('workspace.provider_id', '=', data.payload.providerId)
+                .where('reaction_tip.workspace_id', '=', data.payload.workspaceId)
                 .where('reaction_tip.idempotency_key', '=', data.payload.idempotencyKey)
                 .where('tip.confirmed_at', 'is not', null)
                 .executeTakeFirst()
@@ -483,8 +532,32 @@ export const api = new Hono<{
               const amount = result.isDefaultToken
                 ? formatCurrencyAmount(result.amount, result.tokenCurrency)
                 : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
-              const text = `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} <@${result.recipientProviderUserId}> ${amount}${result.memo ? ` for ${result.memo}` : ''}.`
+              const text =
+                'recipients' in result
+                  ? `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} ${data.payload.groupId ? `<!subteam^${data.payload.groupId}${data.payload.groupLabel ? `|@${data.payload.groupLabel}` : ''}> ` : ''}${result.recipients.length} accounts ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${[
+                      ...result.recipients.map(
+                        (recipient) => `• <@${recipient.recipientProviderUserId}>`,
+                      ),
+                      ...(data.payload.skippedRecipients ?? [])
+                        .slice(0, 10)
+                        .map(
+                          (recipient) =>
+                            `• <@${recipient.recipientProviderUserId}> (${recipient.reason === 'you' ? 'you' : 'not connected yet'})`,
+                        ),
+                      ...((data.payload.skippedRecipients?.length ?? 0) > 10
+                        ? [
+                            `…and ${(data.payload.skippedRecipients?.length ?? 0) - 10} more not connected yet`,
+                          ]
+                        : []),
+                    ].join('\n')}`
+                  : `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} <@${result.recipientProviderUserId}> ${amount}${result.memo ? ` for ${result.memo}` : ''}.`
               const receiptText = text.replace(/\.$/, '')
+              const receiptLink = `<${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`
+              const receiptMessage = (() => {
+                const lineBreakIndex = receiptText.indexOf('\n')
+                if (lineBreakIndex === -1) return `${receiptText} · ${receiptLink}`
+                return `${receiptText.slice(0, lineBreakIndex).replace(/\.$/, '')} · ${receiptLink}${receiptText.slice(lineBreakIndex)}`
+              })()
               const threadId = data.payload.providerThreadId
               const body = new URLSearchParams()
               body.set(
@@ -492,7 +565,7 @@ export const api = new Hono<{
                 JSON.stringify([
                   {
                     text: {
-                      text: `${receiptText} <${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`,
+                      text: receiptMessage,
                       type: 'mrkdwn',
                     },
                     type: 'section',
@@ -500,7 +573,7 @@ export const api = new Hono<{
                 ]),
               )
               body.set('channel', data.payload.providerChannelId.replace(/^slack:/, ''))
-              body.set('text', `${receiptText} Receipt`)
+              body.set('text', receiptMessage.replace(receiptLink, 'Receipt'))
               if (threadId) body.set('thread_ts', threadId)
               body.set('unfurl_links', 'false')
               body.set('unfurl_media', 'false')
@@ -586,7 +659,7 @@ export const api = new Hono<{
           return null
         }
         const parsed = z
-          .object({
+          .looseObject({
             actions: z
               .array(
                 z.object({
@@ -596,18 +669,16 @@ export const api = new Hono<{
               )
               .optional(),
             container: z
-              .object({
+              .looseObject({
                 message_ts: z.string().optional(),
                 view_id: z.string().optional(),
               })
-              .passthrough()
               .optional(),
             team: z.object({ id: z.string().min(1) }).optional(),
             trigger_id: z.string().min(1).optional(),
             type: z.string().min(1),
             user: z.object({ id: z.string().min(1) }).optional(),
           })
-          .passthrough()
           .safeParse(payload)
         if (!parsed.success) return null
         if (parsed.data.type !== 'block_actions') return null
@@ -636,10 +707,7 @@ export const api = new Hono<{
       }
       const parsed = z
         .object({
-          event: z
-            .object({ type: z.string().min(1) })
-            .passthrough()
-            .optional(),
+          event: z.looseObject({ type: z.string().min(1) }).optional(),
           event_id: z.string().min(1).optional(),
           type: z.string().min(1).optional(),
         })
@@ -659,7 +727,121 @@ export const api = new Hono<{
       if (!inserted) return params ? new Response('', { status: 200 }) : c.json({ ok: true })
     }
 
+    // Republish the Home tab when a user opens it. We intercept here because the
+    // chat-adapter/slack AppHomeOpenedEvent does not expose team_id, so we can't
+    // reliably resolve the workspace from inside bot.onAppHomeOpened.
+    if (!params) {
+      const payload = (() => {
+        try {
+          return JSON.parse(body)
+        } catch {
+          return null
+        }
+      })()
+      const homeOpened = (() => {
+        const parsed = z.safeParse(
+          z.object({
+            event: z
+              .object({
+                channel: z.string().min(1).optional(),
+                tab: z.string().optional(),
+                type: z.string().min(1),
+                user: z.string().min(1),
+              })
+              .optional(),
+            team_id: z.string().min(1).optional(),
+            type: z.string().min(1).optional(),
+          }),
+          payload,
+        )
+        if (!parsed.success) return null
+        if (parsed.data.type !== 'event_callback') return null
+        if (parsed.data.event?.type !== 'app_home_opened') return null
+        if (parsed.data.event.tab && parsed.data.event.tab !== 'home') return null
+        if (!parsed.data.team_id) return null
+        return { slackUserId: parsed.data.event.user, teamId: parsed.data.team_id }
+      })()
+      if (homeOpened) {
+        c.executionCtx.waitUntil(
+          Slack.publishHome({
+            env: c.env,
+            getInstallation: (teamId) => Chat.getSlack().getInstallation(teamId),
+            initializeChat: () => Chat.getChat().initialize(),
+            publishHomeView: (slackUserId, view) =>
+              Chat.getSlack().publishHomeView(slackUserId, view),
+            slackUserId: homeOpened.slackUserId,
+            teamId: homeOpened.teamId,
+            withBotToken: (botToken, fn) => Chat.getSlack().withBotToken(botToken, fn),
+          }).catch((error) => {
+            console.error('publishHome failed', error)
+          }),
+        )
+        return new Response('', { status: 200 })
+      }
+    }
+
     if (params?.has('command') && !params.has('payload')) {
+      const botMissingFromChannel = await (async () => {
+        // Slash-command HTTP responses can render even when bot API posting cannot.
+        // Detect that case before handing off to async chat handling.
+        const channelId = params.get('channel_id')
+        const teamId = params.get('team_id')
+        if (!channelId || !teamId) return false
+        if (channelId.startsWith('D')) return false
+
+        await Chat.getChat().initialize()
+        const installation = await Chat.getSlack().getInstallation(teamId)
+        if (!installation) return false
+
+        const infoBody = new URLSearchParams()
+        infoBody.set('channel', channelId)
+        const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
+          fetch(`${c.env.SLACK_API_URL}/conversations.info`, {
+            body: infoBody,
+            headers: { authorization: `Bearer ${installation.botToken}` },
+            method: 'POST',
+          }),
+        )
+        const json = z.parse(
+          z.object({
+            channel: z
+              .object({
+                is_ext_shared: z.boolean().optional(),
+                is_member: z.boolean().optional(),
+                is_org_shared: z.boolean().optional(),
+                is_shared: z.boolean().optional(),
+              })
+              .optional(),
+            error: z.string().optional(),
+            ok: z.boolean().optional(),
+          }),
+          await response.json(),
+        )
+        if (!json.ok) return false
+        if (json.channel?.is_ext_shared || json.channel?.is_org_shared || json.channel?.is_shared)
+          return false
+        return json.channel?.is_member === false
+      })()
+      if (botMissingFromChannel)
+        return c.json({
+          response_type: 'ephemeral' as const,
+          text: (() => {
+            // Echo the attempted command so the member can retry after inviting Tipbot.
+            const commandText = [
+              params.get('command') || getSlackCommand(c.env.HOST),
+              params.get('text'),
+            ]
+              .filter(Boolean)
+              .join(' ')
+            return [
+              'Tipbot isn’t in this channel, so it can’t send tips here yet.',
+              '',
+              `Run \`/invite @${getSlackBotDisplayName(c.env.HOST)}\`, then try this again:`,
+              `\`${commandText}\``,
+            ].join('\n')
+          })(),
+        })
+
       const tasks: Promise<unknown>[] = []
       const task = (async () => {
         await Chat.getChat().webhooks.slack(
@@ -725,9 +907,11 @@ export const api = new Hono<{
         'channels:read',
         'chat:write',
         'commands',
+        'emoji:read',
         'groups:history',
         'groups:read',
         'reactions:read',
+        'usergroups:read',
         'users:read',
       ].join(','),
     )
@@ -827,28 +1011,52 @@ export const api = new Hono<{
           .where('provider_id', '=', result.teamId)
           .executeTakeFirst()
         const now = new Date().toISOString()
+        const previewReactionTipEmoji = getPreviewReactionTipEmoji(c.env.HOST)
+        const workspaceId = workspace?.id ?? Nanoid.generate()
         if (workspace)
           await c.var.db
             .updateTable('workspace')
-            .set({ name: result.installation.teamName ?? null, updated_at: now })
+            .set({
+              installed_at: now,
+              name: result.installation.teamName ?? null,
+              uninstalled_at: null,
+              updated_at: now,
+            })
             .where('id', '=', workspace.id)
             .execute()
         else {
-          const workspaceId = Nanoid.generate()
           await c.var.db
             .insertInto('workspace')
             .values({
               created_at: now,
               default_amount: 1000,
               id: workspaceId,
+              installed_at: now,
               name: result.installation.teamName ?? null,
               provider: 'slack',
               provider_id: result.teamId,
+              uninstalled_at: null,
               updated_at: now,
             })
             .execute()
-          await Chat.seedDefaultReactionTipConfigs(c.var.db, workspaceId, now)
         }
+        if (previewReactionTipEmoji) {
+          await c.var.db
+            .deleteFrom('reaction_tip_config')
+            .where('workspace_id', '=', workspaceId)
+            .execute()
+          await c.var.db
+            .insertInto('reaction_tip_config')
+            .values({
+              amount: 1000,
+              created_at: now,
+              emoji: previewReactionTipEmoji,
+              id: Nanoid.generate(),
+              updated_at: now,
+              workspace_id: workspaceId,
+            })
+            .execute()
+        } else if (!workspace) await Chat.seedDefaultReactionTipConfigs(c.var.db, workspaceId, now)
 
         const url = new URL(c.req.url)
         return Response.redirect(

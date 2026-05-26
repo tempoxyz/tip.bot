@@ -13,19 +13,27 @@ const scopeReasons = {
     'Show a temporary sending payment status while Tipbot processes a mentioned tip.',
   'channels:history':
     'Read messages Tipbot is asked to act on in public channels, including reaction and mention tips.',
-  'channels:read': 'Check public channel metadata and respond in the correct conversation.',
+  'channels:read':
+    'Check public channel metadata, read channel members for @channel/@here tips, and respond in the correct conversation.',
   'chat:write': 'Send tip receipts, connection prompts, confirmation prompts, and error messages.',
   commands: 'Register and handle the /tip slash command.',
+  'emoji:read': 'Validate configured custom tip reaction emoji exist in the workspace.',
   'groups:history':
     'Read messages Tipbot is asked to act on in private channels where Tipbot has been added.',
-  'groups:read': 'Check private channel metadata where Tipbot has been added.',
+  'groups:read':
+    'Check private channel metadata and read channel members for @channel/@here tips where Tipbot has been added.',
   'reactions:read': 'Detect configured tip reaction emoji and identify the message being tipped.',
-  'users:read': 'Resolve Slack users for mentions, admin checks, and connected account status.',
+  'usergroups:read': 'Expand Slack user groups like @engineering into eligible tip recipients.',
+  'users:read':
+    'Resolve Slack users for mentions, admin checks, connected account status, and active @here tips.',
+} as const
+const eventReasons = {
+  app_home_opened: 'Refresh each member Home tab when they open Tipbot in Slack.',
 } as const
 
 if (!command || !['create', 'export', 'manifest', 'update', 'validate'].includes(command)) usage()
-if (!appEnv || !['local', 'production'].includes(appEnv))
-  usage('Expected app env: local or production')
+if (!appEnv || !['local', 'preview', 'production'].includes(appEnv))
+  usage('Expected app env: local, preview, or production')
 if (!baseUrl) usage('Expected a host')
 if (['export', 'update'].includes(command) && !appId) usage('Expected Slack app ID')
 
@@ -52,8 +60,17 @@ if (command === 'manifest') {
 
 function createManifest() {
   const appName =
-    process.env.SLACK_APP_NAME ?? (appEnv === 'production' ? 'Tipbot' : 'Tipbot (dev)')
+    process.env.SLACK_APP_NAME ??
+    (appEnv === 'production' ? 'Tipbot' : appEnv === 'preview' ? 'Tipbot Preview' : 'Tipbot (dev)')
   const botDisplayName = process.env.SLACK_BOT_DISPLAY_NAME ?? 'Tipbot'
+  const slackCommand = process.env.SLACK_COMMAND ?? '/tip'
+  const eventSubscriptions =
+    process.env.SLACK_EVENT_SUBSCRIPTIONS === '0'
+      ? undefined
+      : {
+          bot_events: ['app_home_opened', 'app_mention', 'reaction_added', 'reaction_removed'],
+          request_url: `${baseUrl}/api/chat/slack`,
+        }
 
   return {
     display_information: {
@@ -62,13 +79,18 @@ function createManifest() {
       name: appName,
     },
     features: {
+      app_home: {
+        home_tab_enabled: true,
+        messages_tab_enabled: false,
+        messages_tab_read_only_enabled: false,
+      },
       bot_user: {
         always_online: true,
         display_name: botDisplayName,
       },
       slash_commands: [
         {
-          command: '/tip',
+          command: slackCommand,
           description: 'Tip teammates and manage Tipbot',
           should_escape: true,
           usage_hint: '@account, connect, disconnect, help, leaderboard, status',
@@ -86,18 +108,17 @@ function createManifest() {
           'channels:read',
           'chat:write',
           'commands',
+          'emoji:read',
           'groups:history',
           'groups:read',
           'reactions:read',
+          'usergroups:read',
           'users:read',
         ],
       },
     },
     settings: {
-      event_subscriptions: {
-        bot_events: ['app_mention', 'reaction_added', 'reaction_removed'],
-        request_url: `${baseUrl}/api/chat/slack`,
-      },
+      ...(eventSubscriptions ? { event_subscriptions: eventSubscriptions } : {}),
       interactivity: {
         is_enabled: true,
         request_url: `${baseUrl}/api/chat/slack`,
@@ -152,6 +173,8 @@ function printScopeReasons() {
     '\nSlack OAuth scope reasons to add manually in OAuth & Permissions > Manage Reasons:',
   )
   for (const [scope, reason] of Object.entries(scopeReasons)) console.log(`- ${scope}: ${reason}`)
+  console.log('\nSlack event subscription reasons:')
+  for (const [event, reason] of Object.entries(eventReasons)) console.log(`- ${event}: ${reason}`)
 }
 
 async function slackApi(method: string, body: Record<string, unknown>) {
@@ -171,11 +194,11 @@ async function slackApi(method: string, body: Record<string, unknown>) {
   console.error(JSON.stringify(result, null, 2))
   if (result.error === 'token_expired')
     console.error(
-      '\nSLACK_CONFIG_TOKEN expired. Generate a new app configuration token at https://api.slack.com/apps, then rerun with `export SLACK_CONFIG_TOKEN=xoxe...`.',
+      '\nSLACK_CONFIG_ACCESS_TOKEN expired. Generate a new app configuration token at https://api.slack.com/apps, then rerun with `export SLACK_CONFIG_ACCESS_TOKEN=xoxe...`.',
     )
   if (result.error === 'no_permission')
     console.error(
-      '\nSLACK_CONFIG_TOKEN does not have permission to update this app. Generate a new app configuration token at https://api.slack.com/apps while signed into the workspace/account that owns the app, and confirm SLACK_APP_ID points to that app.',
+      '\nSLACK_CONFIG_ACCESS_TOKEN does not have permission to update this app. Generate a new app configuration token at https://api.slack.com/apps while signed into the workspace/account that owns the app, and confirm SLACK_APP_ID points to that app.',
     )
   process.exit(1)
 }
@@ -189,10 +212,12 @@ function requiredEnv(name: string) {
 }
 
 function requiredConfigToken() {
-  const token = requiredEnv('SLACK_CONFIG_TOKEN').trim()
+  const token = requiredEnv('SLACK_CONFIG_ACCESS_TOKEN').trim()
   if (token.startsWith('xoxe.')) return token
 
-  console.error('SLACK_CONFIG_TOKEN must be a Slack app configuration token starting with xoxe.')
+  console.error(
+    'SLACK_CONFIG_ACCESS_TOKEN must be a Slack app configuration token starting with xoxe.',
+  )
   process.exit(1)
 }
 
@@ -205,16 +230,18 @@ function usage(message?: string): never {
 
   console.error(`
 Usage:
-  pnpm slack:app manifest <local|production> <host>
-  pnpm slack:app export <local|production> <host> <appId>
-  pnpm slack:app validate <local|production> <host>
-  pnpm slack:app create <local|production> <host>
-  pnpm slack:app update <local|production> <host> <appId>
+  pnpm slack:app manifest <local|preview|production> <host>
+  pnpm slack:app export <local|preview|production> <host> <appId>
+  pnpm slack:app validate <local|preview|production> <host>
+  pnpm slack:app create <local|preview|production> <host>
+  pnpm slack:app update <local|preview|production> <host> <appId>
 
 Environment:
-  SLACK_CONFIG_TOKEN     Slack app configuration token from https://api.slack.com/apps
+  SLACK_CONFIG_ACCESS_TOKEN Slack app configuration token from https://api.slack.com/apps
   SLACK_APP_NAME         Optional manifest app name override
   SLACK_BOT_DISPLAY_NAME Optional bot mention display name override
+  SLACK_COMMAND          Optional slash command override
+  SLACK_EVENT_SUBSCRIPTIONS Set to 0 to omit event subscriptions
   SLACK_APP_ID           Optional app ID for updates
 `)
   process.exit(1)

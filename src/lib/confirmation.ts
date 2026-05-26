@@ -3,9 +3,12 @@ import { z } from 'zod'
 
 export const payloadSchema = z.object({
   accessKeyExpiresAt: z.string().min(1).optional(),
+  accessKeyLimit: z.string().min(1).optional(),
   amount: z.number().int().positive(),
   chainId: z.number().int().positive(),
   expiresAt: z.string().min(1),
+  groupId: z.string().min(1).optional(),
+  groupLabel: z.string().min(1).optional(),
   idempotencyKey: z.string().min(1),
   kind: z.enum(['reusable_access_key', 'onetime_payment']),
   memo: z.string().nullable(),
@@ -16,7 +19,26 @@ export const payloadSchema = z.object({
   providerThreadId: z.string().min(1).optional(),
   recipientProviderLabel: z.string().min(1).optional(),
   recipientProviderUserId: z.string().min(1),
+  recipientProviderWorkspaceId: z.string().min(1).optional(),
+  recipients: z
+    .array(
+      z.object({
+        recipientProviderLabel: z.string().min(1).optional(),
+        recipientProviderUserId: z.string().min(1),
+        recipientProviderWorkspaceId: z.string().min(1).optional(),
+      }),
+    )
+    .optional(),
   senderProviderUserId: z.string().min(1),
+  skippedRecipients: z
+    .array(
+      z.object({
+        reason: z.enum(['not_connected', 'you']),
+        recipientProviderLabel: z.string().min(1).optional(),
+        recipientProviderUserId: z.string().min(1),
+      }),
+    )
+    .optional(),
   tokenAddress: z.string().min(1),
   workspaceId: z.string().min(1),
 })

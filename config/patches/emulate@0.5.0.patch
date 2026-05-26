@@ -1,8 +1,16 @@
 diff --git a/dist/dist-CE6BUCWQ.js b/dist/dist-CE6BUCWQ.js
-index 6876d0e09488b5533c787b541f674e755004e739..f0939a456c8b21cf9f0df2d19f5cfcceb8d5cd08 100644
+index 6876d0e..57d3549 100644
 --- a/dist/dist-CE6BUCWQ.js
 +++ b/dist/dist-CE6BUCWQ.js
-@@ -76,6 +76,38 @@ function authRoutes(ctx) {
+@@ -11,6 +11,7 @@
+   return {
+     teams: store.collection("slack.teams", ["team_id"]),
+     users: store.collection("slack.users", ["user_id", "email"]),
++    usergroups: store.collection("slack.usergroups", ["usergroup_id", "handle"]),
+     channels: store.collection("slack.channels", ["channel_id", "name"]),
+     messages: store.collection("slack.messages", ["ts", "channel_id"]),
+     bots: store.collection("slack.bots", ["bot_id"]),
+@@ -76,6 +77,39 @@
  function chatRoutes(ctx) {
    const { app, store, webhooks } = ctx;
    const ss = () => getSlackStore(store);
@@ -28,6 +36,7 @@ index 6876d0e09488b5533c787b541f674e755004e739..f0939a456c8b21cf9f0df2d19f5cfcce
 +      text,
 +      type: "message",
 +      subtype: "ephemeral",
++      blocks: typeof body.blocks === "string" ? JSON.parse(body.blocks) : Array.isArray(body.blocks) ? body.blocks : void 0,
 +      thread_ts,
 +      reply_count: 0,
 +      reply_users: [],
@@ -41,3 +50,204 @@ index 6876d0e09488b5533c787b541f674e755004e739..f0939a456c8b21cf9f0df2d19f5cfcce
    app.post("/api/chat.postMessage", async (c) => {
      const authUser = c.get("authUser");
      if (!authUser) return slackError(c, "not_authed");
+@@ -336,6 +370,15 @@
+     is_channel: ch.is_channel,
+     is_private: ch.is_private,
+     is_archived: ch.is_archived,
++    context_team_id: ch.context_team_id ?? ch.team_id,
++    conversation_host_id: ch.conversation_host_id,
++    is_ext_shared: ch.is_ext_shared ?? false,
++    is_org_shared: ch.is_org_shared ?? false,
++    is_pending_ext_shared: ch.is_pending_ext_shared ?? false,
++    is_shared: ch.is_shared ?? ch.is_ext_shared ?? false,
++    pending_connected_team_ids: ch.pending_connected_team_ids ?? [],
++    pending_shared: ch.pending_shared ?? [],
++    shared_team_ids: ch.shared_team_ids ?? [ch.team_id],
+     topic: ch.topic,
+     purpose: ch.purpose,
+     creator: ch.creator,
+@@ -350,6 +393,7 @@
+     text: msg.text,
+     ts: msg.ts,
+     ...msg.subtype ? { subtype: msg.subtype } : {},
++    ...Array.isArray(msg.blocks) ? { blocks: msg.blocks } : {},
+     ...msg.thread_ts ? { thread_ts: msg.thread_ts } : {},
+     ...msg.reply_count > 0 ? { reply_count: msg.reply_count, reply_users: msg.reply_users } : {},
+     ...msg.reactions.length > 0 ? { reactions: msg.reactions } : {}
+@@ -404,11 +448,29 @@
+     name: u.name,
+     real_name: u.real_name,
+     is_admin: u.is_admin,
++    is_restricted: u.is_restricted,
++    is_ultra_restricted: u.is_ultra_restricted,
+     is_bot: u.is_bot,
+     deleted: u.deleted,
+     profile: u.profile
+   };
+ }
++function usergroupsRoutes(ctx) {
++  const { app, store } = ctx;
++  const ss = () => getSlackStore(store);
++  app.post("/api/usergroups.users.list", async (c) => {
++    const authUser = c.get("authUser");
++    if (!authUser) return slackError(c, "not_authed");
++    const body = await parseSlackBody(c);
++    const usergroupId = typeof body.usergroup === "string" ? body.usergroup : "";
++    const usergroup = ss().usergroups.findOneBy("usergroup_id", usergroupId) ?? ss().usergroups.findOneBy("handle", usergroupId.replace(/^@/, ""));
++    if (!usergroup) return slackError(c, "usergroup_not_found");
++    return slackOk(c, {
++      users: Array.isArray(usergroup.users) ? usergroup.users : [],
++      response_metadata: { next_cursor: "" }
++    });
++  });
++}
+ function reactionsRoutes(ctx) {
+   const { app, store, webhooks } = ctx;
+   const ss = () => getSlackStore(store);
+@@ -1322,17 +1384,49 @@
+   const teamId = team?.team_id ?? "T000000001";
+   if (config.users) {
+     for (const u of config.users) {
+-      const existing = ss.users.all().find((eu) => eu.name === u.name);
+-      if (existing) continue;
+-      const userId = generateSlackId("U");
++      const existing = u.user_id ? ss.users.findOneBy("user_id", u.user_id) : ss.users.all().find((eu) => eu.name === u.name || eu.email === u.email);
++      if (existing) {
++        const email2 = u.email ?? existing.email;
++        ss.users.update(existing.id, {
++          deleted: u.deleted ?? existing.deleted,
++          email: email2,
++          enterprise_id: u.enterprise_id ?? existing.enterprise_id,
++          enterprise_is_admin: u.enterprise_is_admin ?? existing.enterprise_is_admin,
++          enterprise_is_owner: u.enterprise_is_owner ?? existing.enterprise_is_owner,
++          enterprise_team_id: u.enterprise_team_id ?? existing.enterprise_team_id,
++          enterprise_user_id: u.enterprise_user_id ?? existing.enterprise_user_id,
++          is_admin: u.is_admin ?? existing.is_admin,
++          is_restricted: u.is_restricted ?? existing.is_restricted,
++          is_ultra_restricted: u.is_ultra_restricted ?? existing.is_ultra_restricted,
++          name: u.name ?? existing.name,
++          profile: {
++            ...existing.profile,
++            display_name: u.name ?? existing.profile?.display_name,
++            email: email2,
++            real_name: u.real_name ?? u.name ?? existing.profile?.real_name
++          },
++          real_name: u.real_name ?? existing.real_name,
++          team_id: u.team_id ?? existing.team_id,
++          user_id: u.user_id ?? existing.user_id
++        });
++        continue;
++      }
++      const userId = u.user_id ?? generateSlackId("U");
+       const email = u.email ?? `${u.name}@emulate.dev`;
+       ss.users.insert({
+         user_id: userId,
+-        team_id: teamId,
++        team_id: u.team_id ?? teamId,
+         name: u.name,
+         real_name: u.real_name ?? u.name,
+         email,
++        enterprise_id: u.enterprise_id,
++        enterprise_is_admin: u.enterprise_is_admin,
++        enterprise_is_owner: u.enterprise_is_owner,
++        enterprise_team_id: u.enterprise_team_id,
++        enterprise_user_id: u.enterprise_user_id,
+         is_admin: u.is_admin ?? false,
++        is_restricted: u.is_restricted ?? false,
++        is_ultra_restricted: u.is_ultra_restricted ?? false,
+         is_bot: false,
+         deleted: false,
+         profile: {
+@@ -1347,18 +1441,42 @@
+   }
+   if (config.channels) {
+     for (const ch of config.channels) {
+-      const existing = ss.channels.findOneBy("name", ch.name);
+-      if (existing) continue;
++      const existing = ch.channel_id ? ss.channels.findOneBy("channel_id", ch.channel_id) : ss.channels.findOneBy("name", ch.name);
++      if (existing) {
++        ss.channels.update(existing.id, {
++          channel_id: ch.channel_id ?? existing.channel_id,
++          context_team_id: ch.context_team_id ?? existing.context_team_id,
++          conversation_host_id: ch.conversation_host_id ?? existing.conversation_host_id,
++          is_ext_shared: ch.is_ext_shared ?? existing.is_ext_shared,
++          is_org_shared: ch.is_org_shared ?? existing.is_org_shared,
++          name: ch.name ?? existing.name,
++          is_pending_ext_shared: ch.is_pending_ext_shared ?? existing.is_pending_ext_shared,
++          is_shared: ch.is_shared ?? existing.is_shared,
++          pending_connected_team_ids: ch.pending_connected_team_ids ?? existing.pending_connected_team_ids,
++          pending_shared: ch.pending_shared ?? existing.pending_shared,
++          shared_team_ids: ch.shared_team_ids ?? existing.shared_team_ids
++        });
++        continue;
++      }
+       const creator = ss.users.all()[0]?.user_id ?? "U000000001";
+       const now = Math.floor(Date.now() / 1e3);
+       const isPrivate = ch.is_private ?? false;
+       ss.channels.insert({
+-        channel_id: generateSlackId("C"),
+-        team_id: teamId,
++        channel_id: ch.channel_id ?? generateSlackId("C"),
++        team_id: ch.team_id ?? teamId,
+         name: ch.name,
+         is_channel: !isPrivate,
+         is_private: isPrivate,
+         is_archived: false,
++        context_team_id: ch.context_team_id,
++        conversation_host_id: ch.conversation_host_id,
++        is_ext_shared: ch.is_ext_shared,
++        is_org_shared: ch.is_org_shared,
++        is_pending_ext_shared: ch.is_pending_ext_shared,
++        is_shared: ch.is_shared,
++        pending_connected_team_ids: ch.pending_connected_team_ids,
++        pending_shared: ch.pending_shared,
++        shared_team_ids: ch.shared_team_ids,
+         topic: { value: ch.topic ?? "", creator, last_set: now },
+         purpose: { value: ch.purpose ?? "", creator, last_set: now },
+         members: ss.users.all().map((u) => u.user_id),
+@@ -1367,6 +1485,30 @@
+       });
+     }
+   }
++  if (config.usergroups) {
++    for (const ug of config.usergroups) {
++      const existing = ug.usergroup_id ? ss.usergroups.findOneBy("usergroup_id", ug.usergroup_id) : ss.usergroups.findOneBy("handle", ug.handle);
++      if (existing) {
++        ss.usergroups.update(existing.id, {
++          handle: ug.handle ?? existing.handle,
++          is_disabled: ug.is_disabled ?? existing.is_disabled,
++          name: ug.name ?? existing.name,
++          team_id: ug.team_id ?? existing.team_id,
++          usergroup_id: ug.usergroup_id ?? existing.usergroup_id,
++          users: ug.users ?? existing.users
++        });
++        continue;
++      }
++      ss.usergroups.insert({
++        usergroup_id: ug.usergroup_id ?? generateSlackId("S"),
++        team_id: ug.team_id ?? teamId,
++        handle: ug.handle,
++        name: ug.name ?? ug.handle,
++        is_disabled: ug.is_disabled ?? false,
++        users: ug.users ?? []
++      });
++    }
++  }
+   if (config.bots) {
+     for (const b of config.bots) {
+       const existing = ss.bots.all().find((eb) => eb.name === b.name);
+@@ -1418,6 +1560,7 @@
+     chatRoutes(ctx);
+     conversationsRoutes(ctx);
+     usersRoutes(ctx);
++    usergroupsRoutes(ctx);
+     reactionsRoutes(ctx);
+     teamRoutes(ctx);
+     oauthRoutes(ctx);
+@@ -1435,4 +1578,4 @@
+   seedFromConfig,
+   slackPlugin
+ };
+-//# sourceMappingURL=dist-CE6BUCWQ.js.map
+\ No newline at end of file
++//# sourceMappingURL=dist-CE6BUCWQ.js.map

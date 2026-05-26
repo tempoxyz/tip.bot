@@ -1,0 +1,103 @@
+name: Preview Sweep
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Daily at midnight UTC
+  workflow_dispatch:
+
+concurrency:
+  group: slack-config-ci
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+env:
+  WRANGLER_SEND_METRICS: false
+
+jobs:
+  sweep:
+    name: Sweep Orphaned Previews
+    runs-on: ubuntu-latest
+    environment: preview
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Slack config token
+        id: slack_token
+        uses: ./.github/actions/setup-slack-config-token
+        with:
+          github-token: ${{ secrets.SLACK_GH_TOKEN }}
+          slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
+          slack-config-access-token: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
+
+      - name: Sweep orphaned previews
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          SLACK_CONFIG_ACCESS_TOKEN: ${{ steps.slack_token.outputs.token }}
+        run: |
+          WORKERS=$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts" \
+            | jq -r '.result[].id // empty' | grep '^tipbot-pr[0-9][0-9]*$' || true)
+          WORKER_PR_NUMBERS=$(echo "$WORKERS" | sed 's/^tipbot-pr//' || true)
+          COMMENT_PR_NUMBERS=$(gh api "repos/${{ github.repository }}/issues/comments" --paginate \
+            --jq '.[] | select(.body | contains("tipbot-preview")) | .issue_url | split("/")[-1]' \
+            2>/dev/null || true)
+          PR_NUMBERS=$(printf '%s\n%s\n' "$WORKER_PR_NUMBERS" "$COMMENT_PR_NUMBERS" | grep '^[0-9][0-9]*$' | sort -n -u || true)
+          for PR_NUMBER in $PR_NUMBERS; do
+            worker="tipbot-pr${PR_NUMBER}"
+            PR_JSON=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '{state: .state, draft: .draft}' 2>/dev/null || echo '{"state":"unknown","draft":false}')
+            STATE=$(echo "$PR_JSON" | jq -r '.state')
+            DRAFT=$(echo "$PR_JSON" | jq -r '.draft')
+            if [ "$STATE" = "open" ] && [ "$DRAFT" != "true" ]; then
+              echo "Keeping ${worker}; PR ${PR_NUMBER} is open."
+              continue
+            fi
+
+            BODY=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --slurp 2>/dev/null | jq -r 'map(.[] | select(.body | contains("tipbot-preview"))) | first | .body // ""' || true)
+            META=$(node -e 'const body = process.argv[1] || ""; const match = body.match(/<!-- tipbot-preview: (.*?) -->/); console.log(match?.[1] ?? "{}")' "$BODY")
+            D1_ID=$(echo "$META" | jq -r '.d1_id // empty')
+            SLACK_APP_IDS=$(echo "$META" | jq -c '[((.slack_app_ids // [])[]), (.slack_app_id // empty)] | map(select(. != "")) | unique')
+
+            if [ "$SLACK_APP_IDS" != "[]" ]; then
+              echo "$SLACK_APP_IDS" | jq -r '.[]' | while read -r SLACK_APP_ID; do
+                RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.delete \
+                  -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
+                  -H "Content-Type: application/json; charset=utf-8" \
+                  -d "{\"app_id\":\"${SLACK_APP_ID}\"}" || echo '{"ok":false,"error":"request_failed"}')
+                OK=$(echo "$RESPONSE" | jq -r '.ok // false')
+                if [ "$OK" != "true" ]; then echo "$RESPONSE" | jq '{ok,error,errors}'; fi
+              done
+            fi
+            curl -fsS -X DELETE \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${worker}?force=true" \
+              || true
+            if [ -n "$D1_ID" ]; then
+              curl -fsS -X DELETE \
+                -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+                "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${D1_ID}" \
+                || true
+            fi
+
+            SHA=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha // empty' 2>/dev/null || true)
+            SHA_SHORT=$(echo "$SHA" | cut -c1-7)
+            UPDATED=$(date -u +"%b %-d, %Y, %-I:%M %p")
+            RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            BODY=$(printf '%s\n\n%s\n%s\n%s' \
+              "The latest Tipbot preview deployment for ${SHA_SHORT}" \
+              "| Name | Status | Preview | Updated (UTC) |" \
+              "| :--- | :----- | :------ | :------------ |" \
+              "| pr${PR_NUMBER} | [![Shut Down](https://vercel.com/static/status/canceled.svg) Shut Down](${RUN_URL}) | [pr${PR_NUMBER}.tip.bot](https://pr${PR_NUMBER}.tip.bot) | ${UPDATED} |")
+            COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --jq '.[] | select(.body | contains("tipbot-preview") or contains("Tipbot preview deployment")) | .id' | head -1)
+            if [ -n "$COMMENT_ID" ]; then
+              gh api "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}" -X PATCH -f body="$BODY"
+            fi
+          done

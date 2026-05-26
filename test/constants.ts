@@ -17,28 +17,142 @@ export const slack = {
   memberUserName: 'member',
   missingChannelId: 'C000000404',
   missingUserId: 'U000000404',
+  singleChannelGuestUserEmail: 'single-channel-guest@example.com',
+  singleChannelGuestUserId: 'U000000003',
+  singleChannelGuestUserName: 'singlechannelguest',
   teamDomain: 'emulate',
   teamId: 'T000000001',
   teamName: 'Emulate',
+  usergroupEngineeringId: 'SENGINEERING',
+  usergroupEngineeringName: 'engineering',
   unconnectedUserEmail: 'unconnected@example.com',
+  unconnectedUserId: 'U000000004',
   unconnectedUserName: 'unconnected',
 } as const
 
+export const slackBigUserIds = Array.from(
+  { length: 101 },
+  (_value, index) => `UGROUP${String(index).padStart(3, '0')}`,
+)
+
+export const slackConnect = {
+  channelId: 'C0000000SC',
+  channelName: 'slackconnect',
+  enterpriseId: 'E0000000SC',
+  teamBotToken: 'xoxb-connect',
+  teamBotUserId: 'B0000000SC',
+  teamDomain: 'connect',
+  teamId: 'T0000000SC',
+  teamName: 'Connect',
+  userEmail: 'connect@example.com',
+  userId: 'U0000000SC',
+  userName: 'connect',
+} as const
+
+const slackScopes = [
+  'app_mentions:read',
+  'assistant:write',
+  'channels:history',
+  'channels:read',
+  'chat:write',
+  'commands',
+  'emoji:read',
+  'groups:history',
+  'groups:read',
+  'reactions:read',
+  'usergroups:read',
+  'users:read',
+]
+
 export const seed = {
   slack: {
+    channels: [
+      {
+        channel_id: slackConnect.channelId,
+        context_team_id: slack.teamId,
+        conversation_host_id: slackConnect.enterpriseId,
+        is_ext_shared: true,
+        is_shared: true,
+        name: slackConnect.channelName,
+        shared_team_ids: [slackConnect.teamId],
+        team_id: slack.teamId,
+      },
+    ],
     team: {
       domain: slack.teamDomain,
       name: slack.teamName,
     },
+    teams: [
+      {
+        domain: slackConnect.teamDomain,
+        name: slackConnect.teamName,
+        team_id: slackConnect.teamId,
+      },
+    ],
     users: [
       {
         email: slack.memberUserEmail,
         name: slack.memberUserName,
+        user_id: slack.memberUserId,
+      },
+      {
+        email: slack.singleChannelGuestUserEmail,
+        is_restricted: true,
+        is_ultra_restricted: true,
+        name: slack.singleChannelGuestUserName,
+        user_id: slack.singleChannelGuestUserId,
+      },
+      {
+        email: slackConnect.userEmail,
+        enterprise_id: slackConnect.enterpriseId,
+        name: slackConnect.userName,
+        team_id: slackConnect.teamId,
+        user_id: slackConnect.userId,
       },
       {
         email: slack.unconnectedUserEmail,
         name: slack.unconnectedUserName,
+        user_id: slack.unconnectedUserId,
+      },
+      ...slackBigUserIds.map((providerUserId) => ({
+        email: `${providerUserId.toLowerCase()}@example.com`,
+        name: providerUserId.toLowerCase(),
+        user_id: providerUserId,
+      })),
+    ],
+    usergroups: [
+      {
+        handle: slack.usergroupEngineeringName,
+        name: slack.usergroupEngineeringName,
+        usergroup_id: slack.usergroupEngineeringId,
+        users: [slack.memberUserId, slack.unconnectedUserId, slack.adminUserId],
+      },
+      {
+        handle: 'bigteam',
+        name: 'bigteam',
+        usergroup_id: 'SBIGTEAM',
+        users: slackBigUserIds,
+      },
+      {
+        handle: 'reviewteam',
+        name: 'reviewteam',
+        usergroup_id: 'SREVIEWTEAM',
+        users: slackBigUserIds.slice(0, 16),
+      },
+      {
+        handle: 'smallteam',
+        name: 'smallteam',
+        usergroup_id: 'SSMALLTEAM',
+        users: slackBigUserIds.slice(0, 15),
       },
     ],
+  },
+  tokens: {
+    admin: { login: slack.adminUserId, scopes: slackScopes },
+    member: { login: slack.memberUserId, scopes: slackScopes },
+    [slack.adminUserId]: { login: slack.adminUserId, scopes: slackScopes },
+    [slack.memberUserId]: { login: slack.memberUserId, scopes: slackScopes },
+    [slack.botToken]: { login: slack.adminUserId, scopes: slackScopes },
+    [slackConnect.teamBotToken]: { login: slackConnect.userId, scopes: slackScopes },
   },
 } as const satisfies SeedConfig

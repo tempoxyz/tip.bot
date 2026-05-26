@@ -1,7 +1,7 @@
 import { Address } from 'ox'
 import { createClient, http } from 'viem'
 import { Actions } from 'viem/tempo'
-import { tempo, tempoLocalnet, tempoModerato } from 'viem/chains'
+import { tempo, tempoLocalnet, tempoModerato } from 'viem/tempo/chains'
 
 export const addressLookup = {
   alphaUsd: Address.checksum('0x20c0000000000000000000000000000000000001'),

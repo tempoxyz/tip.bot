@@ -1,11 +1,12 @@
 import { HeadContent, Link, Outlet, Scripts, createRootRoute } from '@tanstack/react-router'
 import type * as React from 'react'
+import { tipbotImagePath } from '#/lib/app.ts'
 import '../styles.css'
 
 export const Route = createRootRoute({
   head() {
     return {
-      links: [{ rel: 'icon', href: '/tipbot.png', type: 'image/png' }],
+      links: [{ rel: 'icon', href: tipbotImagePath, type: 'image/png' }],
       meta: [
         { charSet: 'utf-8' },
         { name: 'viewport', content: 'width=device-width, initial-scale=1' },
