@@ -2,7 +2,7 @@ import * as DB from '#db/client.ts'
 import type { DB as DB_gen } from '#db/types.gen.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as AccessKey from '#/lib/accessKey.ts'
-import { getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
+import { getReceiptBoostReaction, getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
 import * as Emoji from '#/lib/emoji.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
@@ -293,14 +293,18 @@ export function getChat() {
       const reactionTipConfig = (
         reactionTipConfigs.length ? reactionTipConfigs : Tip.defaultReactionTipConfigs
       ).find((config) => config.emoji === reaction.reaction)
-      if (!reactionTipConfig) return
+      if (!reactionTipConfig && !isReceiptBoostReaction(reaction.reaction)) return
       return {
         db,
         provider: { id: reaction.team_id, type: 'slack' },
-        reactionTipConfig: {
-          amount: reactionTipConfig.amount,
-          emoji: reactionTipConfig.emoji,
-        },
+        ...(reactionTipConfig
+          ? {
+              reactionTipConfig: {
+                amount: reactionTipConfig.amount,
+                emoji: reactionTipConfig.emoji,
+              },
+            }
+          : {}),
         workspace,
       } satisfies ReactionHandlerContext
     })()
@@ -571,6 +575,8 @@ const modalSubmits = {
     if (!reactionTipConfigs)
       errors.reaction_tip_configs =
         'Enter emoji and positive amount pairs. Example: :money_with_wings: 0.001, :dollar: 0.01, :moneybag: 0.10'
+    else if (reactionTipConfigs.some((config) => config.emoji === receiptBoostReaction))
+      errors.reaction_tip_configs = `:${receiptBoostReaction}: is reserved for boosting receipts.`
     else if (
       !(await (async () => {
         const customEmojiNames = reactionTipConfigs.filter(
@@ -1528,7 +1534,7 @@ type TipEvent = {
 type ReactionHandlerContext = {
   db: DB.Type
   provider: ProviderContext
-  reactionTipConfig: ReactionTipConfig
+  reactionTipConfig?: ReactionTipConfig
   workspace: DB_gen.Selectable.workspace
 }
 
@@ -1560,9 +1566,15 @@ type PendingSlackTip = {
 type ParsedTipBatch = NonNullable<ReturnType<typeof Tip.parseTipBatchText>>
 
 export const reactionTipIdempotencyPrefix = 'reaction:'
+export const receiptBoostIdempotencyPrefix = 'boost:'
+const receiptBoostReaction = getReceiptBoostReaction(env.HOST)
 
 export function isReactionTipIdempotencyKey(value: string) {
   return value.startsWith(reactionTipIdempotencyPrefix)
+}
+
+export function isReceiptBoostIdempotencyKey(value: string) {
+  return value.startsWith(receiptBoostIdempotencyPrefix)
 }
 
 const slackReactionEventSchema = z.object({
@@ -2102,7 +2114,9 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
             .array(
               z.object({
                 bot_id: z.string().optional(),
+                blocks: z.unknown().optional(),
                 subtype: z.string().optional(),
+                text: z.string().optional(),
                 thread_ts: z.string().optional(),
                 ts: z.string().optional(),
                 user: z.string().optional(),
@@ -2162,7 +2176,9 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
               .array(
                 z.object({
                   bot_id: z.string().optional(),
+                  blocks: z.unknown().optional(),
                   subtype: z.string().optional(),
+                  text: z.string().optional(),
                   thread_ts: z.string().optional(),
                   ts: z.string().optional(),
                   user: z.string().optional(),
@@ -2180,6 +2196,11 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
     }
     return { thread_ts: event.item.ts, user: event.item_user }
   })()
+  if (isReceiptBoostReaction(event.reaction)) {
+    await handleSlackReceiptBoost(event, { ...context, workspace }, message)
+    return
+  }
+  if (!reactionTipConfig) return
   if (!message?.user) {
     await postSlackEphemeral(
       provider.id,
@@ -2391,12 +2412,306 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
   )
 }
 
+async function handleSlackReceiptBoost(
+  event: SlackReactionEvent,
+  context: ReactionHandlerContext,
+  message?: {
+    blocks?: unknown
+    bot_id?: string
+    text?: string
+    subtype?: string
+    thread_ts?: string
+    ts?: string
+    user?: string
+  },
+) {
+  const receipt = await getTipReceiptMessage(context.db, context.workspace, event, message)
+  if (!receipt) return
+
+  const sender = await context.db
+    .selectFrom('member')
+    .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .select(['member.id as member_id', 'member.provider_user_id', 'provider_identity.account_id'])
+    .where('member.workspace_id', '=', receipt.workspaceId)
+    .where('member.provider_user_id', '=', event.user)
+    .where('provider_identity.account_id', 'is not', null)
+    .executeTakeFirst()
+  if (!sender) {
+    await postSlackEphemeral(
+      context.provider.id,
+      event.item.channel,
+      event.user,
+      `Boost not sent. Connect to Tipbot with \`@${getSlackBotDisplayName(env.HOST)} connect\` or \`${getSlackCommand(env.HOST)} connect\` and try again.`,
+      { threadTs: receipt.threadTs },
+    )
+    return
+  }
+
+  const idempotencyKey = [
+    receiptBoostIdempotencyPrefix,
+    receipt.workspaceId,
+    event.item.channel,
+    receipt.messageTs,
+    sender.member_id,
+  ].join(':')
+  const existing = await context.db
+    .selectFrom('tip_batch')
+    .select('id')
+    .where('idempotency_key', '=', idempotencyKey)
+    .executeTakeFirst()
+  if (existing) return
+
+  const rows = await context.db
+    .selectFrom('tip_batch')
+    .innerJoin('tip', 'tip.batch_id', 'tip_batch.id')
+    .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
+    .innerJoin(
+      'provider_identity as recipient_identity',
+      'recipient_identity.id',
+      'recipient.provider_identity_id',
+    )
+    .innerJoin('workspace as receipt_workspace', 'receipt_workspace.id', 'tip_batch.workspace_id')
+    .innerJoin(
+      'workspace as recipient_workspace',
+      'recipient_workspace.id',
+      'recipient.workspace_id',
+    )
+    .select([
+      'receipt_workspace.provider_id as receipt_provider_id',
+      'recipient.provider_user_id as recipient_provider_user_id',
+      'recipient_identity.account_id as recipient_account_id',
+      'recipient_workspace.provider_id as recipient_provider_workspace_id',
+      'tip.chain_id',
+      'tip_batch.amount_each',
+      'tip_batch.status',
+      'tip_batch.token_address',
+      'tip_batch.transaction_hash',
+    ])
+    .where('tip_batch.id', '=', receipt.tipBatchId)
+    .orderBy('tip.created_at', 'asc')
+    .execute()
+  if (!rows[0] || rows[0].status !== 'confirmed' || !rows[0].transaction_hash) {
+    await postSlackEphemeral(
+      context.provider.id,
+      event.item.channel,
+      event.user,
+      'Boost not sent. Original payment is not confirmed yet.',
+      { threadTs: receipt.threadTs },
+    )
+    return
+  }
+
+  const recipients: Tip.TipRecipientInput[] = []
+  const skippedRecipients: Tip.TipSkippedRecipient[] = []
+  const seen = new Set<string>()
+  for (const row of rows) {
+    const key = `${row.recipient_provider_workspace_id}:${row.recipient_provider_user_id}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    if (!row.recipient_account_id) {
+      skippedRecipients.push({
+        reason: 'not_connected',
+        recipientProviderUserId: row.recipient_provider_user_id,
+      })
+      continue
+    }
+    if (row.recipient_account_id === sender.account_id) {
+      skippedRecipients.push({
+        reason: 'you',
+        recipientProviderUserId: row.recipient_provider_user_id,
+      })
+      continue
+    }
+    recipients.push({
+      recipientProviderUserId: row.recipient_provider_user_id,
+      ...(row.recipient_provider_workspace_id !== row.receipt_provider_id
+        ? { recipientProviderWorkspaceId: row.recipient_provider_workspace_id }
+        : {}),
+    })
+  }
+  if (recipients.length === 0) {
+    await postSlackEphemeral(
+      context.provider.id,
+      event.item.channel,
+      event.user,
+      'Boost not sent. None of the original recipients can receive this payment now.',
+      { threadTs: receipt.threadTs },
+    )
+    return
+  }
+
+  const result = await Tip.handleTipBatchRequest(env, {
+    amount: rows[0].amount_each,
+    chainId: rows[0].chain_id,
+    idempotencyKey,
+    memo: null,
+    provider: context.provider.type,
+    providerChannelId: event.item.channel,
+    providerId: context.provider.id,
+    providerThreadId: receipt.threadTs,
+    recipients,
+    senderProviderUserId: sender.provider_user_id,
+    skippedRecipients,
+    source: 'reaction',
+    tokenAddress: rows[0].token_address,
+    workspaceProviderId: rows[0].receipt_provider_id,
+  }).catch(
+    (error) =>
+      ({
+        code: 'failed',
+        message: error instanceof Error ? error.message : 'Boost failed.',
+        ok: false,
+      }) satisfies Tip.TipBatchResult,
+  )
+
+  if (result.ok) {
+    if (result.status === 'sent') {
+      await postSlackReceiptMessage(
+        {
+          channel: getChat().channel(`slack:${event.item.channel}`),
+          threadTs: receipt.threadTs,
+          user: { userId: event.user } as chat.Author,
+        },
+        { db: context.db, provider: context.provider, text: '', threadTs: receipt.threadTs },
+        `${formatSlackBoostReceiptText(sender.provider_user_id, context.provider.id, event.item.channel, receipt)}`,
+        result.chainId,
+        result.transactionHash,
+        undefined,
+        undefined,
+        receipt.threadTs,
+      )
+      if (skippedRecipients.length)
+        await postSlackEphemeral(
+          context.provider.id,
+          event.item.channel,
+          event.user,
+          `Boost sent to ${recipients.length} ${recipients.length === 1 ? 'account' : 'accounts'}. Skipped ${skippedRecipients.length} ${skippedRecipients.length === 1 ? 'account' : 'accounts'} that can no longer receive payments.`,
+          { threadTs: receipt.threadTs },
+        )
+    }
+    return
+  }
+
+  if (result.code === 'confirmation_required' && result.confirmUrl) {
+    await postSlackPaymentConfirmation(
+      {
+        channel: getChat().channel(`slack:${event.item.channel}`),
+        threadTs: receipt.threadTs,
+        user: { userId: event.user } as chat.Author,
+      },
+      { db: context.db, provider: context.provider, text: '', threadTs: receipt.threadTs },
+      result.confirmUrl,
+      {
+        label: 'Confirm boost',
+        message: `Tipbot needs your approval to boost${receipt.threadTs === receipt.messageTs ? '' : ` ${formatSlackMessageLink(context.provider.id, event.item.channel, receipt.messageTs)}`}.`,
+        threadTs: receipt.threadTs,
+      },
+    )
+    return
+  }
+
+  await postSlackEphemeral(
+    context.provider.id,
+    event.item.channel,
+    event.user,
+    (() => {
+      if (result.code === 'insufficient_funds')
+        return 'Boost not sent. Your wallet has insufficient funds.'
+      if (result.code === 'pending') return 'Boost still sending.'
+      if (result.code === 'recipient_unconnected')
+        return 'Boost not sent. A recipient needs to connect Tipbot before receiving payments.'
+      if (result.code === 'self_tip') return 'Boost not sent. Cannot send a payment to yourself.'
+      return result.message ?? 'Boost failed.'
+    })(),
+    { threadTs: receipt.threadTs },
+  )
+}
+
+async function getTipReceiptMessage(
+  db: DB.Type,
+  workspace: DB_gen.Selectable.workspace,
+  event: SlackReactionEvent,
+  message?: {
+    bot_id?: string
+    blocks?: unknown
+    subtype?: string
+    text?: string
+    thread_ts?: string
+    user?: string
+  },
+) {
+  const existing = await db
+    .selectFrom('tip_receipt_message')
+    .select(['channel_id', 'message_ts', 'thread_ts', 'tip_batch_id', 'workspace_id'])
+    .where('workspace_id', '=', workspace.id)
+    .where('channel_id', '=', event.item.channel)
+    .where('message_ts', '=', event.item.ts)
+    .executeTakeFirst()
+  if (existing)
+    return {
+      channelId: existing.channel_id,
+      messageTs: existing.message_ts,
+      threadTs: existing.thread_ts,
+      tipBatchId: existing.tip_batch_id,
+      workspaceId: existing.workspace_id,
+    }
+
+  if (!message?.bot_id && message?.subtype !== 'bot_message') return null
+  const transactionHash = JSON.stringify(message).match(/\/receipt\/(0x[0-9a-fA-F]{64})/)?.[1]
+  if (!transactionHash) return null
+  const batch = await db
+    .selectFrom('tip_batch')
+    .select(['id', 'workspace_id'])
+    .where('workspace_id', '=', workspace.id)
+    .where('provider_channel_id', '=', event.item.channel)
+    .where('transaction_hash', '=', transactionHash)
+    .where('status', '=', 'confirmed')
+    .executeTakeFirst()
+  if (!batch) return null
+  const threadTs = message.thread_ts ?? event.item.ts
+  await recordSlackReceiptMessage(db, {
+    channelId: event.item.channel,
+    messageTs: event.item.ts,
+    threadTs,
+    tipBatchId: batch.id,
+    workspaceId: batch.workspace_id,
+  })
+  return {
+    channelId: event.item.channel,
+    messageTs: event.item.ts,
+    threadTs,
+    tipBatchId: batch.id,
+    workspaceId: batch.workspace_id,
+  }
+}
+
+function formatSlackBoostReceiptText(
+  senderProviderUserId: string,
+  providerId: string,
+  channelId: string,
+  receipt: { messageTs: string; threadTs: string },
+) {
+  return `<@${senderProviderUserId}> boosted${receipt.threadTs === receipt.messageTs ? '' : ` ${formatSlackMessageLink(providerId, channelId, receipt.messageTs)}`}`
+}
+
+function formatSlackMessageLink(providerId: string, channelId: string, messageTs: string) {
+  const url = new URL('slack://channel')
+  url.searchParams.set('team', providerId)
+  url.searchParams.set('id', channelId)
+  url.searchParams.set('message', messageTs)
+  return `<${url}|this message>`
+}
+
+function isReceiptBoostReaction(reaction: string) {
+  return reaction === receiptBoostReaction || reaction === 'heavy_plus_sign'
+}
+
 async function postSlackEphemeral(
   providerId: string,
   channelId: string,
   userId: string,
   text: string,
-  options?: { blocks?: unknown[] },
+  options?: { blocks?: unknown[]; threadTs?: string },
 ) {
   const installation = await getSlack().getInstallation(providerId)
   if (!installation) return
@@ -2405,6 +2720,7 @@ async function postSlackEphemeral(
   if (options?.blocks) body.set('blocks', JSON.stringify(options.blocks))
   body.set('channel', channelId)
   body.set('text', text)
+  if (options?.threadTs) body.set('thread_ts', options.threadTs)
   body.set('user', userId)
   const response = await getSlack().withBotToken(installation.botToken, () =>
     fetch(`${env.SLACK_API_URL}/chat.postEphemeral`, {
@@ -3528,10 +3844,76 @@ async function postSlackReceiptMessage(
     z.object({
       error: z.string().optional(),
       ok: z.boolean().optional(),
+      ts: z.string().optional(),
     }),
     await response.json(),
   )
   if (!json.ok) throw Slack.slackApiError(method, json.error)
+  if (method === 'chat.postMessage' && json.ts)
+    await recordSlackReceiptMessageForTransaction(ctx.db, {
+      channelId: event.channel.id.replace(/^slack:/, ''),
+      messageTs: json.ts,
+      threadTs: threadTs ?? json.ts,
+      transactionHash,
+    })
+}
+
+export async function recordSlackReceiptMessageForTransaction(
+  db: DB.Type,
+  options: { channelId: string; messageTs: string; threadTs: string; transactionHash: string },
+) {
+  const batch = await db
+    .selectFrom('tip_batch')
+    .select(['id', 'workspace_id'])
+    .where('transaction_hash', '=', options.transactionHash)
+    .where('provider_channel_id', '=', options.channelId)
+    .where('status', '=', 'confirmed')
+    .executeTakeFirst()
+  if (!batch) return
+  await recordSlackReceiptMessage(db, {
+    channelId: options.channelId,
+    messageTs: options.messageTs,
+    threadTs: options.threadTs,
+    tipBatchId: batch.id,
+    workspaceId: batch.workspace_id,
+  })
+}
+
+async function recordSlackReceiptMessage(
+  db: DB.Type,
+  options: {
+    channelId: string
+    messageTs: string
+    threadTs: string
+    tipBatchId: string
+    workspaceId: string
+  },
+) {
+  const now = new Date().toISOString()
+  try {
+    await db
+      .insertInto('tip_receipt_message')
+      .values({
+        channel_id: options.channelId,
+        created_at: now,
+        id: Nanoid.generate(),
+        message_ts: options.messageTs,
+        thread_ts: options.threadTs,
+        tip_batch_id: options.tipBatchId,
+        updated_at: now,
+        workspace_id: options.workspaceId,
+      })
+      .execute()
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error
+    await db
+      .updateTable('tip_receipt_message')
+      .set({ thread_ts: options.threadTs, tip_batch_id: options.tipBatchId, updated_at: now })
+      .where('workspace_id', '=', options.workspaceId)
+      .where('channel_id', '=', options.channelId)
+      .where('message_ts', '=', options.messageTs)
+      .execute()
+  }
 }
 
 async function postSlackMemoReply(

@@ -23,6 +23,12 @@ export function getPreviewReactionTipEmojis(host: string) {
   )
 }
 
+export function getReceiptBoostReaction(host: string) {
+  const previewPrNumber = getPreviewPrNumber(host)
+  if (!previewPrNumber) return 'heavy_plus_sign'
+  return previewReceiptBoostEmojis[Number(previewPrNumber) % previewReceiptBoostEmojis.length]!
+}
+
 const appHost = typeof __HOST__ === 'string' ? __HOST__ : ''
 
 export const slackBotDisplayName = getSlackBotDisplayName(appHost)
@@ -50,6 +56,19 @@ const previewReactionTipEmojis = [
   'cookie',
   'memo',
   'bell',
+]
+
+const previewReceiptBoostEmojis = [
+  'arrow_up',
+  'up',
+  'small_red_triangle',
+  'arrow_double_up',
+  'chart_with_upwards_trend',
+  'top',
+  'soon',
+  'new',
+  'free',
+  'cool',
 ]
 
 function getPreviewPrNumber(host: string) {

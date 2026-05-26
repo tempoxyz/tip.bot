@@ -39,6 +39,7 @@ export const payloadSchema = z.object({
       }),
     )
     .optional(),
+  source: z.enum(['command', 'mention', 'reaction']).optional(),
   tokenAddress: z.string().min(1),
   workspaceId: z.string().min(1),
 })
