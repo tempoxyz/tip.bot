@@ -144,28 +144,23 @@ jobs:
         env:
           PREVIEW_HOST: ${{ env.PREVIEW_HOST }}
         run: |
-          node --experimental-strip-types --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
-          import fs from 'node:fs'
+          cat > .tmp-preview-reaction-tip.ts <<'NODE'
           import { getPreviewReactionTipEmoji } from './src/lib/app.ts'
           import { replaceEmojiShortcodes } from './src/lib/emoji.ts'
           import { formatAmount } from './src/lib/format.ts'
+          import { defaultReactionTipConfigs } from './src/lib/tip.ts'
           const emoji = getPreviewReactionTipEmoji(process.env.PREVIEW_HOST)
           if (!emoji) throw new Error(`Expected preview host, got ${process.env.PREVIEW_HOST}.`)
-          const defaultReactionTipAmount = Number(
-            fs
-              .readFileSync('src/lib/tip.ts', 'utf8')
-              .match(/defaultReactionTipConfigs = \[\s*{ amount: ([\d_]+)/)?.[1]
-              ?.replaceAll('_', ''),
-          )
-          if (!defaultReactionTipAmount) throw new Error('Expected default reaction tip config amount.')
           const formatReactionTipAmount = (amount) => {
             const value = formatAmount(amount)
             return `$${amount >= 10_000 ? Number(value).toFixed(2) : value}`
           }
           console.log(`name=${emoji}`)
           console.log(`native=${replaceEmojiShortcodes(`:${emoji}:`)}`)
-          console.log(`preview_amount=${formatReactionTipAmount(defaultReactionTipAmount)}`)
+          console.log(`preview_amount=${formatReactionTipAmount(defaultReactionTipConfigs[0].amount)}`)
           NODE
+          pnpm exec jiti .tmp-preview-reaction-tip.ts >> "$GITHUB_OUTPUT"
+          rm .tmp-preview-reaction-tip.ts
 
       - name: Comment building status
         env:
