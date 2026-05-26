@@ -1,11 +1,12 @@
 import fs from 'node:fs'
-import * as DB from '#db/client.ts'
-import { getPreviewReactionTipEmojis } from '#/lib/app.ts'
-import * as Constants from '#/lib/constants.ts'
-import * as Nanoid from '#/lib/nanoid.ts'
-import { sql } from 'kysely'
+import { Kysely, sql } from 'kysely'
 import JSONC from 'tiny-jsonc'
 import { z } from 'zod'
+import type { DB as DB_gen } from '../db/types.gen.ts'
+import { getPreviewReactionTipEmojis } from '../src/lib/app.ts'
+import * as Constants from '../src/lib/constants.ts'
+import * as Nanoid from '../src/lib/nanoid.ts'
+import { D1Dialect } from '../src/vendor/kyselyD1.ts'
 
 const env = z.parse(
   z.object({
@@ -277,65 +278,71 @@ try {
 }
 
 function createRemoteDb(databaseId: string) {
-  return DB.create({
-    prepare: (statement) => ({
-      bind: (...params) => ({
-        async all() {
-          const response = await fetch(
-            `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/d1/database/${databaseId}/query`,
-            {
-              body: JSON.stringify({ params, sql: statement }),
-              headers: {
-                Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
-                'Content-Type': 'application/json',
-              },
-              method: 'POST',
-            },
-          )
-          const d1ResultSchema = z.looseObject({
-            error: z.string().optional(),
-            meta: z
-              .looseObject({
-                changes: z.number().optional(),
-                last_row_id: z.number().nullable().optional(),
+  return new Kysely<DB_gen>({
+    dialect: new D1Dialect({
+      database: {
+        prepare: (statement) => ({
+          bind: (...params) => ({
+            async all() {
+              const response = await fetch(
+                `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/d1/database/${databaseId}/query`,
+                {
+                  body: JSON.stringify({ params, sql: statement }),
+                  headers: {
+                    Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
+                    'Content-Type': 'application/json',
+                  },
+                  method: 'POST',
+                },
+              )
+              const d1ResultSchema = z.looseObject({
+                error: z.string().optional(),
+                meta: z
+                  .looseObject({
+                    changes: z.number().optional(),
+                    last_row_id: z.number().nullable().optional(),
+                  })
+                  .optional(),
+                results: z
+                  .array(
+                    z.record(z.string(), z.union([z.boolean(), z.null(), z.number(), z.string()])),
+                  )
+                  .optional(),
               })
-              .optional(),
-            results: z
-              .array(z.record(z.string(), z.union([z.boolean(), z.null(), z.number(), z.string()])))
-              .optional(),
-          })
-          const json = z.parse(
-            z.looseObject({
-              errors: z.unknown().optional(),
-              messages: z.unknown().optional(),
-              result: z.union([d1ResultSchema, z.array(d1ResultSchema)]).optional(),
-              success: z.boolean().optional(),
-            }),
-            await response.json(),
-          )
-          if (!response.ok || !json.success)
-            throw new Error(
-              JSON.stringify({
-                errors: json.errors,
-                messages: json.messages,
-                status: response.status,
-              }),
-            )
+              const json = z.parse(
+                z.looseObject({
+                  errors: z.unknown().optional(),
+                  messages: z.unknown().optional(),
+                  result: z.union([d1ResultSchema, z.array(d1ResultSchema)]).optional(),
+                  success: z.boolean().optional(),
+                }),
+                await response.json(),
+              )
+              if (!response.ok || !json.success)
+                throw new Error(
+                  JSON.stringify({
+                    errors: json.errors,
+                    messages: json.messages,
+                    status: response.status,
+                  }),
+                )
 
-          const result = Array.isArray(json.result) ? json.result[0] : json.result
-          return {
-            error: result?.error,
-            meta: {
-              changes: result?.meta?.changes ?? 0,
-              last_row_id: result?.meta?.last_row_id,
+              const result = Array.isArray(json.result) ? json.result[0] : json.result
+              return {
+                error: result?.error,
+                meta: {
+                  changes: result?.meta?.changes ?? 0,
+                  last_row_id: result?.meta?.last_row_id,
+                },
+                results: result?.results ?? [],
+                success: true,
+              }
             },
-            results: result?.results ?? [],
-            success: true,
-          }
-        },
-      }),
+          }),
+        }),
+      } as D1Database,
     }),
-  } as D1Database)
+  })
 }
 
 function output(name: string, value: string) {
