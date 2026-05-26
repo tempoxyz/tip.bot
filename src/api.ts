@@ -1034,6 +1034,8 @@ export const api = new Hono<{
             .execute()
         }
         if (previewReactionTipEmoji) {
+          // Preview Slack apps use a PR-specific reaction emoji, so replace default fallback
+          // behavior with a single preview-specific reaction tip config.
           await c.var.db
             .deleteFrom('reaction_tip_config')
             .where('workspace_id', '=', workspaceId)
@@ -1041,7 +1043,7 @@ export const api = new Hono<{
           await c.var.db
             .insertInto('reaction_tip_config')
             .values({
-              amount: 1000,
+              amount: Tip.defaultReactionTipConfigs[0].amount,
               created_at: now,
               emoji: previewReactionTipEmoji,
               id: Nanoid.generate(),
