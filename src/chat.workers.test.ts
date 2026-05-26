@@ -2792,7 +2792,7 @@ test('reaction tipping sends default tip and updates aggregate thread reply', as
   expect(tips[0]).toMatchObject({ amount: 1000, confirmed_at: expect.any(String) })
   await expectSlackThreadMessage(
     message.ts,
-    `:money_with_wings: Reaction tips received on this message:\n\n<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
+    `Reaction tips received on this message:\n\n<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this> message:\n• :money_with_wings: <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
     { channelId },
   )
 })
@@ -2847,7 +2847,7 @@ for (const reactionTipCase of [
     expect(tips[0]).toMatchObject({ amount: config.amount, confirmed_at: expect.any(String) })
     await expectSlackThreadMessage(
       message.ts,
-      `:${reactionTipCase.emoji}: Reaction tips received on this message:\n\n<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this> message:\n• <@${Constants.slack.adminUserId}> tipped ${reactionTipCase.amountText} · <`,
+      `Reaction tips received on this message:\n\n<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this> message:\n• :${reactionTipCase.emoji}: <@${Constants.slack.adminUserId}> tipped ${reactionTipCase.amountText} · <`,
       { channelId, wait: true },
     )
   })
@@ -2926,7 +2926,7 @@ test('reaction tipping uses workspace configured emoji amounts', async () => {
   expect(tip).toMatchObject({ amount: 2000, confirmed_at: expect.any(String) })
   await expectSlackThreadMessage(
     message.ts,
-    `:moneybag: Reaction tips received on this message:\n\n<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.002 · <`,
+    `Reaction tips received on this message:\n\n<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this> message:\n• :moneybag: <@${Constants.slack.adminUserId}> tipped $0.002 · <`,
     { channelId, wait: true },
   )
 }, 20_000) // 20 seconds
@@ -3061,7 +3061,6 @@ test('reaction tipping updates one aggregate reply for multiple tipped messages 
   })
   await Chat.updateReactionTipAggregate(providerId, {
     channelId,
-    reaction: 'money_with_wings',
     threadTs: parent.ts,
     workspaceId: connected.workspace.id,
   })
@@ -3099,7 +3098,7 @@ test('reaction tipping updates one aggregate reply for multiple tipped messages 
     channel_id: channelId,
     idempotency_key: secondTip.idempotency_key,
     message_ts: reply.ts,
-    reaction: 'money_with_wings',
+    reaction: 'moneybag',
     recipient_member_id: connected.recipientMember.id,
     sender_member_id: connected.senderMember.id,
     thread_ts: parent.ts,
@@ -3108,21 +3107,20 @@ test('reaction tipping updates one aggregate reply for multiple tipped messages 
   })
   await Chat.updateReactionTipAggregate(providerId, {
     channelId,
-    reaction: 'money_with_wings',
     threadTs: parent.ts,
     workspaceId: connected.workspace.id,
   })
   const thread = await slack.conversations.replies({ channel: channelId, ts: parent.ts })
   const aggregates = thread.messages?.filter((message) =>
-    message.text?.includes(':money_with_wings: Reaction tips received in this thread:'),
+    message.text?.includes('Reaction tips received in this thread:'),
   )
 
   expect(aggregates, JSON.stringify(thread.messages)).toHaveLength(1)
   expect(aggregates?.[0]?.text).toContain(
-    `<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${parent.ts}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
+    `<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${parent.ts}|this> message:\n• :money_with_wings: <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
   )
   expect(aggregates?.[0]?.text).toContain(
-    `<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${reply.ts}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
+    `<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${reply.ts}|this> message:\n• :moneybag: <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
   )
 })
 

@@ -95,7 +95,6 @@ export const reaction_tip_thread = z.object({
   created_at: z.string(),
   id: z.string(),
   message_ts: z.string(),
-  reaction: z.string(),
   reply_ts: z.string(),
   updated_at: z.string(),
   workspace_id: z.string(),

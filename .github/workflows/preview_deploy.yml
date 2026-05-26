@@ -507,7 +507,10 @@ jobs:
           if [ "$JOB_STATUS" = "success" ]; then
             DETAILS=$(printf '\n\n%s\n\n%s\n\nReaction tips:\n\n%s%s' "${INSTALL}" "${COMMANDS}" "${REACTION_TIP_TEXT}" "${REINSTALL}")
           fi
+          PREVIOUS_BODY=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --slurp | jq -r 'map(.[] | select(.body | contains("tipbot-preview"))) | first | .body // ""')
+          PREVIOUS_STATE=$(node -e 'const body = process.argv[1] || ""; const match = body.match(/<!-- tipbot-preview: (.*?) -->/); try { console.log(JSON.stringify(JSON.parse(match?.[1] ?? "{}"))) } catch { console.log("{}") }' "$PREVIOUS_BODY")
           STATE=$(jq -nc \
+            --arg previous_state_raw "$PREVIOUS_STATE" \
             --arg pr "$PR_NUMBER" \
             --arg d1_id "${D1_ID:-$STATE_D1_ID}" \
             --arg scopes_hash "${MANIFEST_SCOPES_HASH:-$STATE_SCOPES_HASH}" \
@@ -518,8 +521,12 @@ jobs:
             --arg slack_app_id "${SLACK_APP_ID:-$STATE_SLACK_APP_ID}" \
             --arg replaced_slack_app_id "$SLACK_REPLACED_APP_ID" \
             --arg state_slack_app_id "$STATE_SLACK_APP_ID" \
-            --argjson state_slack_app_ids "${STATE_SLACK_APP_IDS:-[]}" \
-            '([$state_slack_app_ids[], $state_slack_app_id, $replaced_slack_app_id, $slack_app_id] | map(select(. != "")) | unique) as $slack_app_ids | {pr: ($pr | tonumber), d1_id: $d1_id, reaction_tip_emoji: $reaction_tip_emoji, reaction_tip_text: $reaction_tip_text, scopes_hash: $scopes_hash, seeded_at: $seeded_at, slack_app_id: $slack_app_id, slack_app_ids: $slack_app_ids, slack_credentials: $slack_credentials}')
+            --arg state_slack_app_ids_raw "$STATE_SLACK_APP_IDS" \
+            'def keep($new; $old): if $new != "" then $new else ($old // "") end;
+            ($previous_state_raw | try fromjson catch {}) as $previous_state |
+            ($state_slack_app_ids_raw | try fromjson catch []) as $state_slack_app_ids |
+            ([$previous_state.slack_app_ids[]?, $state_slack_app_ids[], $previous_state.slack_app_id, $state_slack_app_id, $replaced_slack_app_id, $slack_app_id] | map(select(. != null and . != "")) | unique) as $slack_app_ids |
+            {pr: ($pr | tonumber), d1_id: keep($d1_id; $previous_state.d1_id), reaction_tip_emoji: keep($reaction_tip_emoji; $previous_state.reaction_tip_emoji), reaction_tip_text: keep($reaction_tip_text; $previous_state.reaction_tip_text), scopes_hash: keep($scopes_hash; $previous_state.scopes_hash), seeded_at: keep($seeded_at; $previous_state.seeded_at), slack_app_id: keep($slack_app_id; $previous_state.slack_app_id), slack_app_ids: $slack_app_ids, slack_credentials: keep($slack_credentials; $previous_state.slack_credentials)}')
           BODY=$(printf '%s\n\n%s\n%s\n%s%s\n%s' \
             "The latest Tipbot preview deployment for ${SHA_SHORT}" \
             "| Name | Status | Preview | Updated (UTC) |" \
