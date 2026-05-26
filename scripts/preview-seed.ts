@@ -1,10 +1,12 @@
 import fs from 'node:fs'
-import * as DB from '#db/client.ts'
-import { getPreviewReactionTipEmoji } from '#/lib/app.ts'
-import * as Nanoid from '#/lib/nanoid.ts'
-import { sql } from 'kysely'
+import { Kysely, sql } from 'kysely'
 import JSONC from 'tiny-jsonc'
 import { z } from 'zod'
+import type { DB as DB_gen } from '#db/types.gen.ts'
+import { getPreviewReactionTipEmojis } from '../src/lib/app.ts'
+import * as Constants from '../src/lib/constants.ts'
+import * as Nanoid from '../src/lib/nanoid.ts'
+import { D1Dialect } from '../src/vendor/kyselyD1.ts'
 
 const env = z.parse(
   z.object({
@@ -17,8 +19,11 @@ const env = z.parse(
   }),
   process.env,
 )
-const previewReactionTipEmoji = getPreviewReactionTipEmoji(env.PREVIEW_HOST)
-if (!previewReactionTipEmoji) throw new Error(`Expected preview host, got ${env.PREVIEW_HOST}.`)
+const previewReactionTipEmojis = (() => {
+  const emojis = getPreviewReactionTipEmojis(env.PREVIEW_HOST)
+  if (!emojis) throw new Error(`Expected preview host, got ${env.PREVIEW_HOST}.`)
+  return emojis
+})()
 
 const config = z.parse(
   z.looseObject({
@@ -73,15 +78,25 @@ try {
       .executeTakeFirstOrThrow()
     const linkedCount = Number(linked.count)
     if (linkedCount > 0) {
+      const now = new Date().toISOString()
       await previewDb
-        .updateTable('workspace')
-        .set({
-          reaction_tip_emoji: previewReactionTipEmoji,
-          updated_at: new Date().toISOString(),
-        })
-        .where('id', '=', previewWorkspace.id)
+        .deleteFrom('reaction_tip_config')
+        .where('workspace_id', '=', previewWorkspace.id)
         .execute()
-      output('reaction_tip_emoji', previewReactionTipEmoji)
+      await previewDb
+        .insertInto('reaction_tip_config')
+        .values(
+          Constants.defaultReactionTipConfigs.map((config, index) => ({
+            amount: config.amount,
+            created_at: now,
+            emoji: previewReactionTipEmojis[index]!,
+            id: Nanoid.generate(),
+            updated_at: now,
+            workspace_id: previewWorkspace.id,
+          })),
+        )
+        .execute()
+      output('reaction_tip_emoji', previewReactionTipEmojis[0])
       output('seeded_at', env.STATE_SEEDED_AT)
       console.log(`Preview workspace already seeded with ${linkedCount} linked members.`)
       process.exit(0)
@@ -99,7 +114,6 @@ try {
       name: sourceWorkspace.name,
       provider: sourceWorkspace.provider,
       provider_id: sourceWorkspace.provider_id,
-      reaction_tip_emoji: previewReactionTipEmoji,
       updated_at: new Date().toISOString(),
     })
     .onConflict((oc) =>
@@ -108,7 +122,6 @@ try {
         default_amount: eb.ref('excluded.default_amount'),
         default_token_address: eb.ref('excluded.default_token_address'),
         name: eb.ref('excluded.name'),
-        reaction_tip_emoji: eb.ref('excluded.reaction_tip_emoji'),
         updated_at: eb.ref('excluded.updated_at'),
       })),
     )
@@ -120,6 +133,24 @@ try {
     .where('provider', '=', 'slack')
     .where('provider_id', '=', env.PREVIEW_SEED_SLACK_TEAM_ID)
     .executeTakeFirstOrThrow()
+  const now = new Date().toISOString()
+  await previewDb
+    .deleteFrom('reaction_tip_config')
+    .where('workspace_id', '=', workspace.id)
+    .execute()
+  await previewDb
+    .insertInto('reaction_tip_config')
+    .values(
+      Constants.defaultReactionTipConfigs.map((config, index) => ({
+        amount: config.amount,
+        created_at: now,
+        emoji: previewReactionTipEmojis[index]!,
+        id: Nanoid.generate(),
+        updated_at: now,
+        workspace_id: workspace.id,
+      })),
+    )
+    .execute()
 
   const members = await productionDb
     .selectFrom('member')
@@ -236,7 +267,7 @@ try {
   }
 
   const seededAt = new Date().toISOString()
-  output('reaction_tip_emoji', previewReactionTipEmoji)
+  output('reaction_tip_emoji', previewReactionTipEmojis[0])
   output('seeded_at', seededAt)
   console.log(
     `Seeded preview workspace ${env.PREVIEW_SEED_SLACK_TEAM_ID} with ${members.length} linked members.`,
@@ -247,65 +278,71 @@ try {
 }
 
 function createRemoteDb(databaseId: string) {
-  return DB.create({
-    prepare: (statement) => ({
-      bind: (...params) => ({
-        async all() {
-          const response = await fetch(
-            `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/d1/database/${databaseId}/query`,
-            {
-              body: JSON.stringify({ params, sql: statement }),
-              headers: {
-                Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
-                'Content-Type': 'application/json',
-              },
-              method: 'POST',
-            },
-          )
-          const d1ResultSchema = z.looseObject({
-            error: z.string().optional(),
-            meta: z
-              .looseObject({
-                changes: z.number().optional(),
-                last_row_id: z.number().nullable().optional(),
+  return new Kysely<DB_gen>({
+    dialect: new D1Dialect({
+      database: {
+        prepare: (statement) => ({
+          bind: (...params) => ({
+            async all() {
+              const response = await fetch(
+                `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/d1/database/${databaseId}/query`,
+                {
+                  body: JSON.stringify({ params, sql: statement }),
+                  headers: {
+                    Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
+                    'Content-Type': 'application/json',
+                  },
+                  method: 'POST',
+                },
+              )
+              const d1ResultSchema = z.looseObject({
+                error: z.string().optional(),
+                meta: z
+                  .looseObject({
+                    changes: z.number().optional(),
+                    last_row_id: z.number().nullable().optional(),
+                  })
+                  .optional(),
+                results: z
+                  .array(
+                    z.record(z.string(), z.union([z.boolean(), z.null(), z.number(), z.string()])),
+                  )
+                  .optional(),
               })
-              .optional(),
-            results: z
-              .array(z.record(z.string(), z.union([z.boolean(), z.null(), z.number(), z.string()])))
-              .optional(),
-          })
-          const json = z.parse(
-            z.looseObject({
-              errors: z.unknown().optional(),
-              messages: z.unknown().optional(),
-              result: z.union([d1ResultSchema, z.array(d1ResultSchema)]).optional(),
-              success: z.boolean().optional(),
-            }),
-            await response.json(),
-          )
-          if (!response.ok || !json.success)
-            throw new Error(
-              JSON.stringify({
-                errors: json.errors,
-                messages: json.messages,
-                status: response.status,
-              }),
-            )
+              const json = z.parse(
+                z.looseObject({
+                  errors: z.unknown().optional(),
+                  messages: z.unknown().optional(),
+                  result: z.union([d1ResultSchema, z.array(d1ResultSchema)]).optional(),
+                  success: z.boolean().optional(),
+                }),
+                await response.json(),
+              )
+              if (!response.ok || !json.success)
+                throw new Error(
+                  JSON.stringify({
+                    errors: json.errors,
+                    messages: json.messages,
+                    status: response.status,
+                  }),
+                )
 
-          const result = Array.isArray(json.result) ? json.result[0] : json.result
-          return {
-            error: result?.error,
-            meta: {
-              changes: result?.meta?.changes ?? 0,
-              last_row_id: result?.meta?.last_row_id,
+              const result = Array.isArray(json.result) ? json.result[0] : json.result
+              return {
+                error: result?.error,
+                meta: {
+                  changes: result?.meta?.changes ?? 0,
+                  last_row_id: result?.meta?.last_row_id,
+                },
+                results: result?.results ?? [],
+                success: true,
+              }
             },
-            results: result?.results ?? [],
-            success: true,
-          }
-        },
-      }),
+          }),
+        }),
+      } as D1Database,
     }),
-  } as D1Database)
+  })
 }
 
 function output(name: string, value: string) {

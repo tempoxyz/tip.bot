@@ -10,10 +10,12 @@ import { api } from '#/api.ts'
 import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as AccessKey from '#/lib/accessKey.ts'
+import * as App from '#/lib/app.ts'
 import * as Confirmation from '#/lib/confirmation.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import { createSlackHeaders } from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
+import * as Tip from '#/lib/tip.ts'
 import * as DB from '#db/client.ts'
 import * as Schema from '#db/schemas.gen.ts'
 import type { DB as DB_gen } from '#db/types.gen.ts'
@@ -129,10 +131,14 @@ describe('/api/chat/slack', () => {
       botUserId: Constants.slack.botUserId,
       teamName: Constants.slack.teamName,
     })
-    await factory.workspace.insert({
+    const workspace = await factory.workspace.insert({
       default_amount: 5_000_000,
       provider_id: providerId,
-      reaction_tip_emoji: 'tip',
+    })
+    await factory.reaction_tip_config.insert({
+      amount: 1000,
+      emoji: 'tip',
+      workspace_id: workspace.id,
     })
     const fetchSpy = setupSlackViewsPublishFetchSpy()
 
@@ -150,7 +156,7 @@ describe('/api/chat/slack', () => {
     expect(viewText).toContain("You haven't connected an account yet")
     expect(viewText).toContain('`/tip connect`')
     expect(viewText).toContain('*Default amount* 5')
-    expect(viewText).toContain('*Tip reaction* :tip:')
+    expect(viewText).toContain('*Tip reactions* :tip: (0.001)')
     fetchSpy.mockRestore()
   })
 
@@ -355,7 +361,11 @@ describe('/api/account/link/:token', () => {
     if (!channelId) throw new Error('Expected Slack test channel.')
     const workspace = await factory.workspace.insert({
       provider_id: providerId,
-      reaction_tip_emoji: 'bell',
+    })
+    await factory.reaction_tip_config.insert({
+      amount: 2_000_000,
+      emoji: 'bell',
+      workspace_id: workspace.id,
     })
     const pending = await createPendingAccountLink({
       providerChannelId: channelId,
@@ -374,7 +384,7 @@ describe('/api/account/link/:token', () => {
     expect(response.status).toBe(200)
     expect(initialize).toHaveBeenCalled()
     await expectSlackMessage(channelId, 'Connected')
-    await expectSlackMessage(channelId, 'React with :bell: `:bell:` to tip a message.')
+    await expectSlackMessage(channelId, 'React with :bell: `:bell:` (2) to tip a message.')
   })
 
   test('rejects token reuse', async () => {
@@ -928,6 +938,60 @@ describe('/api/chat/slack/oauth/callback', () => {
       provider_id: Constants.slack.teamId,
       uninstalled_at: null,
     })
+  })
+
+  test('stores preview reaction tip configs', async () => {
+    await deleteSlackOauthWorkspace()
+    const previewHost = 'pr18.tip.bot'
+    const previewEnv = { ...env, HOST: previewHost as unknown as typeof env.HOST }
+    const previewReactionTipEmojis = App.getPreviewReactionTipEmojis(previewHost)
+    if (!previewReactionTipEmojis) throw new Error('Expected preview reaction tip emojis.')
+    const previewClient = testClient(api, previewEnv, executionCtx)
+    const installResponse = await previewClient.api.chat.slack.install.$get()
+    const location = installResponse.headers.get('location')
+    if (!location) throw new Error('Expected Slack install redirect location.')
+
+    const authorizeUrl = new URL(location)
+    const authorizeResponse = await fetch(`${authorizeUrl.origin}/oauth/v2/authorize/callback`, {
+      body: new URLSearchParams({
+        client_id: authorizeUrl.searchParams.get('client_id') ?? '',
+        redirect_uri: authorizeUrl.searchParams.get('redirect_uri') ?? '',
+        scope: authorizeUrl.searchParams.get('scope') ?? '',
+        state: authorizeUrl.searchParams.get('state') ?? '',
+        user_id: Constants.slack.adminUserId,
+      }),
+      method: 'POST',
+      redirect: 'manual',
+    })
+    const callbackLocation = authorizeResponse.headers.get('location')
+    if (!callbackLocation) throw new Error('Expected Slack OAuth callback redirect location.')
+    const callbackUrl = new URL(callbackLocation)
+
+    const response = await previewClient.api.chat.slack.oauth.callback.$get({
+      query: {
+        code: callbackUrl.searchParams.get('code') ?? '',
+        state: callbackUrl.searchParams.get('state') ?? '',
+      },
+    })
+    const workspace = await db
+      .selectFrom('workspace')
+      .select(['id'])
+      .where('provider_id', '=', Constants.slack.teamId)
+      .executeTakeFirstOrThrow()
+    const reactionTipConfigs = await db
+      .selectFrom('reaction_tip_config')
+      .select(['amount', 'emoji'])
+      .where('workspace_id', '=', workspace.id)
+      .orderBy('amount')
+      .execute()
+
+    expect(response.status).toBe(302)
+    expect(reactionTipConfigs).toEqual(
+      Tip.defaultReactionTipConfigs.map((config, index) => ({
+        amount: config.amount,
+        emoji: previewReactionTipEmojis[index],
+      })),
+    )
   })
 
   test('updates existing workspace and redirects', async () => {

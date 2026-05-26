@@ -4,7 +4,7 @@ import * as chat from 'chat'
 import { z } from 'zod'
 import * as Chat from '#/chat.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
-import { getPreviewReactionTipEmoji, getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
+import { getPreviewReactionTipEmojis, getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as hono from '#/lib/hono.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
@@ -103,7 +103,6 @@ export const api = new Hono<{
           'workspace.default_token_address',
           'workspace.id as workspace_id',
           'workspace.provider_id',
-          'workspace.reaction_tip_emoji',
         ])
         .where(
           'account_link_token.token_hash',
@@ -257,6 +256,22 @@ export const api = new Hono<{
               )
               if (!installation) return
 
+              const reactionTipConfigs = await c.var.db
+                .selectFrom('reaction_tip_config')
+                .select(['amount', 'emoji'])
+                .where('workspace_id', '=', link.workspace_id)
+                .orderBy('amount', 'asc')
+                .orderBy('emoji', 'asc')
+                .execute()
+              const reactionTipConfigsText = (
+                reactionTipConfigs.length ? reactionTipConfigs : Tip.defaultReactionTipConfigs
+              )
+                .map(
+                  (config) =>
+                    `:${config.emoji}: \`:${config.emoji}:\` (${formatAmount(config.amount)})`,
+                )
+                .join(', ')
+
               const channelRef = Chat.getChat().channel(
                 link.provider_channel_id!.startsWith('slack:')
                   ? link.provider_channel_id!
@@ -273,7 +288,7 @@ export const api = new Hono<{
                       children: [
                         chat.CardText(`Connected \`${truncatedAddress}\` <${explorerUrl}|View>`),
                         chat.CardText(
-                          `Mention \`@${getSlackBotDisplayName(c.env.HOST)} @user\` or use \`${getSlackCommand(c.env.HOST)} @user\` to send a payment. React with :${link.reaction_tip_emoji}: \`:${link.reaction_tip_emoji}:\` to tip a message.`,
+                          `Mention \`@${getSlackBotDisplayName(c.env.HOST)} @user\` or use \`${getSlackCommand(c.env.HOST)} @user\` to send a payment. React with ${reactionTipConfigsText} to tip a message.`,
                           { style: 'muted' },
                         ),
                       ],
@@ -989,35 +1004,56 @@ export const api = new Hono<{
           .where('provider_id', '=', result.teamId)
           .executeTakeFirst()
         const now = new Date().toISOString()
+        const previewReactionTipEmojis = getPreviewReactionTipEmojis(c.env.HOST)
+        const workspaceId = workspace?.id ?? Nanoid.generate()
         if (workspace)
           await c.var.db
             .updateTable('workspace')
             .set({
               installed_at: now,
               name: result.installation.teamName ?? null,
-              reaction_tip_emoji:
-                getPreviewReactionTipEmoji(c.env.HOST) ?? workspace.reaction_tip_emoji,
               uninstalled_at: null,
               updated_at: now,
             })
             .where('id', '=', workspace.id)
             .execute()
-        else
+        else {
           await c.var.db
             .insertInto('workspace')
             .values({
               created_at: now,
               default_amount: 1000,
-              id: Nanoid.generate(),
+              id: workspaceId,
               installed_at: now,
               name: result.installation.teamName ?? null,
               provider: 'slack',
               provider_id: result.teamId,
-              reaction_tip_emoji: getPreviewReactionTipEmoji(c.env.HOST) ?? 'money_with_wings',
               uninstalled_at: null,
               updated_at: now,
             })
             .execute()
+        }
+        if (previewReactionTipEmojis) {
+          // Preview Slack apps use PR-specific reaction emojis, so replace default fallback
+          // behavior with preview-specific reaction tip configs.
+          await c.var.db
+            .deleteFrom('reaction_tip_config')
+            .where('workspace_id', '=', workspaceId)
+            .execute()
+          await c.var.db
+            .insertInto('reaction_tip_config')
+            .values(
+              Tip.defaultReactionTipConfigs.map((config, index) => ({
+                amount: config.amount,
+                created_at: now,
+                emoji: previewReactionTipEmojis[index]!,
+                id: Nanoid.generate(),
+                updated_at: now,
+                workspace_id: workspaceId,
+              })),
+            )
+            .execute()
+        }
 
         const url = new URL(c.req.url)
         return Response.redirect(

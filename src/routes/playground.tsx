@@ -628,13 +628,14 @@ const installEmulateWorkspace = createServerFn({ method: 'POST' })
         })
         .where('id', '=', workspace.id)
         .execute()
-    else
+    else {
+      const workspaceId = crypto.randomUUID()
       await db
         .insertInto('workspace')
         .values({
           created_at: now,
           default_amount: 1000,
-          id: crypto.randomUUID(),
+          id: workspaceId,
           installed_at: now,
           name: slackDefaults.teamName,
           provider: data.provider,
@@ -643,6 +644,7 @@ const installEmulateWorkspace = createServerFn({ method: 'POST' })
           updated_at: now,
         })
         .execute()
+    }
     const [actors, app, transcript] = await Promise.all([
       getSlackActors(),
       getAppState(data),

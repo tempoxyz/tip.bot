@@ -2797,6 +2797,140 @@ test('reaction tipping sends default tip and updates aggregate thread reply', as
   )
 })
 
+for (const reactionTipCase of [
+  { amountText: '$0.01', emoji: 'dollar' },
+  { amountText: '$0.10', emoji: 'moneybag' },
+] as const) {
+  test(`reaction tipping sends mapped amount for ${reactionTipCase.emoji} reaction`, async () => {
+    await connectTipAccounts()
+    const channelId = await createSlackTestChannel('rt')
+    const message = await memberSlack.chat.postMessage({
+      channel: channelId,
+      text: 'huge work',
+    })
+    if (!message.ts) throw new Error('Expected Slack message timestamp.')
+
+    const response = await postSlackReaction({
+      channelId,
+      messageTs: message.ts,
+      reaction: reactionTipCase.emoji,
+      userId: Constants.slack.adminUserId,
+    })
+
+    expect(response.status).toBe(200)
+    await expect
+      .poll(
+        async () =>
+          await db
+            .selectFrom('tip')
+            .innerJoin('workspace', 'workspace.id', 'tip.workspace_id')
+            .selectAll('tip')
+            .where('workspace.provider_id', '=', providerId)
+            .where('tip.idempotency_key', 'like', `${Chat.reactionTipIdempotencyPrefix}%`)
+            .where('tip.confirmed_at', 'is not', null)
+            .execute(),
+        { timeout: 10_000 }, // 10 seconds
+      )
+      .toHaveLength(1)
+    const tips = await db
+      .selectFrom('tip')
+      .innerJoin('workspace', 'workspace.id', 'tip.workspace_id')
+      .selectAll('tip')
+      .where('workspace.provider_id', '=', providerId)
+      .where('tip.idempotency_key', 'like', `${Chat.reactionTipIdempotencyPrefix}%`)
+      .execute()
+    const config = Tip.defaultReactionTipConfigs.find(
+      (config) => config.emoji === reactionTipCase.emoji,
+    )
+    if (!config) throw new Error('Expected default reaction tip config.')
+    expect(tips).toHaveLength(1)
+    expect(tips[0]).toMatchObject({ amount: config.amount, confirmed_at: expect.any(String) })
+    await expectSlackThreadMessage(
+      message.ts,
+      `:${reactionTipCase.emoji}: Reaction tips received on this message:\n\n<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this> message:\n• <@${Constants.slack.adminUserId}> tipped ${reactionTipCase.amountText} · <`,
+      { channelId, wait: true },
+    )
+  })
+}
+
+test('reaction tipping uses workspace configured emoji amounts', async () => {
+  await postSlackInteraction(
+    createViewSubmissionPayload({
+      amount: '0.001',
+      network: 'testnet',
+      reactionTips: ':moneybag: 0.002',
+      token: 'pathUSD',
+    }),
+  )
+  const configuredWorkspace = await db
+    .selectFrom('workspace')
+    .selectAll()
+    .where('provider_id', '=', providerId)
+    .executeTakeFirstOrThrow()
+  const configuredReactionTips = await db
+    .selectFrom('reaction_tip_config')
+    .select(['amount', 'emoji'])
+    .where('workspace_id', '=', configuredWorkspace.id)
+    .execute()
+  expect(configuredReactionTips).toEqual([{ amount: 2000, emoji: 'moneybag' }])
+  await db
+    .updateTable('workspace')
+    .set({ chain_id: Tempo.chainLookup.localnet })
+    .where('id', '=', configuredWorkspace.id)
+    .execute()
+  await connectTipAccounts()
+  const channelId = await createSlackTestChannel('rt')
+  const message = await memberSlack.chat.postMessage({
+    channel: channelId,
+    text: 'configured reaction',
+  })
+  if (!message.ts) throw new Error('Expected Slack message timestamp.')
+
+  const ignoredResponse = await postSlackReaction({
+    channelId,
+    eventTs: `${message.ts}-ignored`,
+    messageTs: message.ts,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.adminUserId,
+  })
+  const response = await postSlackReaction({
+    channelId,
+    messageTs: message.ts,
+    reaction: 'moneybag',
+    userId: Constants.slack.adminUserId,
+  })
+  await expect
+    .poll(
+      async () =>
+        await db
+          .selectFrom('tip')
+          .innerJoin('workspace', 'workspace.id', 'tip.workspace_id')
+          .selectAll('tip')
+          .where('workspace.provider_id', '=', providerId)
+          .where('tip.idempotency_key', 'like', `${Chat.reactionTipIdempotencyPrefix}%`)
+          .where('tip.confirmed_at', 'is not', null)
+          .execute(),
+      { timeout: 10_000 }, // 10 seconds
+    )
+    .toHaveLength(1)
+  const tip = await db
+    .selectFrom('tip')
+    .innerJoin('workspace', 'workspace.id', 'tip.workspace_id')
+    .selectAll('tip')
+    .where('workspace.provider_id', '=', providerId)
+    .where('tip.idempotency_key', 'like', `${Chat.reactionTipIdempotencyPrefix}%`)
+    .executeTakeFirstOrThrow()
+
+  expect(ignoredResponse.status).toBe(200)
+  expect(response.status).toBe(200)
+  expect(tip).toMatchObject({ amount: 2000, confirmed_at: expect.any(String) })
+  await expectSlackThreadMessage(
+    message.ts,
+    `:moneybag: Reaction tips received on this message:\n\n<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this> message:\n• <@${Constants.slack.adminUserId}> tipped $0.002 · <`,
+    { channelId, wait: true },
+  )
+}, 20_000) // 20 seconds
+
 for (const subtype of ['thread_broadcast', 'reply_broadcast']) {
   test(`reaction tipping supports ${subtype} messages`, async () => {
     const originalFetch = globalThis.fetch
@@ -3257,7 +3391,7 @@ test('reaction tipping silently ignores unconnected Slack Connect external sende
   fetchSpy.mockRestore()
 })
 
-test('reaction tipping sends Slack Connect external sender tip from sender workspace with host defaults', async () => {
+test('reaction tipping sends Slack Connect external sender tip from sender workspace with mapped reaction amount', async () => {
   await deleteSlackConnectWorkspace()
   const channelId = await getSlackConnectChannelId()
   await db
@@ -3289,7 +3423,7 @@ test('reaction tipping sends Slack Connect external sender tip from sender works
     sender_member_id: connected.senderMember.id,
     workspace_id: connected.senderWorkspace.id,
   })
-  await expectSlackThreadMessage(message.ts, '$0.003', { channelId, wait: true })
+  await expectSlackThreadMessage(message.ts, '$0.001', { channelId, wait: true })
 }, 20_000) // 20 seconds
 
 test('reaction tipping reports unconnected recipient', async () => {
@@ -3381,10 +3515,14 @@ describe('/tip config', () => {
     await expectSlackMessage('PathUSD')
     await expectSlackMessage('Default amount')
     await expectSlackMessage('0.001')
-    await expectSlackMessage('Reaction')
-    await expectSlackMessage(':money_with_wings: `:money_with_wings:`')
+    await expectSlackMessage('Reaction tips')
+    await expectSlackMessage(':money_with_wings: `:money_with_wings:` → 0.001')
+    await expectSlackMessage(':dollar: `:dollar:` → 0.01')
+    await expectSlackMessage(':moneybag: `:moneybag:` → 0.1')
     await expectSlackPostEphemeralCall(fetchSpy, '"style":{"code":true}')
     await expectSlackPostEphemeralCall(fetchSpy, '"text":":money_with_wings:"')
+    await expectSlackPostEphemeralCall(fetchSpy, '"text":":dollar:"')
+    await expectSlackPostEphemeralCall(fetchSpy, '"text":":moneybag:"')
     fetchSpy.mockRestore()
   })
 
@@ -3519,13 +3657,24 @@ describe('/tip config', () => {
       .selectAll()
       .where('provider_id', '=', providerId)
       .executeTakeFirstOrThrow()
+    const reactionTipConfigs = await db
+      .selectFrom('reaction_tip_config')
+      .select(['amount', 'emoji'])
+      .where('workspace_id', '=', workspace.id)
+      .orderBy('amount', 'asc')
+      .execute()
 
     expect(response.status).toBe(200)
     expect(await response.text()).toBe('')
     expect(workspace.chain_id).toBe(Tempo.chainLookup.testnet)
     expect(workspace.default_amount).toBe(2000)
     expect(workspace.default_token_address).toBe(Tempo.addressLookup.betaUsd)
-    expect(workspace.reaction_tip_emoji).toBe('money_with_wings')
+    expect(reactionTipConfigs).toEqual(
+      Tip.defaultReactionTipConfigs.map((config) => ({
+        amount: config.amount,
+        emoji: config.emoji,
+      })),
+    )
   })
 
   test('allows settings edit from allowlisted connected account', async () => {
@@ -3624,8 +3773,8 @@ describe('/tip config', () => {
     const response = await postSlackInteraction(
       createViewSubmissionPayload({
         amount: '0.001',
-        emoji: ':not_real_tipbot_emoji:',
         network: 'testnet',
+        reactionTips: ':not_real_tipbot_emoji: 0.001',
         token: 'pathUSD',
       }),
     )
@@ -3637,10 +3786,10 @@ describe('/tip config', () => {
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({
-      errors: { reaction_tip_emoji: 'Choose an emoji that exists in this Slack workspace.' },
+      errors: { reaction_tip_configs: 'Choose emojis that exist in this Slack workspace.' },
       response_action: 'errors',
     })
-    expect(workspace.reaction_tip_emoji).toBe('money_with_wings')
+    expect(workspace.provider_id).toBe(providerId)
     fetchSpy.mockRestore()
   })
 
@@ -3990,8 +4139,8 @@ describe('/tip help', () => {
     await expectSlackMessage('@Tipbot @account')
     await expectSlackMessage('@Tipbot @account for coffee')
     await expectSlackMessage('@Tipbot @account 0.005 for coffee')
-    await expectSlackMessage('[emoji] :money_with_wings:')
-    await expectSlackMessage('Send default amount by reacting to a message')
+    await expectSlackMessage(':money_with_wings: / :dollar: / :moneybag:')
+    await expectSlackMessage('Send by reacting to a message')
     await expectSlackMessageNotContaining('Payment examples')
     await expectSlackMessage('/tip config')
     await expectSlackMessage('/tip connect')
@@ -5204,8 +5353,8 @@ async function drainWaitUntil() {
 
 function createViewSubmissionPayload(input: {
   amount: string
-  emoji?: string
   network: string
+  reactionTips?: string
   token: string
   userId?: string
   userName?: string
@@ -5244,10 +5393,11 @@ function createViewSubmissionPayload(input: {
               type: 'static_select',
             },
           },
-          reaction_tip_emoji: {
-            reaction_tip_emoji: {
+          reaction_tip_configs: {
+            reaction_tip_configs: {
               type: 'plain_text_input',
-              value: input.emoji ?? ':money_with_wings:',
+              value:
+                input.reactionTips ?? ':money_with_wings: 0.001, :dollar: 0.01, :moneybag: 0.10',
             },
           },
         },

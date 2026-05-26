@@ -16,6 +16,8 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { Account as TempoAccount, Actions } from 'viem/tempo'
 import { getNodeError } from 'viem/utils'
 
+export { defaultReactionTipConfigs } from '#/lib/constants.ts'
+
 export type TipResult =
   | {
       amount: string

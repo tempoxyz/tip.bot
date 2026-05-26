@@ -5,6 +5,7 @@ import { multicall } from 'viem/actions'
 import { Actions } from 'viem/tempo'
 import { formatAmount, formatCurrencyAmount } from '#/lib/format.ts'
 import * as Tempo from '#/lib/tempo.ts'
+import * as Tip from '#/lib/tip.ts'
 import * as DB from '#db/client.ts'
 
 export type SlackErrorClass =
@@ -241,6 +242,18 @@ async function buildHomeView(input: {
         type: 'home',
       }
     })()
+  const reactionTipConfigs = await db
+    .selectFrom('reaction_tip_config')
+    .select(['amount', 'emoji'])
+    .where('workspace_id', '=', workspace.id)
+    .orderBy('amount', 'asc')
+    .orderBy('emoji', 'asc')
+    .execute()
+  const reactionTipText = (
+    reactionTipConfigs.length ? reactionTipConfigs : Tip.defaultReactionTipConfigs
+  )
+    .map((config) => `:${config.emoji}: (${formatAmount(config.amount)})`)
+    .join(', ')
 
   const member = await db
     .selectFrom('member')
@@ -282,7 +295,7 @@ async function buildHomeView(input: {
           },
           {
             text: {
-              text: `*Network* ${networkLabel}\n*Default amount* ${formatAmount(workspace.default_amount)}\n*Tip reaction* :${workspace.reaction_tip_emoji}:`,
+              text: `*Network* ${networkLabel}\n*Default amount* ${formatAmount(workspace.default_amount)}\n*Tip reactions* ${reactionTipText}`,
               type: 'mrkdwn',
             },
             type: 'section',
@@ -519,7 +532,7 @@ async function buildHomeView(input: {
         type: 'mrkdwn',
       },
       {
-        text: `*Tip a message*\nReact with :${workspace.reaction_tip_emoji}:`,
+        text: `*Tip a message*\nReact with ${reactionTipText}`,
         type: 'mrkdwn',
       },
     ]

@@ -163,7 +163,6 @@ const defaultConfig: Partial<{
       name: null,
       provider: 'slack',
       provider_id: `T${Nanoid.generate()}`,
-      reaction_tip_emoji: 'money_with_wings',
       uninstalled_at: null,
       updated_at: now,
     }

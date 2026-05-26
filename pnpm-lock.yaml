@@ -24,7 +24,7 @@ patchedDependencies:
   '@chat-adapter/slack@4.27.0': f129c43965d79b15a626b2f5e493aee5ae9b5638ff12257bd4cf6cecb048d1dd
   '@slack/web-api@7.15.2': 97b9149f438abff67b083a9f281917a3b7e1d3133ca6b8be85c6e6ba78b591ae
   '@tanstack/react-start@1.167.65': c2ace716aae8d228b9e34c7f0029a2c2471417d45b6c7823b22943889cfba6a2
-  emulate@0.5.0: 5487ebdec35d0647d4040b82c9de0ddf4e699e46224af33e558a8b67340adec9
+  emulate@0.5.0: b2fb51af97ea1d50b418f6a8216cf9423b584f2f690e7d2beec2f6e10e5ca234
   prool@0.2.4: 242ad315de9eb06e5a654896de221f947e3f0f5f318b55d898191bfad0a9530f
 
 importers:
@@ -139,7 +139,7 @@ importers:
         version: 12.9.0
       emulate:
         specifier: 0.5.0
-        version: 0.5.0(patch_hash=5487ebdec35d0647d4040b82c9de0ddf4e699e46224af33e558a8b67340adec9)(hono@4.12.18)
+        version: 0.5.0(patch_hash=b2fb51af97ea1d50b418f6a8216cf9423b584f2f690e7d2beec2f6e10e5ca234)(hono@4.12.18)
       msw:
         specifier: 2.13.6
         version: 2.13.6(@types/node@22.19.17)(typescript@6.0.3)
@@ -6018,7 +6018,7 @@ snapshots:
 
   emoji-regex@9.2.2: {}
 
-  emulate@0.5.0(patch_hash=5487ebdec35d0647d4040b82c9de0ddf4e699e46224af33e558a8b67340adec9)(hono@4.12.18):
+  emulate@0.5.0(patch_hash=b2fb51af97ea1d50b418f6a8216cf9423b584f2f690e7d2beec2f6e10e5ca234)(hono@4.12.18):
     dependencies:
       '@hono/node-server': 1.19.14(hono@4.12.18)
       commander: 14.0.3

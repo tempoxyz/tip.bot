@@ -12,10 +12,15 @@ export function getTipbotImagePath(host: string) {
   return getPreviewPrNumber(host) ? '/tipbot-preview.png' : '/tipbot.png'
 }
 
-export function getPreviewReactionTipEmoji(host: string) {
+export function getPreviewReactionTipEmojis(host: string) {
   const previewPrNumber = getPreviewPrNumber(host)
   if (!previewPrNumber) return undefined
-  return previewReactionTipEmojis[Number(previewPrNumber) % previewReactionTipEmojis.length]
+  const startIndex = Number(previewPrNumber) % previewReactionTipEmojis.length
+  return Array.from(
+    { length: 3 },
+    (_value, index) =>
+      previewReactionTipEmojis[(startIndex + index) % previewReactionTipEmojis.length]!,
+  )
 }
 
 const appHost = typeof __HOST__ === 'string' ? __HOST__ : ''

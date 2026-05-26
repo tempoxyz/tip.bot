@@ -78,6 +78,10 @@ export const seed = {
         team_id: slack.teamId,
       },
     ],
+    emojis: {
+      dollar: 'https://emoji.test/dollar.png',
+      moneybag: 'https://emoji.test/moneybag.png',
+    },
     team: {
       domain: slack.teamDomain,
       name: slack.teamName,
