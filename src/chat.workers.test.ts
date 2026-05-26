@@ -3661,11 +3661,12 @@ describe('/tip config', () => {
     expect(workspace.chain_id).toBe(Tempo.chainLookup.testnet)
     expect(workspace.default_amount).toBe(2000)
     expect(workspace.default_token_address).toBe(Tempo.addressLookup.betaUsd)
-    expect(reactionTipConfigs).toEqual([
-      { amount: 1000, emoji: 'money_with_wings' },
-      { amount: 10_000, emoji: 'dollar' },
-      { amount: 100_000, emoji: 'moneybag' },
-    ])
+    expect(reactionTipConfigs).toEqual(
+      Tip.defaultReactionTipConfigs.map((config) => ({
+        amount: config.amount,
+        emoji: config.emoji,
+      })),
+    )
   })
 
   test('allows settings edit from allowlisted connected account', async () => {

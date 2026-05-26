@@ -22,12 +22,6 @@ import { z } from 'zod'
 const creaturePattern =
   /\b(creature|creatures|dragon|dragons|elf|elves|fae|fairy|goblin|goblins|gnome|gnomes|gremlin|gremlins|kobold|kobolds|monster|monsters|orc|orcs|troll|trolls)\b/i
 
-const defaultReactionTipConfigs = [
-  { amount: 1000, emoji: 'money_with_wings' }, // $0.001
-  { amount: 10_000, emoji: 'dollar' }, // $0.01
-  { amount: 100_000, emoji: 'moneybag' }, // $0.10
-] as const
-
 type ReactionTipConfig = Pick<DB_gen.Selectable.reaction_tip_config, 'amount' | 'emoji'>
 
 let bot: chat.Chat | null = null
@@ -1546,7 +1540,7 @@ export async function seedDefaultReactionTipConfigs(
   await db
     .insertInto('reaction_tip_config')
     .values(
-      defaultReactionTipConfigs.map((config) => ({
+      Tip.defaultReactionTipConfigs.map((config) => ({
         amount: config.amount,
         created_at: now,
         emoji: config.emoji,
@@ -3641,7 +3635,7 @@ async function canManageSlackWorkspaceSettings(providerId: string, providerUserI
 }
 
 async function getReactionTipConfigs(db: DB.Type, workspaceId: string | undefined) {
-  if (!workspaceId) return [...defaultReactionTipConfigs]
+  if (!workspaceId) return [...Tip.defaultReactionTipConfigs]
   const configs = await db
     .selectFrom('reaction_tip_config')
     .select(['amount', 'emoji'])
@@ -3650,7 +3644,7 @@ async function getReactionTipConfigs(db: DB.Type, workspaceId: string | undefine
     .orderBy('emoji', 'asc')
     .execute()
   if (configs.length > 0) return configs
-  return [...defaultReactionTipConfigs]
+  return [...Tip.defaultReactionTipConfigs]
 }
 
 async function replaceReactionTipConfigs(

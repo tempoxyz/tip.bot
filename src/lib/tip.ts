@@ -16,6 +16,12 @@ import { privateKeyToAccount } from 'viem/accounts'
 import { Account as TempoAccount, Actions } from 'viem/tempo'
 import { getNodeError } from 'viem/utils'
 
+export const defaultReactionTipConfigs = [
+  { amount: 1000, emoji: 'money_with_wings' }, // $0.001
+  { amount: 10_000, emoji: 'dollar' }, // $0.01
+  { amount: 100_000, emoji: 'moneybag' }, // $0.10
+] as const
+
 export type TipResult =
   | {
       amount: string
@@ -133,32 +139,16 @@ export async function handleTipRequest(
         .execute()
       await db
         .insertInto('reaction_tip_config')
-        .values([
-          {
-            amount: 1000,
+        .values(
+          defaultReactionTipConfigs.map((config) => ({
+            amount: config.amount,
             created_at: now,
-            emoji: 'money_with_wings',
+            emoji: config.emoji,
             id: Nanoid.generate(),
             updated_at: now,
             workspace_id: id,
-          },
-          {
-            amount: 10_000,
-            created_at: now,
-            emoji: 'dollar',
-            id: Nanoid.generate(),
-            updated_at: now,
-            workspace_id: id,
-          },
-          {
-            amount: 100_000,
-            created_at: now,
-            emoji: 'moneybag',
-            id: Nanoid.generate(),
-            updated_at: now,
-            workspace_id: id,
-          },
-        ])
+          })),
+        )
         .execute()
       return await db
         .selectFrom('workspace')

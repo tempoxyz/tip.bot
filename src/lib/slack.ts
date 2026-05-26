@@ -5,6 +5,7 @@ import { multicall } from 'viem/actions'
 import { Actions } from 'viem/tempo'
 import { formatAmount, formatCurrencyAmount } from '#/lib/format.ts'
 import * as Tempo from '#/lib/tempo.ts'
+import * as Tip from '#/lib/tip.ts'
 import * as DB from '#db/client.ts'
 
 export type SlackErrorClass =
@@ -249,13 +250,7 @@ async function buildHomeView(input: {
     .orderBy('emoji', 'asc')
     .execute()
   const reactionTipText = (
-    reactionTipConfigs.length
-      ? reactionTipConfigs
-      : [
-          { amount: 1000, emoji: 'money_with_wings' }, // $0.001
-          { amount: 10_000, emoji: 'dollar' }, // $0.01
-          { amount: 100_000, emoji: 'moneybag' }, // $0.10
-        ]
+    reactionTipConfigs.length ? reactionTipConfigs : Tip.defaultReactionTipConfigs
   )
     .map((config) => `:${config.emoji}: (${formatAmount(config.amount)})`)
     .join(', ')
