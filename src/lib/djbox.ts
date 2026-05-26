@@ -1,7 +1,7 @@
 /**
  * Thin client for the djbox jukebox app (https://djbox.tempo.xyz).
  *
- * Used by the `/tip dj` Slack command to enqueue tracks into a djbox
+ * Used by the `/dj` Slack command to enqueue tracks into a djbox
  * party room. Search is unauthenticated; enqueue uses a shared bearer
  * secret (PARTYKIT_SECRET on the djbox side).
  */

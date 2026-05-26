@@ -18,6 +18,14 @@ on:
         required: true
       FEE_PAYER_PRIVATE_KEY_TESTNET:
         required: true
+      DJBOX_PARTY_ID:
+        required: true
+      DJBOX_SECRET:
+        required: true
+      DJBOX_URL:
+        required: true
+      DJ_HOUSE_PROVIDER_USER_ID:
+        required: true
       SLACK_GH_TOKEN:
         required: false
       SECRET_KEY:
@@ -42,6 +50,7 @@ env:
   PREVIEW_NAME: tipbot-pr${{ inputs.pr_number }}
   SLACK_BOT_DISPLAY_NAME: Tipbot PR ${{ inputs.pr_number }}
   SLACK_COMMAND: /tippr${{ inputs.pr_number }}
+  DJ_COMMAND: /djpr${{ inputs.pr_number }}
   SLACK_APP_NAME: Tipbot PR ${{ inputs.pr_number }}
   WRANGLER_SEND_METRICS: false
 
@@ -165,7 +174,7 @@ jobs:
           SHA_SHORT=$(echo "$SHA" | cut -c1-7)
           UPDATED=$(date -u +"%b %-d, %Y, %-I:%M %p")
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message with ${REACTION_TIP_EMOJI_NATIVE} \`:${REACTION_TIP_EMOJI}:\`."
+          COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message with ${REACTION_TIP_EMOJI_NATIVE} \`:${REACTION_TIP_EMOJI}:\`. Music: \`${DJ_COMMAND} queue never gonna give you up\`, \`${DJ_COMMAND} list\`, \`${DJ_COMMAND} skip\`."
           BODY=$(printf '%s\n\n%s\n%s\n%s\n\n%s' \
             "The latest Tipbot preview deployment for ${SHA_SHORT}" \
             "| Name | Status | Preview | Updated (UTC) |" \
@@ -332,6 +341,10 @@ jobs:
         env:
           CLOUDFLARE_ENV: preview
           EMULATE_SLACK: 0
+          DJBOX_PARTY_ID: ${{ secrets.DJBOX_PARTY_ID }}
+          DJBOX_SECRET: ${{ secrets.DJBOX_SECRET }}
+          DJBOX_URL: ${{ secrets.DJBOX_URL }}
+          DJ_HOUSE_PROVIDER_USER_ID: ${{ secrets.DJ_HOUSE_PROVIDER_USER_ID }}
           SLACK_APP_ID: ${{ steps.slack.outputs.app_id }}
 
       - name: Deploy preview
@@ -345,10 +358,18 @@ jobs:
             FEE_PAYER_PRIVATE_KEY_MAINNET
             FEE_PAYER_PRIVATE_KEY_TESTNET
             SECRET_KEY
+            DJBOX_PARTY_ID
+            DJBOX_SECRET
+            DJBOX_URL
+            DJ_HOUSE_PROVIDER_USER_ID
             SLACK_CLIENT_ID
             SLACK_CLIENT_SECRET
             SLACK_SIGNING_SECRET
         env:
+          DJBOX_PARTY_ID: ${{ secrets.DJBOX_PARTY_ID }}
+          DJBOX_SECRET: ${{ secrets.DJBOX_SECRET }}
+          DJBOX_URL: ${{ secrets.DJBOX_URL }}
+          DJ_HOUSE_PROVIDER_USER_ID: ${{ secrets.DJ_HOUSE_PROVIDER_USER_ID }}
           FEE_PAYER_PRIVATE_KEY_MAINNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_MAINNET }}
           FEE_PAYER_PRIVATE_KEY_TESTNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_TESTNET }}
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
@@ -444,7 +465,7 @@ jobs:
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           PREVIEW="[${PREVIEW_HOST}](https://${PREVIEW_HOST})"
           INSTALL="<a href=\"https://${PREVIEW_HOST}/install/slack\"><img alt=\"Add to Slack\" height=\"38\" width=\"auto\" src=\"https://platform.slack-edge.com/img/add_to_slack@2x.png\" /></a>"
-          COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message with ${REACTION_TIP_EMOJI_NATIVE} \`:${REACTION_TIP_EMOJI}:\`."
+          COMMANDS="Try \`${SLACK_COMMAND} @account for coffee\`, \`@${SLACK_BOT_DISPLAY_NAME} @account for coffee\`, or react to a message with ${REACTION_TIP_EMOJI_NATIVE} \`:${REACTION_TIP_EMOJI}:\`. Music: \`${DJ_COMMAND} queue never gonna give you up\`, \`${DJ_COMMAND} list\`, \`${DJ_COMMAND} skip\`."
           STATUS="[![Ready](https://vercel.com/static/status/ready.svg) Ready](${RUN_URL})"
           if [ "$JOB_STATUS" != "success" ]; then STATUS="[![Error](https://vercel.com/static/status/error.svg) Error](${RUN_URL})"; fi
           REINSTALL=""

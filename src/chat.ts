@@ -656,9 +656,9 @@ const handlers = {
     const djboxPartyId = env.DJBOX_PARTY_ID
     const djboxSecret = env.DJBOX_SECRET
     const houseProviderUserId = env.DJ_HOUSE_PROVIDER_USER_ID
-    const queuePriceUsd = Number(env.DJ_QUEUE_PRICE_USD ?? '0.005')
-    const skipPriceUsd = Number(env.DJ_SKIP_PRICE_USD ?? '0.0002')
-    const vetoPriceUsd = Number(env.DJ_VETO_PRICE_USD ?? String(queuePriceUsd))
+    const queuePriceUsd = parseDjUsd(env.DJ_QUEUE_PRICE_USD, 0.005)
+    const skipPriceUsd = parseDjUsd(env.DJ_SKIP_PRICE_USD, 0.0002)
+    const vetoPriceUsd = parseDjUsd(env.DJ_VETO_PRICE_USD, queuePriceUsd)
 
     if (!djboxUrl || !djboxPartyId || !djboxSecret) {
       await postPrivateReply(event, event.user, 'DJ not configured for this workspace.')
@@ -666,9 +666,10 @@ const handlers = {
     }
 
     const text = ctx.text.trim()
-    const match = text.match(/^(queue|skip|veto|list|nowplaying|where|help)(?:\s+([\s\S]*))?$/)
-    const subcommand = match?.[1] ?? 'help'
+    const match = text.match(/^(queue|skip|veto|list|nowplaying|where|help)(?:\s+([\s\S]*))?$/i)
+    const subcommand = match?.[1]?.toLowerCase() ?? 'help'
     const rest = match?.[2]?.trim() ?? ''
+    const djCommand = getDjCommand(env.HOST)
 
     if (subcommand === 'where') {
       await postPrivateReply(event, event.user, `Djbox party: ${djboxUrl}/p/${djboxPartyId}`)
@@ -680,12 +681,12 @@ const handlers = {
         event,
         event.user,
         [
-          `${getDjCommand(env.HOST)} queue <youtube/spotify url or search>  Add a track ($${queuePriceUsd})`,
-          `${getDjCommand(env.HOST)} skip  Bid to skip the current track ($${skipPriceUsd})`,
-          `${getDjCommand(env.HOST)} list  Show what's playing and what's queued`,
-          `${getDjCommand(env.HOST)} veto <position>  Bid to remove an upcoming track ($${vetoPriceUsd})`,
-          `${getDjCommand(env.HOST)} nowplaying  Show what's on right now`,
-          `${getDjCommand(env.HOST)} where  Show party URL`,
+          `${djCommand} queue <youtube/spotify url or search>  Add a track (${formatDjUsd(queuePriceUsd)})`,
+          `${djCommand} skip  Bid to skip the current track (${formatDjUsd(skipPriceUsd)})`,
+          `${djCommand} list  Show what's playing and what's queued`,
+          `${djCommand} veto <position>  Bid to remove an upcoming track (${formatDjUsd(vetoPriceUsd)})`,
+          `${djCommand} nowplaying  Show what's on right now`,
+          `${djCommand} where  Show party URL`,
         ].join('\n'),
       )
       return
@@ -716,7 +717,9 @@ const handlers = {
           snap.upcoming.slice(0, 10).forEach((t, i) => {
             const artist = t.artist ? ` — ${t.artist}` : ''
             const pot =
-              t.vetoPotUsd > 0 ? ` (veto pot $${t.vetoPotUsd.toFixed(4)}/$${vetoPriceUsd})` : ''
+              t.vetoPotUsd > 0
+                ? ` (veto pot ${formatDjUsd(t.vetoPotUsd)}/${formatDjUsd(vetoPriceUsd)})`
+                : ''
             lines.push(`${i + 1}. ${t.title}${artist}${pot}`)
           })
         }
@@ -756,28 +759,32 @@ const handlers = {
         secret: djboxSecret,
       })
       if (!skipped.ok) {
-        await postPrivateReply(event, event.user, 'djbox skip failed.')
+        await postPrivateReply(
+          event,
+          event.user,
+          `Payment succeeded (${truncateTxHash(tip.transactionHash)}), but djbox skip failed. Ping an organizer.`,
+        )
         return
       }
       const cleared = skipped.cleared
       const potNote =
         !cleared && skipped.potUsd !== undefined && skipped.thresholdUsd !== undefined
-          ? ` (pot $${skipped.potUsd.toFixed(4)}/$${skipped.thresholdUsd.toFixed(4)})`
+          ? ` (pot ${formatDjUsd(skipped.potUsd)}/${formatDjUsd(skipped.thresholdUsd)})`
           : ''
       const verb = cleared ? 'skipped current track' : `bid to skip${potNote}`
       await event.channel.post(
-        `${event.channel.mentionUser(event.user.userId)} ${verb} ($${skipPriceUsd}, tx ${truncateTxHash(tip.transactionHash)}).`,
+        `${event.channel.mentionUser(event.user.userId)} ${verb} (${formatDjUsd(skipPriceUsd)}, tx ${truncateTxHash(tip.transactionHash)}).`,
       )
       return
     }
 
     if (subcommand === 'veto') {
-      const position = Number.parseInt(rest, 10)
-      if (!Number.isInteger(position) || position < 1) {
+      const position = /^\d+$/.test(rest) ? Number.parseInt(rest, 10) : Number.NaN
+      if (!Number.isSafeInteger(position) || position < 1) {
         await postPrivateReply(
           event,
           event.user,
-          'Usage: `/dj veto <position>` — see positions with `/dj list`.',
+          `Usage: \`${djCommand} veto <position>\` — see positions with \`${djCommand} list\`.`,
         )
         return
       }
@@ -815,17 +822,21 @@ const handlers = {
         trackId: target.id,
       })
       if (!vetoed.ok) {
-        await postPrivateReply(event, event.user, `Veto failed (${vetoed.reason ?? 'unknown'}).`)
+        await postPrivateReply(
+          event,
+          event.user,
+          `Payment succeeded (${truncateTxHash(tip.transactionHash)}), but djbox veto failed (${vetoed.reason ?? 'unknown'}). Ping an organizer.`,
+        )
         return
       }
       const cleared = vetoed.cleared
       const potNote =
         !cleared && vetoed.potUsd !== undefined && vetoed.thresholdUsd !== undefined
-          ? ` (pot $${vetoed.potUsd.toFixed(4)}/$${vetoed.thresholdUsd.toFixed(4)})`
+          ? ` (pot ${formatDjUsd(vetoed.potUsd)}/${formatDjUsd(vetoed.thresholdUsd)})`
           : ''
       const verb = cleared ? `vetoed *${target.title}*` : `bid to veto *${target.title}*${potNote}`
       await event.channel.post(
-        `${event.channel.mentionUser(event.user.userId)} ${verb} ($${vetoPriceUsd}, tx ${truncateTxHash(tip.transactionHash)}).`,
+        `${event.channel.mentionUser(event.user.userId)} ${verb} (${formatDjUsd(vetoPriceUsd)}, tx ${truncateTxHash(tip.transactionHash)}).`,
       )
       return
     }
@@ -870,13 +881,17 @@ const handlers = {
       track: resolved,
     })
     if (!queued.ok) {
-      await postPrivateReply(event, event.user, 'djbox enqueue failed.')
+      await postPrivateReply(
+        event,
+        event.user,
+        `Payment succeeded (${truncateTxHash(tip.transactionHash)}), but djbox enqueue failed. Ping an organizer to add it manually.`,
+      )
       return
     }
 
     const artist = resolved.artist ? ` by ${resolved.artist}` : ''
     await event.channel.post(
-      `${event.channel.mentionUser(event.user.userId)} queued *${resolved.title}*${artist} ($${queuePriceUsd}, tx ${truncateTxHash(tip.transactionHash)}).`,
+      `${event.channel.mentionUser(event.user.userId)} queued *${resolved.title}*${artist} (${formatDjUsd(queuePriceUsd)}, tx ${truncateTxHash(tip.transactionHash)}).`,
     )
   },
   async help(event, ctx) {
@@ -3485,6 +3500,17 @@ async function postDjTipError(event: TipEvent, tip: Extract<Tip.TipResult, { ok:
     return `Payment failed (${tip.code}).`
   })()
   await postPrivateReply(event, event.user, message)
+}
+
+function parseDjUsd(value: string | undefined, fallback: number) {
+  if (!value?.trim()) return fallback
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback
+  return parsed
+}
+
+function formatDjUsd(value: number) {
+  return formatCurrencyAmount(String(value), 'USD')
 }
 
 function truncateTxHash(hash: string) {
