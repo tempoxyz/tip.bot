@@ -76,7 +76,22 @@ try {
       .executeTakeFirstOrThrow()
     const linkedCount = Number(linked.count)
     if (linkedCount > 0) {
-      await replacePreviewReactionTipConfig(previewWorkspace.id)
+      const now = new Date().toISOString()
+      await previewDb
+        .deleteFrom('reaction_tip_config')
+        .where('workspace_id', '=', previewWorkspace.id)
+        .execute()
+      await previewDb
+        .insertInto('reaction_tip_config')
+        .values({
+          amount: 1000, // $0.001
+          created_at: now,
+          emoji: previewReactionTipEmoji,
+          id: Nanoid.generate(),
+          updated_at: now,
+          workspace_id: previewWorkspace.id,
+        })
+        .execute()
       output('reaction_tip_emoji', previewReactionTipEmoji)
       output('seeded_at', env.STATE_SEEDED_AT)
       console.log(`Preview workspace already seeded with ${linkedCount} linked members.`)
@@ -114,7 +129,22 @@ try {
     .where('provider', '=', 'slack')
     .where('provider_id', '=', env.PREVIEW_SEED_SLACK_TEAM_ID)
     .executeTakeFirstOrThrow()
-  await replacePreviewReactionTipConfig(workspace.id)
+  const now = new Date().toISOString()
+  await previewDb
+    .deleteFrom('reaction_tip_config')
+    .where('workspace_id', '=', workspace.id)
+    .execute()
+  await previewDb
+    .insertInto('reaction_tip_config')
+    .values({
+      amount: 1000, // $0.001
+      created_at: now,
+      emoji: previewReactionTipEmoji,
+      id: Nanoid.generate(),
+      updated_at: now,
+      workspace_id: workspace.id,
+    })
+    .execute()
 
   const members = await productionDb
     .selectFrom('member')
@@ -301,25 +331,6 @@ function createRemoteDb(databaseId: string) {
       }),
     }),
   } as D1Database)
-}
-
-async function replacePreviewReactionTipConfig(workspaceId: string) {
-  const now = new Date().toISOString()
-  await previewDb
-    .deleteFrom('reaction_tip_config')
-    .where('workspace_id', '=', workspaceId)
-    .execute()
-  await previewDb
-    .insertInto('reaction_tip_config')
-    .values({
-      amount: 1000,
-      created_at: now,
-      emoji: previewReactionTipEmoji,
-      id: Nanoid.generate(),
-      updated_at: now,
-      workspace_id: workspaceId,
-    })
-    .execute()
 }
 
 function output(name: string, value: string) {
