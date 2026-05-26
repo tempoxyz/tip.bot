@@ -30,6 +30,7 @@ jobs:
 
       - name: Setup Slack config token
         id: slack_token
+        continue-on-error: true
         uses: ./.github/actions/setup-slack-config-token
         with:
           github-token: ${{ secrets.SLACK_GH_TOKEN }}
@@ -43,6 +44,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SLACK_CONFIG_ACCESS_TOKEN: ${{ steps.slack_token.outputs.token }}
         run: |
+          if [ -z "$SLACK_CONFIG_ACCESS_TOKEN" ]; then
+            echo "Slack config token unavailable; skipping Slack app cleanup."
+          fi
           WORKERS=$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts" \
             | jq -r '.result[].id // empty' | grep '^tipbot-pr[0-9][0-9]*$' || true)
@@ -66,15 +70,22 @@ jobs:
             D1_ID=$(echo "$META" | jq -r '.d1_id // empty')
             SLACK_APP_IDS=$(echo "$META" | jq -c '[((.slack_app_ids // [])[]), (.slack_app_id // empty)] | map(select(. != "")) | unique')
 
-            if [ "$SLACK_APP_IDS" != "[]" ]; then
-              echo "$SLACK_APP_IDS" | jq -r '.[]' | while read -r SLACK_APP_ID; do
+            if [ -n "$SLACK_CONFIG_ACCESS_TOKEN" ] && [ "$SLACK_APP_IDS" != "[]" ]; then
+              set -euo pipefail
+              FAILED=0
+              while read -r SLACK_APP_ID; do
                 RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.delete \
                   -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
                   -H "Content-Type: application/json; charset=utf-8" \
                   -d "{\"app_id\":\"${SLACK_APP_ID}\"}" || echo '{"ok":false,"error":"request_failed"}')
                 OK=$(echo "$RESPONSE" | jq -r '.ok // false')
-                if [ "$OK" != "true" ]; then echo "$RESPONSE" | jq '{ok,error,errors}'; fi
-              done
+                ERROR=$(echo "$RESPONSE" | jq -r '.error // empty')
+                if [ "$OK" != "true" ] && [ "$ERROR" != "app_not_found" ] && [ "$ERROR" != "invalid_app_id" ]; then
+                  echo "$RESPONSE" | jq '{ok,error,errors}'
+                  FAILED=1
+                fi
+              done < <(echo "$SLACK_APP_IDS" | jq -r '.[]')
+              if [ "$FAILED" != "0" ]; then echo "Slack app cleanup failed; continuing preview cleanup."; fi
             fi
             curl -fsS -X DELETE \
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
