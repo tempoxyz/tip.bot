@@ -153,12 +153,13 @@ jobs:
           PREVIEW_HOST: ${{ env.PREVIEW_HOST }}
         run: |
           node --experimental-strip-types --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
-          import { getPreviewReactionTipEmojis } from './src/lib/app.ts'
+          import { getPreviewReactionTipEmojis, getReceiptBoostReaction } from './src/lib/app.ts'
           import { defaultReactionTipConfigs } from './src/lib/constants.ts'
           import { replaceEmojiShortcodes } from './src/lib/emoji.ts'
           import { formatAmount } from './src/lib/format.ts'
           const emojis = getPreviewReactionTipEmojis(process.env.PREVIEW_HOST)
           if (!emojis) throw new Error(`Expected preview host, got ${process.env.PREVIEW_HOST}.`)
+          const boostEmoji = getReceiptBoostReaction(process.env.PREVIEW_HOST)
           const formatReactionTipAmount = (amount) => {
             const value = formatAmount(amount)
             return `$${amount >= 10_000 ? Number(value).toFixed(2) : value}`
@@ -171,6 +172,9 @@ jobs:
             console.log(
               `| ${replaceEmojiShortcodes(`:${emojis[index]}:`)} | \`:${emojis[index]}:\` | ${formatReactionTipAmount(config.amount)} |`,
             )
+          console.log(
+            `| ${replaceEmojiShortcodes(`:${boostEmoji}:`)} | \`:${boostEmoji}:\` | Boost |`,
+          )
           console.log('REACTION_TIPS')
           NODE
 

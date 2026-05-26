@@ -575,7 +575,7 @@ const modalSubmits = {
     if (!reactionTipConfigs)
       errors.reaction_tip_configs =
         'Enter emoji and positive amount pairs. Example: :money_with_wings: 0.001, :dollar: 0.01, :moneybag: 0.10'
-    else if (reactionTipConfigs.some((config) => config.emoji === receiptBoostReaction))
+    else if (reactionTipConfigs.some((config) => isReceiptBoostReaction(config.emoji)))
       errors.reaction_tip_configs = `:${receiptBoostReaction}: is reserved for boosting receipts.`
     else if (
       !(await (async () => {
@@ -2662,7 +2662,12 @@ async function getTipReceiptMessage(
     .selectFrom('tip_batch')
     .select(['id', 'workspace_id'])
     .where('workspace_id', '=', workspace.id)
-    .where('provider_channel_id', '=', event.item.channel)
+    .where((eb) =>
+      eb.or([
+        eb('provider_channel_id', '=', event.item.channel),
+        eb('provider_channel_id', '=', `slack:${event.item.channel}`),
+      ]),
+    )
     .where('transaction_hash', '=', transactionHash)
     .where('status', '=', 'confirmed')
     .executeTakeFirst()
@@ -2702,7 +2707,7 @@ function formatSlackMessageLink(providerId: string, channelId: string, messageTs
 }
 
 function isReceiptBoostReaction(reaction: string) {
-  return reaction === receiptBoostReaction || reaction === 'heavy_plus_sign'
+  return ['+', 'heavy_plus_sign', 'plus', receiptBoostReaction].includes(reaction)
 }
 
 async function postSlackEphemeral(
@@ -3861,7 +3866,12 @@ export async function recordSlackReceiptMessageForTransaction(
     .selectFrom('tip_batch')
     .select(['id', 'workspace_id'])
     .where('transaction_hash', '=', options.transactionHash)
-    .where('provider_channel_id', '=', options.channelId)
+    .where((eb) =>
+      eb.or([
+        eb('provider_channel_id', '=', options.channelId),
+        eb('provider_channel_id', '=', `slack:${options.channelId}`),
+      ]),
+    )
     .where('status', '=', 'confirmed')
     .executeTakeFirst()
   if (!batch) return
