@@ -3845,9 +3845,21 @@ async function postSlackQueuedTipMessage(
     result.source === 'reaction'
       ? `${options.mentionUser(result.senderProviderUserId)} queued a boost for ${options.mentionUser(result.recipientProviderUserId)}`
       : `${options.mentionUser(result.senderProviderUserId)} queued ${options.mentionUser(result.recipientProviderUserId)} ${amount}${result.memo ? ` for ${result.memo}` : ''}`
-  const connectCommand = (await usesMentionConnectInstruction(ctx, result.recipientProviderUserId))
-    ? `@${getSlackBotDisplayName(env.HOST)} connect`
-    : `${getSlackCommand(env.HOST)} connect`
+  const connectCommand = await (async () => {
+    // Slack Connect and single-channel guests need mention commands because slash commands are unavailable.
+    if (
+      ctx.externalSlackConnect ||
+      (ctx.channelProviderId && ctx.channelProviderId !== ctx.provider.id)
+    )
+      return `@${getSlackBotDisplayName(env.HOST)} connect`
+    const user = await getSlackUserInfo(
+      installation.botToken,
+      result.recipientProviderUserId,
+    ).catch(() => undefined)
+    if (user?.is_restricted || user?.is_ultra_restricted)
+      return `@${getSlackBotDisplayName(env.HOST)} connect`
+    return `${getSlackCommand(env.HOST)} connect`
+  })()
   const context = `Run \`${connectCommand}\` to receive it`
   const body = new URLSearchParams()
   body.set(
@@ -3885,18 +3897,6 @@ async function postSlackQueuedTipMessage(
   )
   if (!json.ok || !json.ts) throw Slack.slackApiError('chat.postMessage', json.error)
   return json.ts
-}
-
-async function usesMentionConnectInstruction(ctx: HandlerContext, providerUserId: string) {
-  if (
-    ctx.externalSlackConnect ||
-    (ctx.channelProviderId && ctx.channelProviderId !== ctx.provider.id)
-  )
-    return true
-  const installation = await getSlack().getInstallation(ctx.channelProviderId ?? ctx.provider.id)
-  if (!installation) return false
-  const user = await getSlackUserInfo(installation.botToken, providerUserId).catch(() => undefined)
-  return Boolean(user?.is_restricted || user?.is_ultra_restricted)
 }
 
 async function postSlackReceiptMessage(

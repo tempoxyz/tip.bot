@@ -221,13 +221,41 @@ export async function handleTipRequest(
     recipientProviderWorkspaceId: input.recipientProviderWorkspaceId,
   })
   if (recipient?.account.id === sender.account.id) return { code: 'self_tip', ok: false }
-  const { accessKey, trackedAccessKeyLimitExceeded } = await findUsableAccessKey(db, {
-    accountId: sender.account.id,
-    amount,
-    chainId: executionWorkspace.chain_id,
-    memo: input.memo,
-    tokenAddress,
-  })
+  const { accessKey, trackedAccessKeyLimitExceeded } = await (async () => {
+    // Pick the newest reusable access key that can cover this tip.
+    const accessKeys = await db
+      .selectFrom('access_key')
+      .selectAll()
+      .where('account_id', '=', sender.account.id)
+      .where('chain_id', '=', executionWorkspace.chain_id)
+      .where('revoked_at', 'is', null)
+      .where('expires_at', '>', new Date().toISOString())
+      .orderBy('created_at', 'desc')
+      .execute()
+    let trackedAccessKeyLimitExceeded = false
+    let accessKey: Database.Selectable.access_key | undefined
+    for (const row of accessKeys) {
+      const authorization = KeyAuthorization.fromRpc(JSON.parse(row.authorization) as never)
+      if (!supportsTip(authorization, { amount, memo: input.memo, tokenAddress })) continue
+      if (
+        !(await hasTrackedAccessKeyLimitRemaining(db, {
+          accessKeyId: row.id,
+          accountId: sender.account.id,
+          amount,
+          authorization,
+          authorizationUsedAt: row.authorization_used_at,
+          chainId: executionWorkspace.chain_id,
+          tokenAddress,
+        }))
+      ) {
+        trackedAccessKeyLimitExceeded = true
+        continue
+      }
+      accessKey = row
+      break
+    }
+    return { accessKey, trackedAccessKeyLimitExceeded }
+  })()
   if (!accessKey)
     return await createConfirmationRequired(env, input, executionWorkspace, amount, tokenAddress, {
       kind: trackedAccessKeyLimitExceeded ? 'onetime_payment' : undefined,
@@ -2298,50 +2326,6 @@ function supportsTip(
       Address.isEqual(limit.token as Address.Address, input.tokenAddress as Address.Address) &&
       limit.limit >= BigInt(input.amount),
   )
-}
-
-async function findUsableAccessKey(
-  db: DB.Type,
-  input: {
-    accountId: string
-    amount: number
-    chainId: number
-    memo: string | null
-    tokenAddress: string
-  },
-) {
-  const accessKeys = await db
-    .selectFrom('access_key')
-    .selectAll()
-    .where('account_id', '=', input.accountId)
-    .where('chain_id', '=', input.chainId)
-    .where('revoked_at', 'is', null)
-    .where('expires_at', '>', new Date().toISOString())
-    .orderBy('created_at', 'desc')
-    .execute()
-  let trackedAccessKeyLimitExceeded = false
-  let accessKey: Database.Selectable.access_key | undefined
-  for (const row of accessKeys) {
-    const authorization = KeyAuthorization.fromRpc(JSON.parse(row.authorization) as never)
-    if (!supportsTip(authorization, input)) continue
-    if (
-      !(await hasTrackedAccessKeyLimitRemaining(db, {
-        accessKeyId: row.id,
-        accountId: input.accountId,
-        amount: input.amount,
-        authorization,
-        authorizationUsedAt: row.authorization_used_at,
-        chainId: input.chainId,
-        tokenAddress: input.tokenAddress,
-      }))
-    ) {
-      trackedAccessKeyLimitExceeded = true
-      continue
-    }
-    accessKey = row
-    break
-  }
-  return { accessKey, trackedAccessKeyLimitExceeded }
 }
 
 async function hasTrackedAccessKeyLimitRemaining(
