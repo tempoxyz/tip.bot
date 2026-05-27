@@ -535,6 +535,34 @@ export const api = new Hono<{
                 .executeTakeFirst()
               if (!receipt) return
 
+              if (receipt.thread_ts !== receipt.message_ts) {
+                await Chat.updateReceiptBoostAggregate(data.payload.providerId, {
+                  channelId,
+                  threadTs: receipt.thread_ts,
+                  workspaceId,
+                })
+                if (data.payload.skippedRecipients?.length) {
+                  const skippedBody = new URLSearchParams()
+                  const recipientCount = data.payload.recipients?.length ?? 1
+                  const skippedCount = data.payload.skippedRecipients.length
+                  skippedBody.set('channel', channelId)
+                  skippedBody.set(
+                    'text',
+                    `Boost sent to ${recipientCount} ${recipientCount === 1 ? 'account' : 'accounts'}. Skipped ${skippedCount} ${skippedCount === 1 ? 'account' : 'accounts'} that can no longer receive payments.`,
+                  )
+                  skippedBody.set('thread_ts', receipt.thread_ts)
+                  skippedBody.set('user', data.payload.senderProviderUserId)
+                  await Chat.getSlack().withBotToken(installation.botToken, () =>
+                    fetch(`${c.env.SLACK_API_URL}/chat.postEphemeral`, {
+                      body: skippedBody,
+                      headers: { authorization: `Bearer ${installation.botToken}` },
+                      method: 'POST',
+                    }),
+                  )
+                }
+                return
+              }
+
               const originalReceiptLink = (() => {
                 if (receipt.thread_ts === receipt.message_ts) return ''
                 const url = new URL('slack://channel')
