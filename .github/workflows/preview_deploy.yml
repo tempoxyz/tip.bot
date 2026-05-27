@@ -366,6 +366,28 @@ jobs:
             -e "s|__PREVIEW_D1_ID__|${D1_ID}|g" \
             wrangler.jsonc
 
+      - name: Setup preview Queues
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          QUEUES=$(node -e '
+            const text = require("node:fs").readFileSync("wrangler.jsonc", "utf8")
+              .replace(/(?<=^[^"]*(?:"[^"]*"[^"]*)*)\/\/.*$/gm, "")
+              .replace(/,(\s*[\]}])/g, "$1")
+            const queues = JSON.parse(text).env.preview.queues
+            const names = new Set([
+              ...queues.producers.map((producer) => producer.queue),
+              ...queues.consumers.flatMap((consumer) =>
+                consumer.dead_letter_queue ? [consumer.queue, consumer.dead_letter_queue] : [consumer.queue],
+              ),
+            ])
+            for (const name of names) console.log(name)
+          ')
+          for QUEUE in $QUEUES; do
+            pnpm exec wrangler queues create "$QUEUE" 2>/dev/null || true
+          done
+
       - name: Run migrations
         run: pnpm exec wrangler d1 migrations apply "$PREVIEW_NAME" --env preview --remote
         env:
