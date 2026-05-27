@@ -897,6 +897,11 @@ describe('/tip @account', () => {
     expect(updated.status).toBe('sent')
     expect(updated.tip_id).toBe(tips[0]?.id)
     expect(tips).toHaveLength(1)
+    await expect(Tip.claimPendingTip(env, { pendingTipId: pending.id })).resolves.toMatchObject({
+      ok: true,
+      status: 'sent',
+      transactionHash: expect.any(String),
+    })
 
     await db
       .updateTable('pending_tip')

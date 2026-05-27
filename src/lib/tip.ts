@@ -977,6 +977,7 @@ export async function claimPendingTip(
     .where('id', '=', input.pendingTipId)
     .executeTakeFirst()
   if (!pending) return null
+  if (pending.status === 'sent') return await getSentPendingTipResult(env, db, pending)
   if (!['pending', 'sending'].includes(pending.status)) return null
 
   const now = new Date().toISOString()
@@ -1338,6 +1339,43 @@ async function updatePendingTipFailed(
     ok: false,
     pendingTip: { ...pendingTip, failure_reason: input.message, status: input.status },
     status: input.status,
+  }
+}
+
+async function getSentPendingTipResult(
+  env: Env,
+  db: DB.Type,
+  pendingTip: Database.Selectable.pending_tip,
+): Promise<Extract<PendingTipClaimResult, { ok: true }> | null> {
+  const tip = await db
+    .selectFrom('tip')
+    .innerJoin('tip_batch', 'tip_batch.id', 'tip.batch_id')
+    .innerJoin('workspace', 'workspace.id', 'tip.workspace_id')
+    .select(['tip.id', 'tip_batch.transaction_hash', 'workspace.default_token_address'])
+    .where('tip.idempotency_key', '=', `pending:${pendingTip.id}`)
+    .executeTakeFirst()
+  if (!tip?.transaction_hash) return null
+  const tokenMetadata = await Tempo.getTokenMetadata(
+    env,
+    pendingTip.chain_id,
+    pendingTip.token_address,
+  )
+  return {
+    amount: formatAmount(pendingTip.amount),
+    chainId: pendingTip.chain_id,
+    isDefaultToken: Address.isEqual(
+      Address.checksum(pendingTip.token_address),
+      Address.checksum(tip.default_token_address ?? Tempo.addressLookup.pathUsd),
+    ),
+    memo: pendingTip.memo,
+    ok: true,
+    pendingTip,
+    recipientProviderUserId: pendingTip.recipient_provider_user_id,
+    senderProviderUserId: pendingTip.sender_provider_user_id,
+    status: 'sent',
+    tokenCurrency: tokenMetadata.currency,
+    tokenSymbol: tokenMetadata.symbol,
+    transactionHash: tip.transaction_hash,
   }
 }
 

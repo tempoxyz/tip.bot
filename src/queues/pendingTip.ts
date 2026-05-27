@@ -6,6 +6,7 @@ import { env } from 'cloudflare:workers'
 export async function processPendingTipMessage(message: Message<processPendingTipMessage.Body>) {
   const result = await Tip.claimPendingTip(env, { pendingTipId: message.body.pendingTipId })
   if (!result) return
+  await Chat.getChat().initialize()
   await Chat.updateSlackPendingTipMessage(DB.create(env.DB), result)
 }
 

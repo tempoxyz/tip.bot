@@ -18,6 +18,7 @@ test('claims pending tip and updates queued Slack message', async () => {
     status: 'expired',
   } as Tip.PendingTipClaimResult
   const claimSpy = vi.spyOn(Tip, 'claimPendingTip').mockResolvedValue(result)
+  const initializeSpy = vi.spyOn(Chat.getChat(), 'initialize').mockResolvedValue(undefined)
   const updateSpy = vi.spyOn(Chat, 'updateSlackPendingTipMessage').mockResolvedValue(undefined)
   const batch = createMessageBatch<processPendingTipMessage.Body>(
     processPendingTipMessage.queueName,
@@ -34,6 +35,7 @@ test('claims pending tip and updates queued Slack message', async () => {
   await processPendingTipMessage(batch.messages[0]!)
 
   expect(claimSpy).toHaveBeenCalledWith(env, { pendingTipId: 'pending_1' })
+  expect(initializeSpy).toHaveBeenCalledOnce()
   expect(updateSpy).toHaveBeenCalledWith(expect.anything(), result)
 })
 
