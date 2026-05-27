@@ -2261,6 +2261,7 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
         }
 
       // Backfill older receipts by parsing the receipt link from the Slack message.
+      if (message?.text?.startsWith('Reaction tips')) return null
       const transactionHash = JSON.stringify(message ?? {}).match(
         /\/receipt\/(0x[0-9a-fA-F]{64})/,
       )?.[1]
