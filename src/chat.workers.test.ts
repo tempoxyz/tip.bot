@@ -6,7 +6,9 @@ import * as Chat from '#/chat.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
+import { processPendingTipMessage } from '#/queues/pendingTip.ts'
 import { WebClient } from '@slack/web-api'
+import { createMessageBatch } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 import { testClient } from 'hono/testing'
 import { AbiFunction, Address } from 'ox'
@@ -2332,7 +2334,190 @@ test('@Tipbot mention queues Slack Connect tip for unconnected recipient workspa
     `<@${Constants.slack.adminUserId}> queued <@${Constants.slackConnect.userId}> $0.001`,
     { channelId },
   )
+  await expectSlackThreadMessage(messageTs, 'Run `/tip connect` to receive it', { channelId })
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention queued Slack Connect tip uses mention connect when recipient workspace is uninstalled', async () => {
+  const connected = await connectTipAccounts({ recipient: false })
+  await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    installed_at: null,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
+  const channelId = await getSlackConnectChannelId()
+  const messageTs = `1700000004.${Nanoid.generate().slice(0, 6)}`
+  await expectSlackConnectEmulator(channelId)
+
+  const response = await postSlackAppMention({
+    channelId,
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slackConnect.userId}>`,
+  })
+  const pendingTip = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('sender_member_id', '=', connected.senderMember.id)
+    .where('recipient_provider_user_id', '=', Constants.slackConnect.userId)
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(pendingTip.status).toBe('pending')
   await expectSlackThreadMessage(messageTs, 'Run `@Tipbot connect` to receive it', { channelId })
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention claims Slack Connect pending tip when recipient connects', async () => {
+  const connected = await connectTipAccounts({ recipient: false })
+  await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
+  const channelId = await getSlackConnectChannelId()
+  const queuedMessageTs = `1700000001.${Nanoid.generate().slice(0, 6)}`
+  const connectMessageTs = `1700000002.${Nanoid.generate().slice(0, 6)}`
+  await expectSlackConnectEmulator(channelId)
+
+  await postSlackAppMention({
+    channelId,
+    messageTs: queuedMessageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slackConnect.userId}>`,
+  })
+  const pendingTip = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('sender_member_id', '=', connected.senderMember.id)
+    .where('recipient_provider_user_id', '=', Constants.slackConnect.userId)
+    .executeTakeFirstOrThrow()
+  const connectResponse = await postSlackAppMention({
+    channelId,
+    messageTs: connectMessageTs,
+    text: `<@${Constants.slack.botUserId}> connect`,
+    userId: Constants.slackConnect.userId,
+  })
+  const token = await getLatestConnectToken({ channelId })
+  const link = await db
+    .selectFrom('account_link_token')
+    .innerJoin('member', 'member.id', 'account_link_token.member_id')
+    .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+    .select([
+      'account_link_token.access_key_address',
+      'account_link_token.access_key_expires_at',
+      'workspace.chain_id',
+      'workspace.default_token_address',
+    ])
+    .where('member.provider_user_id', '=', Constants.slackConnect.userId)
+    .where('workspace.provider_id', '=', Constants.slackConnect.teamId)
+    .executeTakeFirstOrThrow()
+  const root = Account.fromSecp256k1(
+    '0x5555555555555555555555555555555555555555555555555555555555555555',
+  )
+  const sendSpy = vi.spyOn(env.PENDING_TIP_QUEUE, 'send').mockResolvedValue({
+    metadata: { metrics: { backlogBytes: 0, backlogCount: 0 } },
+  })
+  const completeResponse = await client.api.account.link[':token'].$post({
+    json: {
+      address: root.address,
+      keyAuthorization: await AccountLink.signKeyAuthorization(root, {
+        accessKeyAddress: link.access_key_address,
+        chainId: link.chain_id,
+        expiresAt: link.access_key_expires_at,
+        tokenAddress: Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
+      }),
+    },
+    param: { token },
+  })
+  await drainWaitUntil()
+  const batch = createMessageBatch<processPendingTipMessage.Body>(
+    processPendingTipMessage.queueName,
+    [
+      {
+        attempts: 1,
+        body: { pendingTipId: pendingTip.id },
+        id: crypto.randomUUID(),
+        timestamp: new Date(),
+      },
+    ],
+  )
+
+  await processPendingTipMessage(batch.messages[0]!)
+  const updatedPendingTip = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('id', '=', pendingTip.id)
+    .executeTakeFirstOrThrow()
+  const tip = await waitForTipByIdempotencyKey(`pending:${pendingTip.id}`)
+
+  expect(connectResponse.status).toBe(200)
+  expect(completeResponse.status).toBe(200)
+  expect(sendSpy).toHaveBeenCalledWith({ pendingTipId: pendingTip.id })
+  expect(updatedPendingTip).toMatchObject({ status: 'sent', tip_id: tip.id })
+  expect(tip).toMatchObject({
+    recipient_member_id: pendingTip.recipient_member_id,
+    sender_member_id: connected.senderMember.id,
+    workspace_id: connected.workspace.id,
+  })
+  await expectSlackThreadMessage(
+    queuedMessageTs,
+    `<@${Constants.slack.adminUserId}> tipped <@${Constants.slackConnect.userId}> $0.001 · Receipt`,
+    { channelId, wait: true },
+  )
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention does not queue Slack Connect multi-recipient tip', async () => {
+  const connected = await connectTipAccounts()
+  await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
+  const channelId = await getSlackConnectChannelId()
+  const messageTs = `1700000003.${Nanoid.generate().slice(0, 6)}`
+  await expectSlackConnectEmulator(channelId)
+
+  const response = await postSlackAppMention({
+    channelId,
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}> <@${Constants.slackConnect.userId}>`,
+  })
+  const pendingTips = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('sender_member_id', '=', connected.senderMember.id)
+    .execute()
+  const tips = await db
+    .selectFrom('tip')
+    .selectAll()
+    .where('idempotency_key', '=', `mention:${providerId}:${channelId}:${messageTs}`)
+    .execute()
+
+  expect(response.status).toBe(200)
+  expect(pendingTips).toEqual([])
+  expect(tips).toEqual([])
+  await expectSlackMessage('You’re about to tip 1 accounts $0.001 each.', { channelId })
+  await expectSlackMessage(`• <@${Constants.slack.memberUserId}>`, { channelId })
+  await expectSlackMessage(`• <@${Constants.slackConnect.userId}> (not connected yet)`, {
+    channelId,
+  })
+  await expectSlackMessageNotContaining('queued', { channelId })
 }, 20_000) // 20 seconds
 
 test.each([

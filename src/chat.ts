@@ -1411,11 +1411,8 @@ const handlers = {
       } else if (result.ok && result.status === 'queued') {
         const messageTs = await postSlackQueuedTipMessage(ctx, result, {
           channelId: event.channel.id,
-          mentionConnectCommand: Boolean(
-            plan.recipients[0]?.recipientProviderWorkspaceId &&
-            plan.recipients[0].recipientProviderWorkspaceId !== ctx.provider.id,
-          ),
           mentionUser: (providerUserId) => event.channel.mentionUser(providerUserId),
+          recipientProviderWorkspaceId: plan.recipients[0]?.recipientProviderWorkspaceId,
           threadTs: options.threadTs,
         })
         await Tip.recordPendingTipMessage(env, {
@@ -4062,8 +4059,8 @@ async function postSlackQueuedTipMessage(
   result: Extract<Tip.TipResult, { ok: true; status: 'queued' }>,
   options: {
     channelId: string
-    mentionConnectCommand?: boolean
     mentionUser: (providerUserId: string) => string
+    recipientProviderWorkspaceId?: string
     threadTs?: string
   },
 ) {
@@ -4078,12 +4075,24 @@ async function postSlackQueuedTipMessage(
       ? `${options.mentionUser(result.senderProviderUserId)} queued a boost for ${options.mentionUser(result.recipientProviderUserId)}`
       : `${options.mentionUser(result.senderProviderUserId)} queued ${options.mentionUser(result.recipientProviderUserId)} ${amount}${result.memo ? ` for ${result.memo}` : ''}`
   const connectCommand = await (async () => {
-    // Slack Connect and single-channel guests need mention commands because slash commands are unavailable.
-    if (
-      options.mentionConnectCommand ||
-      ctx.externalSlackConnect ||
-      (ctx.channelProviderId && ctx.channelProviderId !== ctx.provider.id)
-    )
+    const recipientWorkspace = await (async () => {
+      if (
+        !options.recipientProviderWorkspaceId ||
+        options.recipientProviderWorkspaceId === ctx.provider.id
+      )
+        return null
+      return await ctx.db
+        .selectFrom('workspace')
+        .select('installed_at')
+        .where('provider', '=', 'slack')
+        .where('provider_id', '=', options.recipientProviderWorkspaceId)
+        .executeTakeFirst()
+    })()
+    if (recipientWorkspace?.installed_at) return `${getSlackCommand(env.HOST)} connect`
+    // Slack Connect users without an installed app and single-channel guests need mention commands because slash commands are unavailable.
+    if (recipientWorkspace || ctx.externalSlackConnect)
+      return `@${getSlackBotDisplayName(env.HOST)} connect`
+    if (ctx.channelProviderId && ctx.channelProviderId !== ctx.provider.id)
       return `@${getSlackBotDisplayName(env.HOST)} connect`
     const user = await getSlackUserInfo(
       installation.botToken,
