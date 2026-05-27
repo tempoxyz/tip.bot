@@ -28,6 +28,8 @@ export default {
         await handler(message as never)
         message.ack()
       } catch (error) {
+        if (queue === processPendingTipMessage.queueName && message.attempts >= 3)
+          console.error('Pending tip queue message reached DLQ threshold:', message.body)
         console.error(`Queue message ${message.id} failed:`, error)
         message.retry()
       }
