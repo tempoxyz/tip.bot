@@ -12,6 +12,7 @@ export interface DB {
   reaction_tip: reaction_tip
   reaction_tip_config: reaction_tip_config
   reaction_tip_thread: reaction_tip_thread
+  receipt_boost_thread: receipt_boost_thread
   tip: tip
   tip_batch: tip_batch
   tip_receipt_message: tip_receipt_message
@@ -144,6 +145,16 @@ type reaction_tip_thread = {
   workspace_id: string
 }
 
+type receipt_boost_thread = {
+  channel_id: string
+  created_at: k.Generated<string>
+  id: string
+  reply_ts: string
+  thread_ts: string
+  updated_at: k.Generated<string>
+  workspace_id: string
+}
+
 type tip = {
   access_key_id: string | null
   amount: number
@@ -224,6 +235,7 @@ export declare namespace DB {
   type reaction_tip = k.Selectable<DB['reaction_tip']>
   type reaction_tip_config = k.Selectable<DB['reaction_tip_config']>
   type reaction_tip_thread = k.Selectable<DB['reaction_tip_thread']>
+  type receipt_boost_thread = k.Selectable<DB['receipt_boost_thread']>
   type tip = k.Selectable<DB['tip']>
   type tip_batch = k.Selectable<DB['tip_batch']>
   type tip_receipt_message = k.Selectable<DB['tip_receipt_message']>
@@ -239,6 +251,7 @@ export declare namespace DB {
     type reaction_tip = k.Insertable<DB['reaction_tip']>
     type reaction_tip_config = k.Insertable<DB['reaction_tip_config']>
     type reaction_tip_thread = k.Insertable<DB['reaction_tip_thread']>
+    type receipt_boost_thread = k.Insertable<DB['receipt_boost_thread']>
     type tip = k.Insertable<DB['tip']>
     type tip_batch = k.Insertable<DB['tip_batch']>
     type tip_receipt_message = k.Insertable<DB['tip_receipt_message']>
@@ -255,6 +268,7 @@ export declare namespace DB {
     type reaction_tip = k.Selectable<DB['reaction_tip']>
     type reaction_tip_config = k.Selectable<DB['reaction_tip_config']>
     type reaction_tip_thread = k.Selectable<DB['reaction_tip_thread']>
+    type receipt_boost_thread = k.Selectable<DB['receipt_boost_thread']>
     type tip = k.Selectable<DB['tip']>
     type tip_batch = k.Selectable<DB['tip_batch']>
     type tip_receipt_message = k.Selectable<DB['tip_receipt_message']>
@@ -271,6 +285,7 @@ export declare namespace DB {
     type reaction_tip = k.Updateable<DB['reaction_tip']>
     type reaction_tip_config = k.Updateable<DB['reaction_tip_config']>
     type reaction_tip_thread = k.Updateable<DB['reaction_tip_thread']>
+    type receipt_boost_thread = k.Updateable<DB['receipt_boost_thread']>
     type tip = k.Updateable<DB['tip']>
     type tip_batch = k.Updateable<DB['tip_batch']>
     type tip_receipt_message = k.Updateable<DB['tip_receipt_message']>

@@ -128,6 +128,16 @@ export const reaction_tip_thread = z.object({
   workspace_id: z.string(),
 })
 
+export const receipt_boost_thread = z.object({
+  channel_id: z.string(),
+  created_at: z.string(),
+  id: z.string(),
+  reply_ts: z.string(),
+  thread_ts: z.string(),
+  updated_at: z.string(),
+  workspace_id: z.string(),
+})
+
 export const tip = z.object({
   access_key_id: z.string().nullable(),
   amount: z.number(),
@@ -215,6 +225,7 @@ export const db = {
   reaction_tip: reaction_tip,
   reaction_tip_config: reaction_tip_config,
   reaction_tip_thread: reaction_tip_thread,
+  receipt_boost_thread: receipt_boost_thread,
   tip: tip,
   tip_batch: tip_batch,
   tip_receipt_message: tip_receipt_message,

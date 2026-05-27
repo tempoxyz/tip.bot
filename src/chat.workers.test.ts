@@ -3801,6 +3801,135 @@ test('plus reaction boosts a receipt', async () => {
   })
 }, 20_000) // 20 seconds
 
+test('receipt boost aggregates threaded receipt boosts', async () => {
+  const connected = await connectTipAccounts()
+  const boosterMember = await insertMember({
+    account_id: connected.senderAccount.id,
+    provider_user_id: unconnectedProviderUserId,
+    workspace_id: connected.workspace.id,
+  })
+  const parent = await memberSlack.chat.postMessage({
+    channel: Constants.slack.channelId,
+    text: 'threaded boost aggregate parent',
+  })
+  if (!parent.ts) throw new Error('Expected Slack parent message timestamp.')
+  const parentTs = parent.ts
+  const tipResponse = await postSlackAppMention({
+    messageTs: `1700000041.${Nanoid.generate().slice(0, 6)}`,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}>`,
+    threadTs: parentTs,
+  })
+  await expectSlackThreadMessage(
+    parentTs,
+    `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 · Receipt`,
+    { wait: true },
+  )
+  const replies = await slack.conversations.replies({
+    channel: Constants.slack.channelId,
+    ts: parentTs,
+  })
+  const receiptTs = replies.messages?.find((message) =>
+    message.text?.includes(
+      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 · Receipt`,
+    ),
+  )?.ts
+  if (!receiptTs) throw new Error('Expected Slack receipt message timestamp.')
+  await factory.tip_batch.insert({
+    amount_each: 1000,
+    idempotency_key: `${Chat.receiptBoostIdempotencyPrefix.replace(/:$/, '')}:${connected.workspace.id}:${Constants.slack.channelId}:${receiptTs}:${connected.senderMember.id}`,
+    provider: 'slack',
+    provider_channel_id: Constants.slack.channelId,
+    provider_id: providerId,
+    provider_thread_id: parentTs,
+    recipient_count: 1,
+    sender_member_id: connected.senderMember.id,
+    source: 'reaction',
+    status: 'confirmed',
+    token_address: Tempo.addressLookup.pathUsd,
+    total_amount: 1000,
+    transaction_hash: `0x${'1'.repeat(64)}`,
+    workspace_id: connected.workspace.id,
+  })
+  await factory.tip_batch.insert({
+    amount_each: 1000,
+    idempotency_key: `${Chat.receiptBoostIdempotencyPrefix.replace(/:$/, '')}:${connected.workspace.id}:${Constants.slack.channelId}:${receiptTs}:${boosterMember.id}`,
+    provider: 'slack',
+    provider_channel_id: Constants.slack.channelId,
+    provider_id: providerId,
+    provider_thread_id: parentTs,
+    recipient_count: 1,
+    sender_member_id: boosterMember.id,
+    source: 'reaction',
+    status: 'confirmed',
+    token_address: Tempo.addressLookup.pathUsd,
+    total_amount: 1000,
+    transaction_hash: `0x${'2'.repeat(64)}`,
+    workspace_id: connected.workspace.id,
+  })
+  await Chat.updateReceiptBoostAggregate(providerId, {
+    channelId: Constants.slack.channelId,
+    threadTs: parentTs,
+    workspaceId: connected.workspace.id,
+  })
+  expect(tipResponse.status).toBe(200)
+  await expect
+    .poll(
+      async () => {
+        const replies = await slack.conversations.replies({
+          channel: Constants.slack.channelId,
+          ts: parentTs,
+        })
+        return (
+          replies.messages?.find((message) =>
+            message.text?.startsWith('Boosts received in this thread:'),
+          )?.text ?? ''
+        )
+      },
+      { timeout: 5_000 }, // 5 seconds
+    )
+    .toContain(`• <@${unconnectedProviderUserId}> boosted · <`)
+  const aggregateReplies = await slack.conversations.replies({
+    channel: Constants.slack.channelId,
+    ts: parentTs,
+  })
+  const aggregate = aggregateReplies.messages?.find((message) =>
+    message.text?.startsWith('Boosts received in this thread:'),
+  )
+  if (!aggregate?.ts || !aggregate.text) throw new Error('Expected boost aggregate reply.')
+  const ignoredResponse = await postSlackReaction({
+    eventTs: `${aggregate.ts}-boost-ignored`,
+    messageTs: aggregate.ts,
+    reaction: '+',
+    userId: Constants.slack.adminUserId,
+  })
+  const boostCount = await db
+    .selectFrom('tip_batch')
+    .innerJoin('workspace', 'workspace.id', 'tip_batch.workspace_id')
+    .select(({ fn }) => fn.count<number>('tip_batch.id').as('count'))
+    .where('workspace.provider_id', '=', providerId)
+    .where('tip_batch.idempotency_key', 'like', `${Chat.receiptBoostIdempotencyPrefix}%`)
+    .executeTakeFirstOrThrow()
+
+  expect(ignoredResponse.status).toBe(200)
+  expect(aggregate.text).toContain('Boosts received in this thread:')
+  expect(aggregate.text).toContain(
+    `<@${Constants.slack.memberUserId}> received a boost on <slack://channel?team=${providerId}&id=${Constants.slack.channelId}&message=${receiptTs}|this message> $0.001:`,
+  )
+  expect(aggregate.text).toContain(`• <@${Constants.slack.adminUserId}> boosted · <`)
+  expect(aggregate.text).toContain(`• <@${unconnectedProviderUserId}> boosted · <`)
+  expect(
+    aggregateReplies.messages?.filter((message) =>
+      message.text?.startsWith('Boosts received in this thread:'),
+    ),
+  ).toHaveLength(1)
+  expect(
+    aggregateReplies.messages?.some((message) =>
+      message.text?.startsWith(`<@${Constants.slack.adminUserId}> boosted`),
+    ),
+  ).toBe(false)
+  expect(boostCount.count).toBe(2)
+}, 20_000) // 20 seconds
+
 test('receipt boost uses backfilled missing receipt row', async () => {
   const originalFetch = globalThis.fetch
   const fetchSpy = vi.spyOn(globalThis, 'fetch')
@@ -4146,6 +4275,96 @@ test('receipt boost confirms after approval', async () => {
   await expectSlackThreadMessage(receiptTs, `<@${Constants.slack.adminUserId}> boosted`, {
     wait: true,
   })
+  fetchSpy.mockRestore()
+}, 20_000) // 20 seconds
+
+test('threaded receipt boost confirms into aggregate after approval', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  const connected = await connectTipAccounts()
+  const parent = await memberSlack.chat.postMessage({
+    channel: Constants.slack.channelId,
+    text: 'threaded approval boost parent',
+  })
+  if (!parent.ts) throw new Error('Expected Slack parent message timestamp.')
+  const parentTs = parent.ts
+  const tipResponse = await postSlackAppMention({
+    messageTs: `1700000042.${Nanoid.generate().slice(0, 6)}`,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}>`,
+    threadTs: parentTs,
+  })
+  await expectSlackThreadMessage(
+    parentTs,
+    `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 · Receipt`,
+    { wait: true },
+  )
+  const replies = await slack.conversations.replies({
+    channel: Constants.slack.channelId,
+    ts: parentTs,
+  })
+  const receiptTs = replies.messages?.find((message) =>
+    message.text?.includes(
+      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 · Receipt`,
+    ),
+  )?.ts
+  if (!receiptTs) throw new Error('Expected Slack receipt message timestamp.')
+  await db.deleteFrom('access_key').where('account_id', '=', connected.senderAccount.id).execute()
+
+  const boostResponse = await postSlackReaction({
+    messageTs: receiptTs,
+    reaction: '+',
+    userId: Constants.slack.adminUserId,
+  })
+  const confirmParams = await getSlackPostEphemeralParams(fetchSpy, '/confirm/')
+  const token = confirmParams.get('text')?.match(/\/confirm\/(0x[0-9a-f]+\.0x[0-9a-f]+)/i)?.[1]
+  if (!token) throw new Error('Expected confirmation token in Slack ephemeral message.')
+  const confirmation = await client.api.confirm[':token'].$get({ param: { token } })
+  const confirmationJson = await confirmation.json()
+  if (!confirmationJson.ok) throw new Error('Expected confirmation metadata.')
+  if (!confirmationJson.transactionRequest) throw new Error('Expected transaction request.')
+  await expectSlackThreadMessageNotContaining(parentTs, 'Boosts received in this thread:')
+
+  const provider = Provider.create({
+    adapter: dangerous_secp256k1({ privateKey: Constants.tip.senderRootPrivateKey }),
+    chains: [
+      {
+        ...Tempo.getChain(confirmationJson.chainId),
+        rpcUrls: { default: { http: [env.RPC_URL_TESTNET!] } },
+      },
+    ],
+    transports: { [confirmationJson.chainId]: http(env.RPC_URL_TESTNET) },
+  })
+  await provider.request({
+    method: 'wallet_connect',
+    params: [{ capabilities: { method: 'register' } }],
+  })
+  const signedTransaction = await provider.request({
+    method: 'eth_signTransaction',
+    params: [
+      { ...confirmationJson.transactionRequest, chainId: toHex(confirmationJson.chainId) } as never,
+    ],
+  })
+  const confirmResponse = await client.api.confirm[':token'].$post({
+    json: { address: connected.senderAccount.address, signedTransaction },
+    param: { token },
+  })
+  await drainWaitUntil()
+
+  expect(tipResponse.status).toBe(200)
+  expect(boostResponse.status).toBe(200)
+  expect(confirmation.status).toBe(200)
+  expect(confirmationJson).toMatchObject({ kind: 'onetime_payment' })
+  expect(confirmResponse.status).toBe(200)
+  await expect(confirmResponse.json()).resolves.toMatchObject({ ok: true })
+  await expectSlackThreadMessage(parentTs, 'Boosts received in this thread:', { wait: true })
+  await expectSlackThreadMessage(
+    parentTs,
+    `<@${Constants.slack.memberUserId}> received a boost on <slack://channel?team=${providerId}&id=${Constants.slack.channelId}&message=${receiptTs}|this message> $0.001:`,
+  )
+  await expectSlackThreadMessage(parentTs, `• <@${Constants.slack.adminUserId}> boosted · <`)
+  await expectSlackThreadMessageNotContaining(
+    parentTs,
+    `<@${Constants.slack.adminUserId}> boosted · Receipt`,
+  )
   fetchSpy.mockRestore()
 }, 20_000) // 20 seconds
 
