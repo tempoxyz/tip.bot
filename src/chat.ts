@@ -4365,7 +4365,62 @@ export async function updateSlackPendingTipMessage(db: DB.Type, result: Tip.Pend
   const installation = await getSlack().getInstallation(result.pendingTip.provider_id)
   if (!installation || !result.pendingTip.provider_message_ts) return
 
-  const aggregate = await getSlackPendingTipAggregate(db, result.pendingTip)
+  const aggregate = await (async () => {
+    // Multi-recipient pending tips share one Slack summary message, so update the
+    // whole logical operation instead of rendering only the claimed row.
+    const pendingTips = await db
+      .selectFrom('pending_tip')
+      .selectAll()
+      .where('workspace_id', '=', result.pendingTip.workspace_id)
+      .where('provider_channel_id', '=', result.pendingTip.provider_channel_id)
+      .where('provider_message_ts', '=', result.pendingTip.provider_message_ts)
+      .orderBy('created_at', 'asc')
+      .execute()
+    const batchIdempotencyKey = result.pendingTip.idempotency_key.endsWith(
+      `:${result.pendingTip.recipient_provider_user_id}`,
+    )
+      ? result.pendingTip.idempotency_key.slice(
+          0,
+          -1 * (result.pendingTip.recipient_provider_user_id.length + 1),
+        )
+      : null
+    const batch = batchIdempotencyKey
+      ? await db
+          .selectFrom('tip_batch')
+          .selectAll()
+          .where('workspace_id', '=', result.pendingTip.workspace_id)
+          .where('idempotency_key', '=', batchIdempotencyKey)
+          .executeTakeFirst()
+      : null
+    if (pendingTips.length <= 1 && !batch) return null
+
+    const batchRecipients = batch
+      ? await db
+          .selectFrom('tip')
+          .innerJoin('member', 'member.id', 'tip.recipient_member_id')
+          .select('member.provider_user_id')
+          .where('tip.batch_id', '=', batch.id)
+          .where('tip.confirmed_at', 'is not', null)
+          .orderBy('tip.created_at', 'asc')
+          .execute()
+      : []
+    const sentPendingTips = await db
+      .selectFrom('pending_tip')
+      .leftJoin('tip', 'tip.id', 'pending_tip.tip_id')
+      .leftJoin('tip_batch', 'tip_batch.id', 'tip.batch_id')
+      .select([
+        'pending_tip.id',
+        'pending_tip.recipient_provider_user_id',
+        'tip_batch.transaction_hash',
+      ])
+      .where('pending_tip.workspace_id', '=', result.pendingTip.workspace_id)
+      .where('pending_tip.provider_channel_id', '=', result.pendingTip.provider_channel_id)
+      .where('pending_tip.provider_message_ts', '=', result.pendingTip.provider_message_ts)
+      .where('pending_tip.status', '=', 'sent')
+      .orderBy('pending_tip.created_at', 'asc')
+      .execute()
+    return { batch, batchRecipients, pendingTips, sentPendingTips }
+  })()
   if (aggregate) {
     await updateSlackPendingTipAggregateMessage(db, result, aggregate, installation.botToken)
     return
@@ -4496,64 +4551,19 @@ export async function updateSlackPendingTipMessage(db: DB.Type, result: Tip.Pend
   })
 }
 
-async function getSlackPendingTipAggregate(db: DB.Type, pendingTip: DB_gen.Selectable.pending_tip) {
-  if (!pendingTip.provider_message_ts) return null
-
-  const pendingTips = await db
-    .selectFrom('pending_tip')
-    .selectAll()
-    .where('workspace_id', '=', pendingTip.workspace_id)
-    .where('provider_channel_id', '=', pendingTip.provider_channel_id)
-    .where('provider_message_ts', '=', pendingTip.provider_message_ts)
-    .orderBy('created_at', 'asc')
-    .execute()
-  const batchIdempotencyKey = pendingTip.idempotency_key.endsWith(
-    `:${pendingTip.recipient_provider_user_id}`,
-  )
-    ? pendingTip.idempotency_key.slice(0, -1 * (pendingTip.recipient_provider_user_id.length + 1))
-    : null
-  const batch = batchIdempotencyKey
-    ? await db
-        .selectFrom('tip_batch')
-        .selectAll()
-        .where('workspace_id', '=', pendingTip.workspace_id)
-        .where('idempotency_key', '=', batchIdempotencyKey)
-        .executeTakeFirst()
-    : null
-  if (pendingTips.length <= 1 && !batch) return null
-
-  const batchRecipients = batch
-    ? await db
-        .selectFrom('tip')
-        .innerJoin('member', 'member.id', 'tip.recipient_member_id')
-        .select('member.provider_user_id')
-        .where('tip.batch_id', '=', batch.id)
-        .where('tip.confirmed_at', 'is not', null)
-        .orderBy('tip.created_at', 'asc')
-        .execute()
-    : []
-  const sentPendingTips = await db
-    .selectFrom('pending_tip')
-    .leftJoin('tip', 'tip.id', 'pending_tip.tip_id')
-    .leftJoin('tip_batch', 'tip_batch.id', 'tip.batch_id')
-    .select([
-      'pending_tip.id',
-      'pending_tip.recipient_provider_user_id',
-      'tip_batch.transaction_hash',
-    ])
-    .where('pending_tip.workspace_id', '=', pendingTip.workspace_id)
-    .where('pending_tip.provider_channel_id', '=', pendingTip.provider_channel_id)
-    .where('pending_tip.provider_message_ts', '=', pendingTip.provider_message_ts)
-    .where('pending_tip.status', '=', 'sent')
-    .orderBy('pending_tip.created_at', 'asc')
-    .execute()
-  return { batch, batchRecipients, pendingTips, sentPendingTips }
-}
-
 async function updateSlackPendingTipAggregateMessage(
   db: DB.Type,
   result: Tip.PendingTipClaimResult,
-  aggregate: NonNullable<Awaited<ReturnType<typeof getSlackPendingTipAggregate>>>,
+  aggregate: {
+    batch: DB_gen.Selectable.tip_batch | null | undefined
+    batchRecipients: Array<{ provider_user_id: string }>
+    pendingTips: DB_gen.Selectable.pending_tip[]
+    sentPendingTips: Array<{
+      id: string
+      recipient_provider_user_id: string
+      transaction_hash: string | null
+    }>
+  },
   botToken: string,
 ) {
   if (!result.pendingTip.provider_message_ts) return

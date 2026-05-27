@@ -2644,6 +2644,104 @@ test('@Tipbot mention sends connected Slack Connect multi-recipient tip and queu
   await expectSlackThreadMessage(messageTs, 'Run `/tip connect` to receive it', { channelId })
 }, 20_000) // 20 seconds
 
+test('@Tipbot mention updates mixed multi-recipient summary when queued recipient connects', async () => {
+  const connected = await connectTipAccounts()
+  await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
+  const channelId = await getSlackConnectChannelId()
+  const tipMessageTs = `1700000006.${Nanoid.generate().slice(0, 6)}`
+  const connectMessageTs = `1700000007.${Nanoid.generate().slice(0, 6)}`
+  await expectSlackConnectEmulator(channelId)
+
+  await postSlackAppMention({
+    channelId,
+    messageTs: tipMessageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}> <@${Constants.slackConnect.userId}>`,
+  })
+  const pendingTip = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('sender_member_id', '=', connected.senderMember.id)
+    .where('recipient_provider_user_id', '=', Constants.slackConnect.userId)
+    .executeTakeFirstOrThrow()
+  const connectResponse = await postSlackAppMention({
+    channelId,
+    messageTs: connectMessageTs,
+    text: `<@${Constants.slack.botUserId}> connect`,
+    userId: Constants.slackConnect.userId,
+  })
+  const token = await getLatestConnectToken({ channelId })
+  const link = await db
+    .selectFrom('account_link_token')
+    .innerJoin('member', 'member.id', 'account_link_token.member_id')
+    .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+    .select([
+      'account_link_token.access_key_address',
+      'account_link_token.access_key_expires_at',
+      'workspace.chain_id',
+      'workspace.default_token_address',
+    ])
+    .where('member.provider_user_id', '=', Constants.slackConnect.userId)
+    .where('workspace.provider_id', '=', Constants.slackConnect.teamId)
+    .executeTakeFirstOrThrow()
+  const root = Account.fromSecp256k1(
+    '0x5555555555555555555555555555555555555555555555555555555555555555',
+  )
+  vi.spyOn(env.PENDING_TIP_QUEUE, 'send').mockResolvedValue({
+    metadata: { metrics: { backlogBytes: 0, backlogCount: 0 } },
+  })
+  const completeResponse = await client.api.account.link[':token'].$post({
+    json: {
+      address: root.address,
+      keyAuthorization: await AccountLink.signKeyAuthorization(root, {
+        accessKeyAddress: link.access_key_address,
+        chainId: link.chain_id,
+        expiresAt: link.access_key_expires_at,
+        tokenAddress: Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
+      }),
+    },
+    param: { token },
+  })
+  await drainWaitUntil()
+  const batch = createMessageBatch<processPendingTipMessage.Body>(
+    processPendingTipMessage.queueName,
+    [
+      {
+        attempts: 1,
+        body: { pendingTipId: pendingTip.id },
+        id: crypto.randomUUID(),
+        timestamp: new Date(),
+      },
+    ],
+  )
+
+  await processPendingTipMessage(batch.messages[0]!)
+  const updatedPendingTip = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('id', '=', pendingTip.id)
+    .executeTakeFirstOrThrow()
+
+  expect(connectResponse.status).toBe(200)
+  expect(completeResponse.status).toBe(200)
+  expect(updatedPendingTip.status).toBe('sent')
+  await expectSlackThreadMessage(
+    tipMessageTs,
+    `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}>, <@${Constants.slackConnect.userId}> $0.001 · Receipt Receipt`,
+    { channelId, wait: true },
+  )
+  await expectSlackThreadMessageNotContaining(tipMessageTs, 'queued', { channelId })
+}, 20_000) // 20 seconds
+
 test.each([
   {
     amount: 2000,
