@@ -1065,7 +1065,7 @@ export async function claimPendingTip(
       message: result.message ?? 'Pending tip could not be sent.',
       status: 'failed',
     })
-  if (result.status !== 'sent')
+  if (result.status === 'queued')
     return await updatePendingTipFailed(db, pending, {
       message: 'Pending tip could not be sent.',
       status: 'failed',

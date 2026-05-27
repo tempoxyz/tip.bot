@@ -830,6 +830,95 @@ describe('/tip @account', () => {
     await expectSlackMessage('Run `/tip connect` to receive it')
   })
 
+  test('claims pending tip when recipient connects', async () => {
+    const connected = await connectTipAccounts({ recipient: false })
+
+    await postSlashCommand(`<@${Constants.slack.memberUserId}> for coffee`)
+    const pending = await db
+      .selectFrom('pending_tip')
+      .selectAll()
+      .where('sender_member_id', '=', connected.senderMember.id)
+      .executeTakeFirstOrThrow()
+    const recipientMember = await db
+      .selectFrom('member')
+      .select('provider_identity_id')
+      .where('id', '=', pending.recipient_member_id)
+      .executeTakeFirstOrThrow()
+    await db
+      .updateTable('provider_identity')
+      .set({ account_id: connected.recipientAccount.id, updated_at: new Date().toISOString() })
+      .where('id', '=', recipientMember.provider_identity_id)
+      .execute()
+
+    const result = await Tip.claimPendingTip(env, { pendingTipId: pending.id })
+    const updated = await db
+      .selectFrom('pending_tip')
+      .selectAll()
+      .where('id', '=', pending.id)
+      .executeTakeFirstOrThrow()
+    const tips = await db
+      .selectFrom('tip')
+      .selectAll()
+      .where('idempotency_key', '=', `pending:${pending.id}`)
+      .execute()
+
+    expect(result).toMatchObject({ ok: true, status: 'sent' })
+    expect(updated.status).toBe('sent')
+    expect(updated.tip_id).toBe(tips[0]?.id)
+    expect(tips).toHaveLength(1)
+
+    await db
+      .updateTable('pending_tip')
+      .set({ status: 'sending', tip_id: null, updated_at: new Date().toISOString() })
+      .where('id', '=', pending.id)
+      .execute()
+
+    await expect(Tip.claimPendingTip(env, { pendingTipId: pending.id })).resolves.toMatchObject({
+      ok: true,
+      status: 'sent',
+    })
+    await expect(
+      db
+        .selectFrom('tip')
+        .selectAll()
+        .where('idempotency_key', '=', `pending:${pending.id}`)
+        .execute(),
+    ).resolves.toHaveLength(1)
+  }, 20_000) // 20 seconds
+
+  test('expires pending tip without sending payment', async () => {
+    const connected = await connectTipAccounts({ recipient: false })
+
+    await postSlashCommand(`<@${Constants.slack.memberUserId}>`)
+    const pending = await db
+      .selectFrom('pending_tip')
+      .selectAll()
+      .where('sender_member_id', '=', connected.senderMember.id)
+      .executeTakeFirstOrThrow()
+    await db
+      .updateTable('pending_tip')
+      .set({ expires_at: new Date(Date.now() - 60 * 1000).toISOString() }) // 1 minute ago
+      .where('id', '=', pending.id)
+      .execute()
+
+    const result = await Tip.claimPendingTip(env, { pendingTipId: pending.id })
+    const updated = await db
+      .selectFrom('pending_tip')
+      .selectAll()
+      .where('id', '=', pending.id)
+      .executeTakeFirstOrThrow()
+    const tips = await db
+      .selectFrom('tip')
+      .selectAll()
+      .where('idempotency_key', '=', `pending:${pending.id}`)
+      .execute()
+
+    expect(result).toMatchObject({ ok: false, status: 'expired' })
+    expect(updated.status).toBe('expired')
+    expect(updated.failure_reason).toBe('Pending tip expired before recipient connected.')
+    expect(tips).toHaveLength(0)
+  })
+
   test('handles insufficient funds', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
     const handleTipRequest = vi.spyOn(Tip, 'handleTipRequest').mockResolvedValue({
