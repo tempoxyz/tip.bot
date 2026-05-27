@@ -3540,6 +3540,8 @@ test('plus reaction boosts a receipt', async () => {
 }, 20_000) // 20 seconds
 
 test('receipt boost uses backfilled missing receipt row', async () => {
+  const originalFetch = globalThis.fetch
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
   await connectTipAccounts()
 
   const tipResponse = await postSlashCommand(`<@${Constants.slack.memberUserId}>`)
@@ -3549,17 +3551,39 @@ test('receipt boost uses backfilled missing receipt row', async () => {
   const tipBatch = await db
     .selectFrom('tip_batch')
     .innerJoin('workspace', 'workspace.id', 'tip_batch.workspace_id')
-    .select('tip_batch.transaction_hash')
+    .select(['tip_batch.transaction_hash', 'workspace.chain_id'])
     .where('workspace.provider_id', '=', providerId)
     .where('tip_batch.idempotency_key', 'like', 'command:%')
     .executeTakeFirstOrThrow()
   if (!tipBatch.transaction_hash) throw new Error('Expected original tip transaction hash.')
+  const transactionHash = tipBatch.transaction_hash
   await db.deleteFrom('tip_receipt_message').where('message_ts', '=', receiptTs).execute()
-  await Chat.recordSlackReceiptMessageForTransaction(db, {
-    channelId: Constants.slack.channelId,
-    messageTs: receiptTs,
-    threadTs: receiptTs,
-    transactionHash: tipBatch.transaction_hash,
+  fetchSpy.mockImplementation((input, init) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    const params = slackFetchBodyParams(init?.body)
+    if (url.endsWith('/conversations.replies') && params.get('ts') === receiptTs)
+      return Promise.resolve(
+        Response.json({
+          messages: [
+            {
+              blocks: [
+                {
+                  text: {
+                    text: `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 · <${Tempo.formatTxLink(tipBatch.chain_id, transactionHash)}|Receipt>`,
+                    type: 'mrkdwn',
+                  },
+                  type: 'section',
+                },
+              ],
+              subtype: 'bot_message',
+              text: `<@${Constants.slack.adminUserId}> tipped <@${Constants.slack.memberUserId}> $0.001 · Receipt`,
+              ts: receiptTs,
+            },
+          ],
+          ok: true,
+        }),
+      )
+    return originalFetch(input, init)
   })
   const boostResponse = await postSlackReaction({
     messageTs: receiptTs,
@@ -3591,6 +3615,138 @@ test('receipt boost uses backfilled missing receipt row', async () => {
           .selectFrom('tip_batch')
           .innerJoin('workspace', 'workspace.id', 'tip_batch.workspace_id')
           .select(['tip_batch.idempotency_key', 'tip_batch.status'])
+          .where('workspace.provider_id', '=', providerId)
+          .where('tip_batch.idempotency_key', 'like', `${Chat.receiptBoostIdempotencyPrefix}%`)
+          .executeTakeFirst(),
+      { timeout: 10_000 }, // 10 seconds
+    )
+    .toMatchObject({ idempotency_key: expect.stringMatching(/^boost:[^:]/) })
+}, 20_000) // 20 seconds
+
+test('receipt boost works for Slack Connect slash command receipt', async () => {
+  await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  await connectTipAccounts({ recipient: false })
+  const connectWorkspace = await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
+  await insertMember({
+    account_id: (
+      await findOrCreateAccount(
+        Account.fromSecp256k1(Constants.tip.recipientRootPrivateKey).address,
+      )
+    ).id,
+    provider_user_id: Constants.slackConnect.userId,
+    workspace_id: connectWorkspace.id,
+  })
+  const channelId = await getSlackConnectChannelId()
+
+  const tipResponse = await postSlashCommand(`<@${Constants.slackConnect.userId}>`, { channelId })
+  const receiptTs = await findSlackMessageTs(
+    `<@${Constants.slack.adminUserId}> tipped <@${Constants.slackConnect.userId}> $0.001 · Receipt`,
+    { channelId },
+  )
+  const boostResponse = await postSlackReaction({
+    authorizations: [{ is_bot: true, team_id: providerId, user_id: Constants.slack.botUserId }],
+    channelId,
+    messageTs: receiptTs,
+    reaction: '+',
+    teamId: Constants.slackConnect.teamId,
+    userId: Constants.slack.adminUserId,
+  })
+
+  expect(tipResponse.status).toBe(200)
+  expect(boostResponse.status).toBe(200)
+  await expect
+    .poll(
+      () =>
+        db
+          .selectFrom('tip_batch')
+          .innerJoin('workspace', 'workspace.id', 'tip_batch.workspace_id')
+          .select('tip_batch.idempotency_key')
+          .where('workspace.provider_id', '=', providerId)
+          .where('tip_batch.idempotency_key', 'like', `${Chat.receiptBoostIdempotencyPrefix}%`)
+          .executeTakeFirst(),
+      { timeout: 10_000 }, // 10 seconds
+    )
+    .toMatchObject({ idempotency_key: expect.stringMatching(/^boost:[^:]/) })
+}, 20_000) // 20 seconds
+
+test('receipt boost works for Slack Connect threaded Tipbot receipt', async () => {
+  await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  await connectTipAccounts({ recipient: false })
+  const connectWorkspace = await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
+  await insertMember({
+    account_id: (
+      await findOrCreateAccount(
+        Account.fromSecp256k1(Constants.tip.recipientRootPrivateKey).address,
+      )
+    ).id,
+    provider_user_id: Constants.slackConnect.userId,
+    workspace_id: connectWorkspace.id,
+  })
+  const channelId = await getSlackConnectChannelId()
+  const parent = await memberSlack.chat.postMessage({
+    channel: channelId,
+    text: 'Slack Connect threaded boost parent',
+  })
+  if (!parent.ts) throw new Error('Expected Slack parent message timestamp.')
+  const messageTs = `1700000040.${Nanoid.generate().slice(0, 6)}`
+
+  const tipResponse = await postSlackAppMention({
+    authorizations: [{ is_bot: true, team_id: providerId, user_id: Constants.slack.botUserId }],
+    channelId,
+    contextTeamId: providerId,
+    messageTs,
+    teamId: Constants.slackConnect.teamId,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slackConnect.userId}>`,
+    threadTs: parent.ts,
+  })
+  await expectSlackThreadMessage(
+    parent.ts,
+    `<@${Constants.slack.adminUserId}> tipped <@${Constants.slackConnect.userId}> $0.001 · Receipt`,
+    { channelId, wait: true },
+  )
+  const replies = await slack.conversations.replies({ channel: channelId, ts: parent.ts })
+  const receiptTs = replies.messages?.find((message) =>
+    message.text?.includes(
+      `<@${Constants.slack.adminUserId}> tipped <@${Constants.slackConnect.userId}> $0.001 · Receipt`,
+    ),
+  )?.ts
+  if (!receiptTs) throw new Error('Expected Slack receipt message timestamp.')
+  const boostResponse = await postSlackReaction({
+    authorizations: [{ is_bot: true, team_id: providerId, user_id: Constants.slack.botUserId }],
+    channelId,
+    messageTs: receiptTs,
+    reaction: '+',
+    teamId: Constants.slackConnect.teamId,
+    userId: Constants.slack.adminUserId,
+  })
+
+  expect(tipResponse.status).toBe(200)
+  expect(boostResponse.status).toBe(200)
+  await expect
+    .poll(
+      () =>
+        db
+          .selectFrom('tip_batch')
+          .innerJoin('workspace', 'workspace.id', 'tip_batch.workspace_id')
+          .select('tip_batch.idempotency_key')
           .where('workspace.provider_id', '=', providerId)
           .where('tip_batch.idempotency_key', 'like', `${Chat.receiptBoostIdempotencyPrefix}%`)
           .executeTakeFirst(),
@@ -5566,8 +5722,10 @@ function setupSlackDMPostMessageFetchSpy() {
   return { channelId, fetchSpy }
 }
 
-async function findSlackMessageTs(text: string) {
-  const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+async function findSlackMessageTs(text: string, options: { channelId?: string } = {}) {
+  const history = await slack.conversations.history({
+    channel: options.channelId ?? Constants.slack.channelId,
+  })
   const message = history.messages?.find((message) => message.text?.includes(text))
 
   expect(history.ok).toBe(true)
@@ -5708,15 +5866,22 @@ async function postSlackAppMention(options: {
 }
 
 async function postSlackReaction(options: {
+  authorizations?: Array<{
+    is_bot?: boolean
+    team_id?: string
+    user_id?: string
+  }>
   channelId?: string
   eventId?: string
   eventTs?: string
   itemUserId?: string
   messageTs: string
   reaction: string
+  teamId?: string
   userId: string
 }) {
   const body = JSON.stringify({
+    ...(options.authorizations ? { authorizations: options.authorizations } : {}),
     event: {
       event_ts: options.eventTs ?? `${options.messageTs}-reaction`,
       item: {
@@ -5730,7 +5895,7 @@ async function postSlackReaction(options: {
       user: options.userId,
     },
     event_id: options.eventId ?? `Ev${Nanoid.generate()}`,
-    team_id: providerId,
+    team_id: options.teamId ?? providerId,
     type: 'event_callback',
   })
   const response = await client.api.chat.slack.$post(

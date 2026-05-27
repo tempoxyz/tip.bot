@@ -266,6 +266,9 @@ export function getChat() {
 
     const context = await (async () => {
       const db = DB.create(env.DB)
+      const providerId =
+        reaction.authorizations?.find((authorization) => authorization.team_id)?.team_id ??
+        reaction.team_id
       const workspace = await db
         .selectFrom('workspace')
         .select([
@@ -282,7 +285,7 @@ export function getChat() {
           'workspace.updated_at',
         ])
         .where('workspace.provider', '=', 'slack')
-        .where('workspace.provider_id', '=', reaction.team_id)
+        .where('workspace.provider_id', '=', providerId)
         .executeTakeFirst()
       if (!workspace) return
       const reactionTipConfigs = await db
@@ -296,7 +299,7 @@ export function getChat() {
       if (!reactionTipConfig && !isReceiptBoostReaction(reaction.reaction)) return
       return {
         db,
-        provider: { id: reaction.team_id, type: 'slack' },
+        provider: { id: providerId, type: 'slack' },
         ...(reactionTipConfig
           ? {
               reactionTipConfig: {
@@ -1578,6 +1581,15 @@ export function isReceiptBoostIdempotencyKey(value: string) {
 }
 
 const slackReactionEventSchema = z.object({
+  authorizations: z
+    .array(
+      z.object({
+        is_bot: z.boolean().optional(),
+        team_id: z.string().min(1).nullable().optional(),
+        user_id: z.string().min(1).nullable().optional(),
+      }),
+    )
+    .optional(),
   event_id: z.string().min(1).optional(),
   event_ts: z.string().min(1),
   item: z.object({
@@ -2052,11 +2064,9 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
   const installation = await getSlack().getInstallation(provider.id)
   if (!installation) return
 
-  const slackConnectActor = await resolveSlackConnectActor(
-    provider.id,
-    event.item.channel,
-    event.user,
-  )
+  const slackConnectActor = isReceiptBoostReaction(event.reaction)
+    ? { blocked: false as const, external: false as const }
+    : await resolveSlackConnectActor(provider.id, event.item.channel, event.user)
   if (slackConnectActor.blocked) return
   if (slackConnectActor.external) {
     const senderWorkspace = await db
@@ -2216,8 +2226,9 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
         }
 
       // Backfill older receipts by parsing the receipt link from the Slack message.
-      if (!message?.bot_id && message?.subtype !== 'bot_message') return null
-      const transactionHash = JSON.stringify(message).match(/\/receipt\/(0x[0-9a-fA-F]{64})/)?.[1]
+      const transactionHash = JSON.stringify(message ?? {}).match(
+        /\/receipt\/(0x[0-9a-fA-F]{64})/,
+      )?.[1]
       if (!transactionHash) return null
       const batch = await db
         .selectFrom('tip_batch')
@@ -2227,6 +2238,7 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
           eb.or([
             eb('provider_channel_id', '=', event.item.channel),
             eb('provider_channel_id', '=', `slack:${event.item.channel}`),
+            eb('provider_channel_id', '=', ''),
           ]),
         )
         .where('transaction_hash', '=', transactionHash)
