@@ -2399,7 +2399,7 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
           `<@${sender.provider_user_id}> boosted${
             receipt.threadTs === receipt.messageTs
               ? ''
-              : ` ${formatSlackMessageLink(provider.id, event.item.channel, receipt.messageTs)}`
+              : ` ${Slack.formatMessageLink(provider.id, event.item.channel, receipt.messageTs)}`
           }`,
           result.chainId,
           result.transactionHash,
@@ -2430,7 +2430,7 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
         result.confirmUrl,
         {
           label: 'Confirm boost',
-          message: `Tipbot needs your approval to boost${receipt.threadTs === receipt.messageTs ? '' : ` ${formatSlackMessageLink(provider.id, event.item.channel, receipt.messageTs)}`}.`,
+          message: `Tipbot needs your approval to boost${receipt.threadTs === receipt.messageTs ? '' : ` ${Slack.formatMessageLink(provider.id, event.item.channel, receipt.messageTs)}`}.`,
           threadTs: receipt.threadTs,
         },
       )
@@ -2663,14 +2663,6 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
       return 'Payment failed.'
     })(),
   )
-}
-
-function formatSlackMessageLink(providerId: string, channelId: string, messageTs: string) {
-  const url = new URL('slack://channel')
-  url.searchParams.set('team', providerId)
-  url.searchParams.set('id', channelId)
-  url.searchParams.set('message', messageTs)
-  return `<${url}|this message>`
 }
 
 function isReceiptBoostReaction(reaction: string) {

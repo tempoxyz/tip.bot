@@ -121,6 +121,14 @@ export function getChannelId(channelId: string) {
   return channelId.replace(/^slack:/, '').split(':')[0] ?? ''
 }
 
+export function formatMessageLink(providerId: string, channelId: string, messageTs: string) {
+  const url = new URL('slack://channel')
+  url.searchParams.set('team', providerId)
+  url.searchParams.set('id', channelId)
+  url.searchParams.set('message', messageTs)
+  return `<${url}|this message>`
+}
+
 export function isDMChannelId(channelId: string) {
   return getChannelId(channelId).startsWith('D')
 }
