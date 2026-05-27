@@ -2266,7 +2266,10 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
       }
 
       // Backfill older receipts by parsing the receipt link from the Slack message.
-      if (message?.text?.startsWith('Reaction tips') || message?.text?.startsWith('Boosted '))
+      if (
+        message?.text?.startsWith('Reaction tips') ||
+        message?.text?.startsWith('Boosts received in this thread:')
+      )
         return null
       const transactionHash = JSON.stringify(message ?? {}).match(
         /\/receipt\/(0x[0-9a-fA-F]{64})/,
@@ -3225,10 +3228,26 @@ export async function updateReceiptBoostAggregate(
       )
         ? formatCurrencyAmount(amount, token.currency)
         : formatTipAmount(amount, token.currency, token.symbol)
-      return `Boosted ${Slack.formatMessageLink(providerId, options.channelId, group.messageTs)} ${displayAmount}:\n${group.lines.join('\n')}`
+      const recipients = await db
+        .selectFrom('tip_receipt_message')
+        .innerJoin('tip', 'tip.batch_id', 'tip_receipt_message.tip_batch_id')
+        .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
+        .select('recipient.provider_user_id')
+        .where('tip_receipt_message.workspace_id', '=', options.workspaceId)
+        .where('tip_receipt_message.channel_id', '=', options.channelId)
+        .where('tip_receipt_message.message_ts', '=', group.messageTs)
+        .orderBy('tip.created_at', 'asc')
+        .execute()
+      const recipientCount = recipients.length
+      const recipientText =
+        recipientCount === 1
+          ? `<@${recipients[0]!.provider_user_id}> received a boost`
+          : `${recipientCount} accounts received boosts`
+      const amountText = recipientCount === 1 ? displayAmount : `${displayAmount} each`
+      return `${recipientText} on ${Slack.formatMessageLink(providerId, options.channelId, group.messageTs)} ${amountText}:\n${group.lines.join('\n')}`
     }),
   )
-  const text = groupTexts.join('\n\n')
+  const text = `Boosts received in this thread:\n\n${groupTexts.join('\n\n')}`
   const existing = await db
     .selectFrom('receipt_boost_thread')
     .selectAll()
