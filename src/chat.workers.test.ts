@@ -2342,6 +2342,52 @@ test('@Tipbot mention queues Slack Connect tip for unconnected recipient workspa
   await expectSlackThreadMessage(messageTs, 'Run `/tip connect` to receive it', { channelId })
 }, 20_000) // 20 seconds
 
+test('@Tipbot mention fails closed for ambiguous Slack Connect recipient', async () => {
+  const connected = await connectTipAccounts({ recipient: false })
+  await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  const connectWorkspace = await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
+  await insertMember({
+    account_id: (await factory.account.insert({})).id,
+    provider_user_id: Constants.slackConnect.userId,
+    workspace_id: connected.workspace.id,
+  })
+  await insertMember({
+    account_id: (await factory.account.insert({})).id,
+    provider_user_id: Constants.slackConnect.userId,
+    workspace_id: connectWorkspace.id,
+  })
+  const channelId = await getSlackConnectChannelId()
+  const messageTs = `1700000005.${Nanoid.generate().slice(0, 6)}`
+  await expectSlackConnectEmulator(channelId)
+
+  const response = await postSlackAppMention({
+    channelId,
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slackConnect.userId}>`,
+  })
+  const pendingTips = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('sender_member_id', '=', connected.senderMember.id)
+    .execute()
+
+  expect(response.status).toBe(200)
+  expect(pendingTips).toEqual([])
+  await expectSlackMessage(
+    `Payment not sent. <@${Constants.slackConnect.userId}> could not be resolved safely across Slack workspaces.`,
+    { channelId },
+  )
+}, 20_000) // 20 seconds
+
 test('@Tipbot mention queued Slack Connect tip uses mention connect when recipient workspace is uninstalled', async () => {
   const connected = await connectTipAccounts({ recipient: false })
   await deleteSlackConnectWorkspace()

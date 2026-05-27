@@ -19,6 +19,7 @@
     "dev": "PORTLESS_HTTPS=1 portless run vp dev",
     "dev:app": "vp dev",
     "gen:types": "cp -n .env.example .env 2>/dev/null; wrangler types src/worker-configuration.d.ts",
+    "pending_tip:requeue": "node --experimental-strip-types scripts/pending_tip.ts requeue",
     "prepare": "vp config && pnpm gen:types",
     "preview": "vp build && vp preview",
     "slack:app": "node --experimental-strip-types scripts/slack.ts",
