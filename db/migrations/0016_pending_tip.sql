@@ -1,5 +1,5 @@
 -- Store queued tips for recipients who have not connected a wallet yet.
-CREATE TABLE "pending_tip" (
+CREATE TABLE IF NOT EXISTS "pending_tip" (
   "id" TEXT PRIMARY KEY NOT NULL,
   "workspace_id" TEXT NOT NULL REFERENCES "workspace" ("id") ON DELETE CASCADE,
   "idempotency_key" TEXT NOT NULL UNIQUE,
@@ -29,7 +29,7 @@ CREATE TABLE "pending_tip" (
   CHECK ("status" IN ('failed', 'expired') OR "failure_reason" IS NULL)
 );
 
-CREATE INDEX "pending_tip_recipient_status_idx" ON "pending_tip" ("recipient_member_id", "status");
-CREATE INDEX "pending_tip_sender_status_idx" ON "pending_tip" ("sender_id", "status");
-CREATE INDEX "pending_tip_workspace_created_idx" ON "pending_tip" ("workspace_id", "created_at");
-CREATE INDEX "pending_tip_status_expires_idx" ON "pending_tip" ("status", "expires_at");
+CREATE INDEX IF NOT EXISTS "pending_tip_recipient_status_idx" ON "pending_tip" ("recipient_member_id", "status");
+CREATE INDEX IF NOT EXISTS "pending_tip_sender_status_idx" ON "pending_tip" ("sender_id", "status");
+CREATE INDEX IF NOT EXISTS "pending_tip_workspace_created_idx" ON "pending_tip" ("workspace_id", "created_at");
+CREATE INDEX IF NOT EXISTS "pending_tip_status_expires_idx" ON "pending_tip" ("status", "expires_at");
