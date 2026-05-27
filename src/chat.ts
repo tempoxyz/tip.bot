@@ -2197,7 +2197,58 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
     return { thread_ts: event.item.ts, user: event.item_user }
   })()
   if (isReceiptBoostReaction(event.reaction)) {
-    const receipt = await getTipReceiptMessage(db, workspace, event, message)
+    const receipt = await (async () => {
+      // Prefer the receipt index recorded when Tipbot posted the receipt.
+      const existing = await db
+        .selectFrom('tip_receipt_message')
+        .select(['channel_id', 'message_ts', 'thread_ts', 'tip_batch_id', 'workspace_id'])
+        .where('workspace_id', '=', workspace.id)
+        .where('channel_id', '=', event.item.channel)
+        .where('message_ts', '=', event.item.ts)
+        .executeTakeFirst()
+      if (existing)
+        return {
+          channelId: existing.channel_id,
+          messageTs: existing.message_ts,
+          threadTs: existing.thread_ts,
+          tipBatchId: existing.tip_batch_id,
+          workspaceId: existing.workspace_id,
+        }
+
+      // Backfill older receipts by parsing the receipt link from the Slack message.
+      if (!message?.bot_id && message?.subtype !== 'bot_message') return null
+      const transactionHash = JSON.stringify(message).match(/\/receipt\/(0x[0-9a-fA-F]{64})/)?.[1]
+      if (!transactionHash) return null
+      const batch = await db
+        .selectFrom('tip_batch')
+        .select(['id', 'workspace_id'])
+        .where('workspace_id', '=', workspace.id)
+        .where((eb) =>
+          eb.or([
+            eb('provider_channel_id', '=', event.item.channel),
+            eb('provider_channel_id', '=', `slack:${event.item.channel}`),
+          ]),
+        )
+        .where('transaction_hash', '=', transactionHash)
+        .where('status', '=', 'confirmed')
+        .executeTakeFirst()
+      if (!batch) return null
+      const threadTs = message.thread_ts ?? event.item.ts
+      await recordSlackReceiptMessage(db, {
+        channelId: event.item.channel,
+        messageTs: event.item.ts,
+        threadTs,
+        tipBatchId: batch.id,
+        workspaceId: batch.workspace_id,
+      })
+      return {
+        channelId: event.item.channel,
+        messageTs: event.item.ts,
+        threadTs,
+        tipBatchId: batch.id,
+        workspaceId: batch.workspace_id,
+      }
+    })()
     if (!receipt) return
 
     const sender = await db
@@ -2608,69 +2659,6 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
       return 'Payment failed.'
     })(),
   )
-}
-
-async function getTipReceiptMessage(
-  db: DB.Type,
-  workspace: DB_gen.Selectable.workspace,
-  event: SlackReactionEvent,
-  message?: {
-    bot_id?: string
-    blocks?: unknown
-    subtype?: string
-    text?: string
-    thread_ts?: string
-    user?: string
-  },
-) {
-  const existing = await db
-    .selectFrom('tip_receipt_message')
-    .select(['channel_id', 'message_ts', 'thread_ts', 'tip_batch_id', 'workspace_id'])
-    .where('workspace_id', '=', workspace.id)
-    .where('channel_id', '=', event.item.channel)
-    .where('message_ts', '=', event.item.ts)
-    .executeTakeFirst()
-  if (existing)
-    return {
-      channelId: existing.channel_id,
-      messageTs: existing.message_ts,
-      threadTs: existing.thread_ts,
-      tipBatchId: existing.tip_batch_id,
-      workspaceId: existing.workspace_id,
-    }
-
-  if (!message?.bot_id && message?.subtype !== 'bot_message') return null
-  const transactionHash = JSON.stringify(message).match(/\/receipt\/(0x[0-9a-fA-F]{64})/)?.[1]
-  if (!transactionHash) return null
-  const batch = await db
-    .selectFrom('tip_batch')
-    .select(['id', 'workspace_id'])
-    .where('workspace_id', '=', workspace.id)
-    .where((eb) =>
-      eb.or([
-        eb('provider_channel_id', '=', event.item.channel),
-        eb('provider_channel_id', '=', `slack:${event.item.channel}`),
-      ]),
-    )
-    .where('transaction_hash', '=', transactionHash)
-    .where('status', '=', 'confirmed')
-    .executeTakeFirst()
-  if (!batch) return null
-  const threadTs = message.thread_ts ?? event.item.ts
-  await recordSlackReceiptMessage(db, {
-    channelId: event.item.channel,
-    messageTs: event.item.ts,
-    threadTs,
-    tipBatchId: batch.id,
-    workspaceId: batch.workspace_id,
-  })
-  return {
-    channelId: event.item.channel,
-    messageTs: event.item.ts,
-    threadTs,
-    tipBatchId: batch.id,
-    workspaceId: batch.workspace_id,
-  }
 }
 
 function formatSlackBoostReceiptText(
