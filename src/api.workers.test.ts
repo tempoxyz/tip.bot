@@ -347,6 +347,59 @@ describe('/api/account/link/:token', () => {
     expect(link.used_at).toEqual(expect.any(String))
   })
 
+  test('queues pending tips when wallet connection completes', async () => {
+    const pending = await createPendingAccountLink()
+    const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    const senderAccount = await factory.account.insert({})
+    const senderMember = await insertMember({
+      account_id: senderAccount.id,
+      provider_user_id: 'USENDERPENDING',
+      workspace_id: pending.workspace.id,
+    })
+    const pendingTip = await db
+      .insertInto('pending_tip')
+      .values({
+        access_key_id: null,
+        amount: 1000,
+        chain_id: pending.workspace.chain_id,
+        expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString(), // 15 minutes
+        failure_reason: null,
+        id: Nanoid.generate(),
+        idempotency_key: `pending:${Nanoid.generate()}`,
+        memo: null,
+        provider: 'slack',
+        provider_channel_id: `slack:${apiChannelId}`,
+        provider_id: pending.workspace.provider_id,
+        provider_message_ts: null,
+        provider_thread_id: null,
+        recipient_member_id: pending.member.id,
+        recipient_provider_user_id: pending.member.provider_user_id,
+        sender_id: senderAccount.id,
+        sender_member_id: senderMember.id,
+        sender_provider_user_id: senderMember.provider_user_id,
+        source: 'command',
+        status: 'pending',
+        tip_id: null,
+        token_address: Tempo.addressLookup.pathUsd,
+        workspace_id: pending.workspace.id,
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow()
+    const sendSpy = vi.spyOn(env.PENDING_TIP_QUEUE, 'send').mockResolvedValue({
+      metadata: { metrics: { backlogBytes: 0, backlogCount: 0 } },
+    })
+    const keyAuthorization = await signKeyAuthorization(root, pending)
+
+    const response = await client.api.account.link[':token'].$post({
+      json: { address: root.address, keyAuthorization },
+      param: { token: pending.token },
+    })
+    await Promise.all(waitUntil)
+
+    expect(response.status).toBe(200)
+    expect(sendSpy).toHaveBeenCalledWith({ pendingTipId: pendingTip.id })
+  })
+
   test('notifies Slack member when wallet connection completes', async () => {
     const providerId = `T${Nanoid.generate()}`
     await Chat.getChat().initialize()

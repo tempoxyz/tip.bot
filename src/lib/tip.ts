@@ -34,6 +34,20 @@ export type TipResult =
       transactionHash: string
     }
   | {
+      amount: string
+      chainId: number
+      isDefaultToken: boolean
+      memo: string | null
+      ok: true
+      pendingTipId: string
+      recipientProviderUserId: string
+      senderProviderUserId: string
+      source: 'command' | 'mention' | 'reaction'
+      status: 'queued'
+      tokenCurrency: string
+      tokenSymbol: string
+    }
+  | {
       code:
         | 'failed'
         | 'confirmation_required'
@@ -70,6 +84,29 @@ export type TipBatchResult =
     }
   | Extract<TipResult, { ok: false }>
 
+export type PendingTipClaimResult =
+  | {
+      amount: string
+      chainId: number
+      isDefaultToken: boolean
+      memo: string | null
+      ok: true
+      pendingTip: Database.Selectable.pending_tip
+      recipientProviderUserId: string
+      senderProviderUserId: string
+      status: 'sent'
+      tokenCurrency: string
+      tokenSymbol: string
+      transactionHash: string
+    }
+  | {
+      code: 'expired' | 'failed'
+      message: string
+      ok: false
+      pendingTip: Database.Selectable.pending_tip
+      status: 'expired' | 'failed'
+    }
+
 export type TipRecipientInput = {
   recipientProviderLabel?: string
   recipientProviderUserId: string
@@ -104,6 +141,7 @@ export async function handleTipRequest(
     recipientProviderWorkspaceId?: string
     senderProviderUserId: string
     settingsProviderId?: string
+    source?: 'command' | 'mention' | 'reaction'
     tokenAddress?: string
     workspaceProviderId?: string
   },
@@ -173,6 +211,8 @@ export async function handleTipRequest(
 
   const existing = await getExistingTipResult(env, db, input, tokenAddress)
   if (existing) return existing
+  const existingPending = await getExistingPendingTipResult(env, db, input, tokenAddress)
+  if (existingPending) return existingPending
 
   const sender = await getConnectedMember(db, workspace.id, input.senderProviderUserId)
   if (!sender) return { code: 'sender_unconnected', ok: false }
@@ -181,48 +221,63 @@ export async function handleTipRequest(
     recipientProviderWorkspaceId: input.recipientProviderWorkspaceId,
   })
   if (recipient?.account.id === sender.account.id) return { code: 'self_tip', ok: false }
-  if (!recipient)
-    return {
-      code: 'recipient_unconnected',
-      ok: false,
-      recipientProviderUserId: input.recipientProviderUserId,
-      senderProviderUserId: input.senderProviderUserId,
+  const { accessKey, trackedAccessKeyLimitExceeded } = await (async () => {
+    // Pick the newest reusable access key that can cover this tip.
+    const accessKeys = await db
+      .selectFrom('access_key')
+      .selectAll()
+      .where('account_id', '=', sender.account.id)
+      .where('chain_id', '=', executionWorkspace.chain_id)
+      .where('revoked_at', 'is', null)
+      .where('expires_at', '>', new Date().toISOString())
+      .orderBy('created_at', 'desc')
+      .execute()
+    let trackedAccessKeyLimitExceeded = false
+    let accessKey: Database.Selectable.access_key | undefined
+    for (const row of accessKeys) {
+      const authorization = KeyAuthorization.fromRpc(JSON.parse(row.authorization) as never)
+      if (!supportsTip(authorization, { amount, memo: input.memo, tokenAddress })) continue
+      if (
+        !(await hasTrackedAccessKeyLimitRemaining(db, {
+          accessKeyId: row.id,
+          accountId: sender.account.id,
+          amount,
+          authorization,
+          authorizationUsedAt: row.authorization_used_at,
+          chainId: executionWorkspace.chain_id,
+          tokenAddress,
+        }))
+      ) {
+        trackedAccessKeyLimitExceeded = true
+        continue
+      }
+      accessKey = row
+      break
     }
-
-  const accessKeys = await db
-    .selectFrom('access_key')
-    .selectAll()
-    .where('account_id', '=', sender.account.id)
-    .where('chain_id', '=', executionWorkspace.chain_id)
-    .where('revoked_at', 'is', null)
-    .where('expires_at', '>', new Date().toISOString())
-    .orderBy('created_at', 'desc')
-    .execute()
-  let trackedAccessKeyLimitExceeded = false
-  let accessKey: Database.Selectable.access_key | undefined
-  for (const row of accessKeys) {
-    const authorization = KeyAuthorization.fromRpc(JSON.parse(row.authorization) as never)
-    if (!supportsTip(authorization, { amount, memo: input.memo, tokenAddress })) continue
-    if (
-      !(await hasTrackedAccessKeyLimitRemaining(db, {
-        accessKeyId: row.id,
-        accountId: sender.account.id,
-        amount,
-        authorization,
-        authorizationUsedAt: row.authorization_used_at,
-        chainId: executionWorkspace.chain_id,
-        tokenAddress,
-      }))
-    ) {
-      trackedAccessKeyLimitExceeded = true
-      continue
-    }
-    accessKey = row
-    break
-  }
+    return { accessKey, trackedAccessKeyLimitExceeded }
+  })()
   if (!accessKey)
     return await createConfirmationRequired(env, input, executionWorkspace, amount, tokenAddress, {
       kind: trackedAccessKeyLimitExceeded ? 'onetime_payment' : undefined,
+    })
+
+  if (!recipient)
+    return await createPendingTip(env, db, {
+      accessKey,
+      amount,
+      idempotencyKey: input.idempotencyKey,
+      memo: input.memo,
+      provider: input.provider,
+      providerChannelId: input.providerChannelId,
+      providerId: input.providerId,
+      providerThreadId: input.providerThreadId,
+      recipientProviderUserId: input.recipientProviderUserId,
+      recipientProviderWorkspaceId: input.recipientProviderWorkspaceId,
+      sender,
+      senderProviderUserId: input.senderProviderUserId,
+      source: input.source ?? 'command',
+      tokenAddress,
+      workspace: executionWorkspace,
     })
 
   return await submitTip(env, db, {
@@ -240,7 +295,7 @@ export async function handleTipRequest(
     recipientProviderUserId: input.recipientProviderUserId,
     sender,
     senderProviderUserId: input.senderProviderUserId,
-    source: 'command',
+    source: input.source ?? 'command',
     tokenAddress,
     workspace: executionWorkspace,
   })
@@ -898,6 +953,454 @@ function connectedMemberFromRow(row: {
       workspace_id: row.workspace_id,
     },
   }
+}
+
+export async function recordPendingTipMessage(
+  env: Env,
+  input: { pendingTipId: string; providerMessageTs: string },
+) {
+  await DB.create(env.DB)
+    .updateTable('pending_tip')
+    .set({ provider_message_ts: input.providerMessageTs, updated_at: new Date().toISOString() })
+    .where('id', '=', input.pendingTipId)
+    .execute()
+}
+
+export async function claimPendingTip(
+  env: Env,
+  input: { pendingTipId: string },
+): Promise<PendingTipClaimResult | null> {
+  const db = DB.create(env.DB)
+  const pending = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('id', '=', input.pendingTipId)
+    .executeTakeFirst()
+  if (!pending) return null
+  if (pending.status === 'sent') return await getSentPendingTipResult(env, db, pending)
+  if (!['pending', 'sending'].includes(pending.status)) return null
+
+  const now = new Date().toISOString()
+  if (pending.expires_at <= now)
+    return await updatePendingTipFailed(db, pending, {
+      message: 'Pending tip expired before recipient connected.',
+      status: 'expired',
+    })
+
+  await db
+    .updateTable('pending_tip')
+    .set({ status: 'sending', updated_at: now })
+    .where('id', '=', pending.id)
+    .where('status', '=', 'pending')
+    .execute()
+
+  const sender = await getConnectedMemberById(db, pending.sender_member_id)
+  const recipient = await getConnectedMemberById(db, pending.recipient_member_id)
+  const accessKey = pending.access_key_id
+    ? await db
+        .selectFrom('access_key')
+        .selectAll()
+        .where('id', '=', pending.access_key_id)
+        .executeTakeFirst()
+    : null
+  if (!sender || !recipient || !accessKey)
+    return await updatePendingTipFailed(db, pending, {
+      message: 'Pending tip could not be sent.',
+      status: 'failed',
+    })
+  if (accessKey.revoked_at || accessKey.expires_at <= new Date().toISOString())
+    return await updatePendingTipFailed(db, pending, {
+      message: 'Pending tip expired before recipient connected.',
+      status: 'expired',
+    })
+
+  const authorization = KeyAuthorization.fromRpc(JSON.parse(accessKey.authorization) as never)
+  if (
+    accessKey.chain_id !== pending.chain_id ||
+    !supportsTip(authorization, {
+      amount: pending.amount,
+      memo: pending.memo,
+      tokenAddress: pending.token_address,
+    }) ||
+    !(await hasTrackedAccessKeyLimitRemaining(db, {
+      accessKeyId: accessKey.id,
+      accountId: sender.account.id,
+      amount: pending.amount,
+      authorization,
+      authorizationUsedAt: accessKey.authorization_used_at,
+      chainId: pending.chain_id,
+      tokenAddress: pending.token_address,
+    }))
+  )
+    return await updatePendingTipFailed(db, pending, {
+      message: 'Pending tip could not be sent.',
+      status: 'failed',
+    })
+
+  const workspace = await db
+    .selectFrom('workspace')
+    .selectAll()
+    .where('id', '=', pending.workspace_id)
+    .executeTakeFirstOrThrow()
+  const result = await submitTip(env, db, {
+    accessKeyId: accessKey.id,
+    accessKeyPrivateKey: await AccessKey.decrypt(env, accessKey.ciphertext),
+    amount: pending.amount,
+    authorizationUsedAt: accessKey.authorization_used_at,
+    idempotencyKey: `pending:${pending.id}`,
+    keyAuthorization: authorization,
+    memo: pending.memo,
+    providerChannelId: pending.provider_channel_id,
+    providerId: pending.provider_id,
+    providerThreadId: pending.provider_thread_id ?? undefined,
+    recipient,
+    recipientProviderUserId: pending.recipient_provider_user_id,
+    sender,
+    senderProviderUserId: sender.member.provider_user_id,
+    source: pending.source,
+    tokenAddress: pending.token_address,
+    workspace: { ...workspace, chain_id: pending.chain_id },
+  })
+  if (!result.ok)
+    return await updatePendingTipFailed(db, pending, {
+      message: result.message ?? 'Pending tip could not be sent.',
+      status: 'failed',
+    })
+  if (result.status === 'queued')
+    return await updatePendingTipFailed(db, pending, {
+      message: 'Pending tip could not be sent.',
+      status: 'failed',
+    })
+
+  const tip = await db
+    .selectFrom('tip')
+    .select('id')
+    .where('idempotency_key', '=', `pending:${pending.id}`)
+    .executeTakeFirst()
+  await db
+    .updateTable('pending_tip')
+    .set({
+      status: 'sent',
+      tip_id: tip?.id ?? null,
+      updated_at: new Date().toISOString(),
+    })
+    .where('id', '=', pending.id)
+    .execute()
+
+  return {
+    amount: result.amount,
+    chainId: result.chainId,
+    isDefaultToken: result.isDefaultToken,
+    memo: result.memo,
+    ok: true,
+    pendingTip: { ...pending, status: 'sent', tip_id: tip?.id ?? null },
+    recipientProviderUserId: result.recipientProviderUserId,
+    senderProviderUserId: result.senderProviderUserId,
+    status: 'sent',
+    tokenCurrency: result.tokenCurrency,
+    tokenSymbol: result.tokenSymbol,
+    transactionHash: result.transactionHash,
+  }
+}
+
+async function getExistingPendingTipResult(
+  env: Env,
+  db: DB.Type,
+  input: {
+    idempotencyKey: string
+    recipientProviderUserId: string
+    senderProviderUserId: string
+  },
+  defaultTokenAddress: string,
+): Promise<TipResult | null> {
+  const existing = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('idempotency_key', '=', input.idempotencyKey)
+    .executeTakeFirst()
+  if (!existing || existing.status !== 'pending') return null
+  const tokenMetadata = await Tempo.getTokenMetadata(env, existing.chain_id, existing.token_address)
+  return {
+    amount: formatAmount(existing.amount),
+    chainId: existing.chain_id,
+    isDefaultToken: Address.isEqual(
+      Address.checksum(existing.token_address),
+      defaultTokenAddress as Address.Address,
+    ),
+    memo: existing.memo,
+    ok: true,
+    pendingTipId: existing.id,
+    recipientProviderUserId: input.recipientProviderUserId,
+    senderProviderUserId: input.senderProviderUserId,
+    source: existing.source,
+    status: 'queued',
+    tokenCurrency: tokenMetadata.currency,
+    tokenSymbol: tokenMetadata.symbol,
+  }
+}
+
+async function createPendingTip(
+  env: Env,
+  db: DB.Type,
+  input: {
+    accessKey: Database.Selectable.access_key
+    amount: number
+    idempotencyKey: string
+    memo: string | null
+    provider: 'slack'
+    providerChannelId: string
+    providerId: string
+    providerThreadId?: string
+    recipientProviderUserId: string
+    recipientProviderWorkspaceId?: string
+    sender: ConnectedMember
+    senderProviderUserId: string
+    source: 'command' | 'mention' | 'reaction'
+    tokenAddress: string
+    workspace: Database.Selectable.workspace
+  },
+): Promise<TipResult> {
+  const recipient = await getOrCreatePendingRecipientMember(db, input.workspace, input.provider, {
+    recipientProviderUserId: input.recipientProviderUserId,
+    recipientProviderWorkspaceId: input.recipientProviderWorkspaceId,
+  })
+  const id = Nanoid.generate()
+  const now = new Date().toISOString()
+  await db
+    .insertInto('pending_tip')
+    .values({
+      access_key_id: input.accessKey.id,
+      amount: input.amount,
+      chain_id: input.workspace.chain_id,
+      created_at: now,
+      expires_at: input.accessKey.expires_at,
+      failure_reason: null,
+      id,
+      idempotency_key: input.idempotencyKey,
+      memo: input.memo,
+      provider: input.provider,
+      provider_channel_id: input.providerChannelId,
+      provider_id: input.providerId,
+      provider_message_ts: null,
+      provider_thread_id: input.providerThreadId ?? null,
+      recipient_member_id: recipient.id,
+      recipient_provider_user_id: input.recipientProviderUserId,
+      sender_id: input.sender.account.id,
+      sender_member_id: input.sender.member.id,
+      sender_provider_user_id: input.senderProviderUserId,
+      source: input.source,
+      status: 'pending',
+      tip_id: null,
+      token_address: input.tokenAddress,
+      updated_at: now,
+      workspace_id: input.workspace.id,
+    })
+    .execute()
+  const tokenMetadata = await Tempo.getTokenMetadata(
+    env,
+    input.workspace.chain_id,
+    input.tokenAddress,
+  )
+  return {
+    amount: formatAmount(input.amount),
+    chainId: input.workspace.chain_id,
+    isDefaultToken: Address.isEqual(
+      Address.checksum(input.tokenAddress),
+      Address.checksum(input.workspace.default_token_address ?? Tempo.addressLookup.pathUsd),
+    ),
+    memo: input.memo,
+    ok: true,
+    pendingTipId: id,
+    recipientProviderUserId: input.recipientProviderUserId,
+    senderProviderUserId: input.senderProviderUserId,
+    source: input.source,
+    status: 'queued',
+    tokenCurrency: tokenMetadata.currency,
+    tokenSymbol: tokenMetadata.symbol,
+  }
+}
+
+async function getOrCreatePendingRecipientMember(
+  db: DB.Type,
+  workspace: Database.Selectable.workspace,
+  provider: Database.Selectable.workspace['provider'],
+  recipient: TipRecipientInput,
+) {
+  const recipientWorkspace = await (async () => {
+    if (!recipient.recipientProviderWorkspaceId) return workspace
+    const existing = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', provider)
+      .where('provider_id', '=', recipient.recipientProviderWorkspaceId)
+      .executeTakeFirst()
+    if (existing) return existing
+
+    const now = new Date().toISOString()
+    const id = Nanoid.generate()
+    await db
+      .insertInto('workspace')
+      .values({
+        chain_id: workspace.chain_id,
+        created_at: now,
+        default_amount: workspace.default_amount,
+        default_token_address: workspace.default_token_address,
+        id,
+        installed_at: null,
+        provider,
+        provider_id: recipient.recipientProviderWorkspaceId,
+        uninstalled_at: null,
+        updated_at: now,
+      })
+      .onConflict((oc) => oc.columns(['provider', 'provider_id']).doNothing())
+      .execute()
+    return await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', provider)
+      .where('provider_id', '=', recipient.recipientProviderWorkspaceId!)
+      .executeTakeFirstOrThrow()
+  })()
+
+  const existing = await db
+    .selectFrom('member')
+    .selectAll()
+    .where('workspace_id', '=', recipientWorkspace.id)
+    .where('provider_user_id', '=', recipient.recipientProviderUserId)
+    .executeTakeFirst()
+  if (existing) return existing
+
+  const now = new Date().toISOString()
+  const providerIdentityId = Nanoid.generate()
+  await db
+    .insertInto('provider_identity')
+    .values({
+      account_id: null,
+      created_at: now,
+      display_name: recipient.recipientProviderLabel ?? null,
+      id: providerIdentityId,
+      metadata: null,
+      provider,
+      provider_global_user_id: null,
+      provider_user_id: recipient.recipientProviderUserId,
+      provider_workspace_id: recipientWorkspace.provider_id,
+      real_name: null,
+      updated_at: now,
+    })
+    .onConflict((oc) => oc.doNothing())
+    .execute()
+  const identity = await db
+    .selectFrom('provider_identity')
+    .select('id')
+    .where('provider', '=', provider)
+    .where('provider_workspace_id', '=', recipientWorkspace.provider_id)
+    .where('provider_user_id', '=', recipient.recipientProviderUserId)
+    .executeTakeFirstOrThrow()
+  const id = Nanoid.generate()
+  await db
+    .insertInto('member')
+    .values({
+      created_at: now,
+      id,
+      login: recipient.recipientProviderLabel ?? null,
+      name: null,
+      provider_identity_id: identity.id,
+      provider_user_id: recipient.recipientProviderUserId,
+      updated_at: now,
+      workspace_id: recipientWorkspace.id,
+    })
+    .onConflict((oc) => oc.columns(['workspace_id', 'provider_user_id']).doNothing())
+    .execute()
+  return await db
+    .selectFrom('member')
+    .selectAll()
+    .where('workspace_id', '=', recipientWorkspace.id)
+    .where('provider_user_id', '=', recipient.recipientProviderUserId)
+    .executeTakeFirstOrThrow()
+}
+
+async function updatePendingTipFailed(
+  db: DB.Type,
+  pendingTip: Database.Selectable.pending_tip,
+  input: { message: string; status: 'expired' | 'failed' },
+): Promise<Extract<PendingTipClaimResult, { ok: false }>> {
+  await db
+    .updateTable('pending_tip')
+    .set({
+      failure_reason: input.message,
+      status: input.status,
+      updated_at: new Date().toISOString(),
+    })
+    .where('id', '=', pendingTip.id)
+    .execute()
+  return {
+    code: input.status,
+    message: input.message,
+    ok: false,
+    pendingTip: { ...pendingTip, failure_reason: input.message, status: input.status },
+    status: input.status,
+  }
+}
+
+async function getSentPendingTipResult(
+  env: Env,
+  db: DB.Type,
+  pendingTip: Database.Selectable.pending_tip,
+): Promise<Extract<PendingTipClaimResult, { ok: true }> | null> {
+  const tip = await db
+    .selectFrom('tip')
+    .innerJoin('tip_batch', 'tip_batch.id', 'tip.batch_id')
+    .innerJoin('workspace', 'workspace.id', 'tip.workspace_id')
+    .select(['tip.id', 'tip_batch.transaction_hash', 'workspace.default_token_address'])
+    .where('tip.idempotency_key', '=', `pending:${pendingTip.id}`)
+    .executeTakeFirst()
+  if (!tip?.transaction_hash) return null
+  const tokenMetadata = await Tempo.getTokenMetadata(
+    env,
+    pendingTip.chain_id,
+    pendingTip.token_address,
+  )
+  return {
+    amount: formatAmount(pendingTip.amount),
+    chainId: pendingTip.chain_id,
+    isDefaultToken: Address.isEqual(
+      Address.checksum(pendingTip.token_address),
+      Address.checksum(tip.default_token_address ?? Tempo.addressLookup.pathUsd),
+    ),
+    memo: pendingTip.memo,
+    ok: true,
+    pendingTip,
+    recipientProviderUserId: pendingTip.recipient_provider_user_id,
+    senderProviderUserId: pendingTip.sender_provider_user_id,
+    status: 'sent',
+    tokenCurrency: tokenMetadata.currency,
+    tokenSymbol: tokenMetadata.symbol,
+    transactionHash: tip.transaction_hash,
+  }
+}
+
+async function getConnectedMemberById(db: DB.Type, memberId: string) {
+  const member = await db
+    .selectFrom('member')
+    .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .innerJoin('account', 'account.id', 'provider_identity.account_id')
+    .select([
+      'account.address as account_address',
+      'account.created_at as account_created_at',
+      'account.id as account_id',
+      'account.updated_at as account_updated_at',
+      'member.created_at as member_created_at',
+      'member.id as member_id',
+      'member.login',
+      'member.name',
+      'member.provider_identity_id',
+      'member.provider_user_id',
+      'member.updated_at as member_updated_at',
+      'member.workspace_id',
+    ])
+    .where('member.id', '=', memberId)
+    .executeTakeFirst()
+  return member ? connectedMemberFromRow(member) : null
 }
 
 async function getExistingTipResult(

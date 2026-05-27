@@ -6,7 +6,9 @@ import * as Chat from '#/chat.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
+import { processPendingTipMessage } from '#/queues/pendingTip.ts'
 import { WebClient } from '@slack/web-api'
+import { createMessageBatch } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 import { testClient } from 'hono/testing'
 import { AbiFunction, Address } from 'ox'
@@ -825,9 +827,166 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      `Payment not sent. <@${Constants.slack.memberUserId}> needs to connect Tipbot before receiving payments.`,
+      `<@${Constants.slack.adminUserId}> queued <@${Constants.slack.memberUserId}> $0.001`,
     )
-    await expectSlackMessageNotContaining('tried to tip you')
+    await expectSlackMessage('Run `/tip connect` to receive it')
+  })
+
+  test('queues multiple tips for same unconnected recipient', async () => {
+    const connected = await connectTipAccounts({ recipient: false })
+
+    await postSlashCommand(`<@${Constants.slack.memberUserId}> $0.001 for first`, {
+      triggerId: 'queue-first-tip',
+    })
+    await postSlashCommand(`<@${Constants.slack.memberUserId}> $0.002 for second`, {
+      triggerId: 'queue-second-tip',
+    })
+    const pendingTips = await db
+      .selectFrom('pending_tip')
+      .select(['amount', 'memo', 'status'])
+      .where('sender_member_id', '=', connected.senderMember.id)
+      .where('recipient_provider_user_id', '=', Constants.slack.memberUserId)
+      .orderBy('amount', 'asc')
+      .execute()
+
+    expect(pendingTips).toEqual([
+      { amount: 1000, memo: 'first', status: 'pending' },
+      { amount: 2000, memo: 'second', status: 'pending' },
+    ])
+    await expectSlackMessage(
+      `<@${Constants.slack.adminUserId}> queued <@${Constants.slack.memberUserId}> $0.001 for first`,
+    )
+    await expectSlackMessage(
+      `<@${Constants.slack.adminUserId}> queued <@${Constants.slack.memberUserId}> $0.002 for second`,
+    )
+  })
+
+  test('claims pending tip when recipient connects', async () => {
+    const connected = await connectTipAccounts({ recipient: false })
+
+    await postSlashCommand(`<@${Constants.slack.memberUserId}> for coffee`)
+    const pending = await db
+      .selectFrom('pending_tip')
+      .selectAll()
+      .where('sender_member_id', '=', connected.senderMember.id)
+      .executeTakeFirstOrThrow()
+    const recipientMember = await db
+      .selectFrom('member')
+      .select('provider_identity_id')
+      .where('id', '=', pending.recipient_member_id)
+      .executeTakeFirstOrThrow()
+    await db
+      .updateTable('provider_identity')
+      .set({ account_id: connected.recipientAccount.id, updated_at: new Date().toISOString() })
+      .where('id', '=', recipientMember.provider_identity_id)
+      .execute()
+
+    const result = await Tip.claimPendingTip(env, { pendingTipId: pending.id })
+    const updated = await db
+      .selectFrom('pending_tip')
+      .selectAll()
+      .where('id', '=', pending.id)
+      .executeTakeFirstOrThrow()
+    const tips = await db
+      .selectFrom('tip')
+      .selectAll()
+      .where('idempotency_key', '=', `pending:${pending.id}`)
+      .execute()
+
+    expect(result).toMatchObject({ ok: true, status: 'sent' })
+    expect(updated.status).toBe('sent')
+    expect(updated.tip_id).toBe(tips[0]?.id)
+    expect(tips).toHaveLength(1)
+    await expect(Tip.claimPendingTip(env, { pendingTipId: pending.id })).resolves.toMatchObject({
+      ok: true,
+      status: 'sent',
+      transactionHash: expect.any(String),
+    })
+
+    await db
+      .updateTable('pending_tip')
+      .set({ status: 'sending', tip_id: null, updated_at: new Date().toISOString() })
+      .where('id', '=', pending.id)
+      .execute()
+
+    await expect(Tip.claimPendingTip(env, { pendingTipId: pending.id })).resolves.toMatchObject({
+      ok: true,
+      status: 'sent',
+    })
+    await expect(
+      db
+        .selectFrom('tip')
+        .selectAll()
+        .where('idempotency_key', '=', `pending:${pending.id}`)
+        .execute(),
+    ).resolves.toHaveLength(1)
+  }, 20_000) // 20 seconds
+
+  test('posts new receipt when queued message was deleted before claim update', async () => {
+    const connected = await connectTipAccounts({ recipient: false })
+
+    await postSlashCommand(`<@${Constants.slack.memberUserId}> for fallback`)
+    const pending = await db
+      .selectFrom('pending_tip')
+      .selectAll()
+      .where('sender_member_id', '=', connected.senderMember.id)
+      .executeTakeFirstOrThrow()
+    if (!pending.provider_message_ts) throw new Error('Expected queued Slack message timestamp.')
+    await slack.chat.delete({
+      channel: Constants.slack.channelId,
+      ts: pending.provider_message_ts,
+    })
+    await Chat.updateSlackPendingTipMessage(db, {
+      amount: '0.001',
+      chainId: pending.chain_id,
+      isDefaultToken: true,
+      memo: pending.memo,
+      ok: true,
+      pendingTip: pending,
+      recipientProviderUserId: pending.recipient_provider_user_id,
+      senderProviderUserId: pending.sender_provider_user_id,
+      status: 'sent',
+      tokenCurrency: 'USD',
+      tokenSymbol: 'PathUSD',
+      transactionHash: `0x${'1'.repeat(64)}`,
+    })
+
+    await expectSlackMessage(
+      `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for fallback · Receipt`,
+    )
+  }, 20_000) // 20 seconds
+
+  test('expires pending tip without sending payment', async () => {
+    const connected = await connectTipAccounts({ recipient: false })
+
+    await postSlashCommand(`<@${Constants.slack.memberUserId}>`)
+    const pending = await db
+      .selectFrom('pending_tip')
+      .selectAll()
+      .where('sender_member_id', '=', connected.senderMember.id)
+      .executeTakeFirstOrThrow()
+    await db
+      .updateTable('pending_tip')
+      .set({ expires_at: new Date(Date.now() - 60 * 1000).toISOString() }) // 1 minute ago
+      .where('id', '=', pending.id)
+      .execute()
+
+    const result = await Tip.claimPendingTip(env, { pendingTipId: pending.id })
+    const updated = await db
+      .selectFrom('pending_tip')
+      .selectAll()
+      .where('id', '=', pending.id)
+      .executeTakeFirstOrThrow()
+    const tips = await db
+      .selectFrom('tip')
+      .selectAll()
+      .where('idempotency_key', '=', `pending:${pending.id}`)
+      .execute()
+
+    expect(result).toMatchObject({ ok: false, status: 'expired' })
+    expect(updated.status).toBe('expired')
+    expect(updated.failure_reason).toBe('Pending tip expired before recipient connected.')
+    expect(tips).toHaveLength(0)
   })
 
   test('handles insufficient funds', async () => {
@@ -2140,22 +2299,230 @@ test('@Tipbot mention confirms Slack Connect external sender tip from sender wor
   fetchSpy.mockRestore()
 }, 20_000) // 20 seconds
 
-test('@Tipbot mention fails closed when Slack Connect recipient workspace is not installed', async () => {
-  const fetchSpy = vi.spyOn(globalThis, 'fetch')
-  await connectTipAccounts({ recipient: false })
+test('@Tipbot mention queues Slack Connect tip for unconnected recipient workspace', async () => {
+  const connected = await connectTipAccounts({ recipient: false })
   await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
   const channelId = await getSlackConnectChannelId()
   const messageTs = `1700000000.${Nanoid.generate().slice(0, 6)}`
+  await expectSlackConnectEmulator(channelId)
 
   const response = await postSlackAppMention({
     channelId,
     messageTs,
     text: `<@${Constants.slack.botUserId}> <@${Constants.slackConnect.userId}>`,
   })
+  const pendingTip = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('sender_member_id', '=', connected.senderMember.id)
+    .where('recipient_provider_user_id', '=', Constants.slackConnect.userId)
+    .executeTakeFirstOrThrow()
 
   expect(response.status).toBe(200)
-  await expectSlackPostEphemeralCall(fetchSpy, '')
-  fetchSpy.mockRestore()
+  expect(pendingTip).toMatchObject({
+    recipient_provider_user_id: Constants.slackConnect.userId,
+    status: 'pending',
+    workspace_id: connected.workspace.id,
+  })
+  await expectSlackThreadMessage(
+    messageTs,
+    `<@${Constants.slack.adminUserId}> queued <@${Constants.slackConnect.userId}> $0.001`,
+    { channelId },
+  )
+  await expectSlackThreadMessage(messageTs, 'Run `/tip connect` to receive it', { channelId })
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention queued Slack Connect tip uses mention connect when recipient workspace is uninstalled', async () => {
+  const connected = await connectTipAccounts({ recipient: false })
+  await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    installed_at: null,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
+  const channelId = await getSlackConnectChannelId()
+  const messageTs = `1700000004.${Nanoid.generate().slice(0, 6)}`
+  await expectSlackConnectEmulator(channelId)
+
+  const response = await postSlackAppMention({
+    channelId,
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slackConnect.userId}>`,
+  })
+  const pendingTip = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('sender_member_id', '=', connected.senderMember.id)
+    .where('recipient_provider_user_id', '=', Constants.slackConnect.userId)
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(pendingTip.status).toBe('pending')
+  await expectSlackThreadMessage(messageTs, 'Run `@Tipbot connect` to receive it', { channelId })
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention claims Slack Connect pending tip when recipient connects', async () => {
+  const connected = await connectTipAccounts({ recipient: false })
+  await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
+  const channelId = await getSlackConnectChannelId()
+  const queuedMessageTs = `1700000001.${Nanoid.generate().slice(0, 6)}`
+  const connectMessageTs = `1700000002.${Nanoid.generate().slice(0, 6)}`
+  await expectSlackConnectEmulator(channelId)
+
+  await postSlackAppMention({
+    channelId,
+    messageTs: queuedMessageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slackConnect.userId}>`,
+  })
+  const pendingTip = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('sender_member_id', '=', connected.senderMember.id)
+    .where('recipient_provider_user_id', '=', Constants.slackConnect.userId)
+    .executeTakeFirstOrThrow()
+  const connectResponse = await postSlackAppMention({
+    channelId,
+    messageTs: connectMessageTs,
+    text: `<@${Constants.slack.botUserId}> connect`,
+    userId: Constants.slackConnect.userId,
+  })
+  const token = await getLatestConnectToken({ channelId })
+  const link = await db
+    .selectFrom('account_link_token')
+    .innerJoin('member', 'member.id', 'account_link_token.member_id')
+    .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+    .select([
+      'account_link_token.access_key_address',
+      'account_link_token.access_key_expires_at',
+      'workspace.chain_id',
+      'workspace.default_token_address',
+    ])
+    .where('member.provider_user_id', '=', Constants.slackConnect.userId)
+    .where('workspace.provider_id', '=', Constants.slackConnect.teamId)
+    .executeTakeFirstOrThrow()
+  const root = Account.fromSecp256k1(
+    '0x5555555555555555555555555555555555555555555555555555555555555555',
+  )
+  const sendSpy = vi.spyOn(env.PENDING_TIP_QUEUE, 'send').mockResolvedValue({
+    metadata: { metrics: { backlogBytes: 0, backlogCount: 0 } },
+  })
+  const completeResponse = await client.api.account.link[':token'].$post({
+    json: {
+      address: root.address,
+      keyAuthorization: await AccountLink.signKeyAuthorization(root, {
+        accessKeyAddress: link.access_key_address,
+        chainId: link.chain_id,
+        expiresAt: link.access_key_expires_at,
+        tokenAddress: Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
+      }),
+    },
+    param: { token },
+  })
+  await drainWaitUntil()
+  const batch = createMessageBatch<processPendingTipMessage.Body>(
+    processPendingTipMessage.queueName,
+    [
+      {
+        attempts: 1,
+        body: { pendingTipId: pendingTip.id },
+        id: crypto.randomUUID(),
+        timestamp: new Date(),
+      },
+    ],
+  )
+
+  await processPendingTipMessage(batch.messages[0]!)
+  const updatedPendingTip = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('id', '=', pendingTip.id)
+    .executeTakeFirstOrThrow()
+  const tip = await waitForTipByIdempotencyKey(`pending:${pendingTip.id}`)
+
+  expect(connectResponse.status).toBe(200)
+  expect(completeResponse.status).toBe(200)
+  expect(sendSpy).toHaveBeenCalledWith({ pendingTipId: pendingTip.id })
+  expect(updatedPendingTip).toMatchObject({ status: 'sent', tip_id: tip.id })
+  expect(tip).toMatchObject({
+    recipient_member_id: pendingTip.recipient_member_id,
+    sender_member_id: connected.senderMember.id,
+    workspace_id: connected.workspace.id,
+  })
+  await expectSlackThreadMessage(
+    queuedMessageTs,
+    `<@${Constants.slack.adminUserId}> tipped <@${Constants.slackConnect.userId}> $0.001 · Receipt`,
+    { channelId, wait: true },
+  )
+}, 20_000) // 20 seconds
+
+test('@Tipbot mention does not queue Slack Connect multi-recipient tip', async () => {
+  const connected = await connectTipAccounts()
+  await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
+  const channelId = await getSlackConnectChannelId()
+  const messageTs = `1700000003.${Nanoid.generate().slice(0, 6)}`
+  await expectSlackConnectEmulator(channelId)
+
+  const response = await postSlackAppMention({
+    channelId,
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}> <@${Constants.slackConnect.userId}>`,
+  })
+  const pendingTips = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('sender_member_id', '=', connected.senderMember.id)
+    .execute()
+  const tips = await db
+    .selectFrom('tip')
+    .selectAll()
+    .where('idempotency_key', '=', `mention:${providerId}:${channelId}:${messageTs}`)
+    .execute()
+
+  expect(response.status).toBe(200)
+  expect(pendingTips).toEqual([])
+  expect(tips).toEqual([])
+  await expectSlackMessage('You’re about to tip 1 accounts $0.001 each.', { channelId })
+  await expectSlackMessage(`• <@${Constants.slack.memberUserId}>`, { channelId })
+  await expectSlackMessage(`• <@${Constants.slackConnect.userId}> (not connected yet)`, {
+    channelId,
+  })
+  await expectSlackMessageNotContaining('queued', { channelId })
 }, 20_000) // 20 seconds
 
 test.each([
@@ -3364,6 +3731,29 @@ test('reaction tipping sends tip from single channel guest', async () => {
   await expectSlackThreadMessage(message.ts, 'tipped', { channelId, wait: true })
 }, 20_000) // 20 seconds
 
+test('queued tip to single-channel guest uses mention connect instruction', async () => {
+  const connected = await connectTipAccounts({ recipient: false })
+
+  const response = await postSlashCommand(`<@${Constants.slack.singleChannelGuestUserId}>`)
+  const pendingTip = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('sender_member_id', '=', connected.senderMember.id)
+    .where('recipient_provider_user_id', '=', Constants.slack.singleChannelGuestUserId)
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(pendingTip).toMatchObject({
+    recipient_provider_user_id: Constants.slack.singleChannelGuestUserId,
+    status: 'pending',
+    workspace_id: connected.workspace.id,
+  })
+  await expectSlackMessage(
+    `<@${Constants.slack.adminUserId}> queued <@${Constants.slack.singleChannelGuestUserId}> $0.001`,
+  )
+  await expectSlackMessage('Run `@Tipbot connect` to receive it')
+})
+
 test('reaction tipping sends Slack Connect tip to recipient home workspace member', async () => {
   await deleteSlackConnectWorkspace()
   await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
@@ -3508,8 +3898,7 @@ test('reaction tipping sends Slack Connect external sender tip from sender works
   await expectSlackThreadMessage(message.ts, '$0.001', { channelId, wait: true })
 }, 20_000) // 20 seconds
 
-test('reaction tipping reports unconnected recipient', async () => {
-  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+test('reaction tipping queues unconnected recipient', async () => {
   await connectTipAccounts({ recipient: false })
   const channelId = await createSlackTestChannel('rt')
   const message = await memberSlack.chat.postMessage({
@@ -3533,12 +3922,15 @@ test('reaction tipping reports unconnected recipient', async () => {
 
   expect(response.status).toBe(200)
   expect(reactionTips).toHaveLength(0)
-  await expectSlackPostEphemeralCall(
-    fetchSpy,
-    `Payment not sent. <@${Constants.slack.memberUserId}> needs to connect Tipbot before receiving payments.`,
+  await expectSlackThreadMessage(
+    message.ts,
+    `<@${Constants.slack.adminUserId}> queued a boost for <@${Constants.slack.memberUserId}>`,
+    { channelId, wait: true },
   )
-  await expectSlackThreadMessageNotContaining(message.ts, 'tipped', { channelId })
-  fetchSpy.mockRestore()
+  await expectSlackThreadMessage(message.ts, 'Run `/tip connect` to receive it', {
+    channelId,
+    wait: true,
+  })
 })
 
 test('reaction tipping reports approval required', async () => {
@@ -6341,7 +6733,10 @@ async function deleteSlackConnectWorkspace() {
     if (memberIds.length > 0) {
       await db.deleteFrom('reaction_tip').where('sender_member_id', 'in', memberIds).execute()
       await db.deleteFrom('reaction_tip').where('recipient_member_id', 'in', memberIds).execute()
+      await db.deleteFrom('pending_tip').where('sender_member_id', 'in', memberIds).execute()
+      await db.deleteFrom('pending_tip').where('recipient_member_id', 'in', memberIds).execute()
     }
+    await db.deleteFrom('pending_tip').where('workspace_id', '=', workspace.id).execute()
     await db.deleteFrom('tip').where('workspace_id', '=', workspace.id).execute()
     if (memberIds.length > 0) {
       await db.deleteFrom('tip').where('sender_member_id', 'in', memberIds).execute()

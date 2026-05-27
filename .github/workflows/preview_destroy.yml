@@ -86,6 +86,39 @@ jobs:
           done < <(echo "$SLACK_APP_IDS" | jq -r '.[]')
           if [ "$FAILED" != "0" ]; then echo "Slack app cleanup failed; continuing preview cleanup."; fi
 
+      - name: Remove Worker from Queue consumers
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          QUEUE_IDS=$(curl -fsS \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues" \
+            | jq -r --arg prefix "-${PREVIEW_APEX}" '.result[] | select(.queue_name | test($prefix + "(-dlq)?$")) | .queue_id')
+          for QUEUE_ID in $QUEUE_IDS; do
+            CONSUMER_ID=$(curl -fsS \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues/${QUEUE_ID}/consumers" \
+              | jq -r --arg name "$PREVIEW_NAME" '.result[] | select(.script == $name) | .consumer_id // empty')
+            if [ -n "$CONSUMER_ID" ]; then
+              curl -fsS -X DELETE \
+                -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+                "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues/${QUEUE_ID}/consumers/${CONSUMER_ID}" \
+                || true
+            fi
+          done
+
+      - name: Clear Worker bindings
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          curl -fsS -X PATCH \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -F 'settings={"bindings":[]};type=application/json' \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${PREVIEW_NAME}/settings" \
+            || true
+
       - name: Delete preview Worker
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -107,6 +140,22 @@ jobs:
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${D1_ID}" \
             || true
+
+      - name: Delete preview Queues
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          QUEUE_IDS=$(curl -fsS \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues" \
+            | jq -r --arg prefix "-${PREVIEW_APEX}" '.result[] | select(.queue_name | test($prefix + "(-dlq)?$")) | .queue_id')
+          for QUEUE_ID in $QUEUE_IDS; do
+            curl -fsS -X DELETE \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues/${QUEUE_ID}" \
+              || true
+          done
 
       - name: Update preview comment
         env:

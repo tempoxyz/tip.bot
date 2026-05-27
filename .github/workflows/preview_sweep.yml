@@ -51,10 +51,14 @@ jobs:
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts" \
             | jq -r '.result[].id // empty' | grep '^tipbot-pr[0-9][0-9]*$' || true)
           WORKER_PR_NUMBERS=$(echo "$WORKERS" | sed 's/^tipbot-pr//' || true)
+          QUEUE_PR_NUMBERS=$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues" \
+            | jq -r '.result[].queue_name // empty' \
+            | sed -n 's/^tipbot-pending-tip-pr\([0-9][0-9]*\)\(-dlq\)\?$/\1/p' || true)
           COMMENT_PR_NUMBERS=$(gh api "repos/${{ github.repository }}/issues/comments" --paginate \
             --jq '.[] | select(.body | contains("tipbot-preview")) | .issue_url | split("/")[-1]' \
             2>/dev/null || true)
-          PR_NUMBERS=$(printf '%s\n%s\n' "$WORKER_PR_NUMBERS" "$COMMENT_PR_NUMBERS" | grep '^[0-9][0-9]*$' | sort -n -u || true)
+          PR_NUMBERS=$(printf '%s\n%s\n%s\n' "$WORKER_PR_NUMBERS" "$QUEUE_PR_NUMBERS" "$COMMENT_PR_NUMBERS" | grep '^[0-9][0-9]*$' | sort -n -u || true)
           for PR_NUMBER in $PR_NUMBERS; do
             worker="tipbot-pr${PR_NUMBER}"
             PR_JSON=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '{state: .state, draft: .draft}' 2>/dev/null || echo '{"state":"unknown","draft":false}')
@@ -87,6 +91,27 @@ jobs:
               done < <(echo "$SLACK_APP_IDS" | jq -r '.[]')
               if [ "$FAILED" != "0" ]; then echo "Slack app cleanup failed; continuing preview cleanup."; fi
             fi
+            QUEUE_IDS=$(curl -fsS \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues" \
+              | jq -r --arg prefix "-pr${PR_NUMBER}" '.result[] | select(.queue_name | test($prefix + "(-dlq)?$")) | .queue_id')
+            for QUEUE_ID in $QUEUE_IDS; do
+              CONSUMER_ID=$(curl -fsS \
+                -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+                "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues/${QUEUE_ID}/consumers" \
+                | jq -r --arg name "$worker" '.result[] | select(.script == $name) | .consumer_id // empty')
+              if [ -n "$CONSUMER_ID" ]; then
+                curl -fsS -X DELETE \
+                  -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+                  "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues/${QUEUE_ID}/consumers/${CONSUMER_ID}" \
+                  || true
+              fi
+            done
+            curl -fsS -X PATCH \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -F 'settings={"bindings":[]};type=application/json' \
+              "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${worker}/settings" \
+              || true
             curl -fsS -X DELETE \
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
               "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${worker}?force=true" \
@@ -97,6 +122,12 @@ jobs:
                 "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${D1_ID}" \
                 || true
             fi
+            for QUEUE_ID in $QUEUE_IDS; do
+              curl -fsS -X DELETE \
+                -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+                "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues/${QUEUE_ID}" \
+                || true
+            done
 
             SHA=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.head.sha // empty' 2>/dev/null || true)
             SHA_SHORT=$(echo "$SHA" | cut -c1-7)
