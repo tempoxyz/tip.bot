@@ -2396,7 +2396,11 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
             user: { userId: event.user } as chat.Author,
           },
           { db, provider, text: '', threadTs: receipt.threadTs },
-          `${formatSlackBoostReceiptText(sender.provider_user_id, provider.id, event.item.channel, receipt)}`,
+          `<@${sender.provider_user_id}> boosted${
+            receipt.threadTs === receipt.messageTs
+              ? ''
+              : ` ${formatSlackMessageLink(provider.id, event.item.channel, receipt.messageTs)}`
+          }`,
           result.chainId,
           result.transactionHash,
           undefined,
@@ -2659,15 +2663,6 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
       return 'Payment failed.'
     })(),
   )
-}
-
-function formatSlackBoostReceiptText(
-  senderProviderUserId: string,
-  providerId: string,
-  channelId: string,
-  receipt: { messageTs: string; threadTs: string },
-) {
-  return `<@${senderProviderUserId}> boosted${receipt.threadTs === receipt.messageTs ? '' : ` ${formatSlackMessageLink(providerId, channelId, receipt.messageTs)}`}`
 }
 
 function formatSlackMessageLink(providerId: string, channelId: string, messageTs: string) {
