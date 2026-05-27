@@ -3123,6 +3123,91 @@ test('reaction tipping updates one aggregate reply for multiple tipped messages 
   )
 })
 
+test('receipt boost ignores reaction tip aggregate reply', async () => {
+  const connected = await connectTipAccounts()
+  if (!connected.recipientMember) throw new Error('Expected connected recipient.')
+  const channelId = await createSlackTestChannel('rt')
+  const parent = await memberSlack.chat.postMessage({
+    channel: channelId,
+    text: 'aggregate boost parent',
+  })
+  if (!parent.ts) throw new Error('Expected Slack parent message timestamp.')
+  const transactionHash = `0x${Nanoid.generate().padEnd(64, '1').slice(0, 64)}`
+  const batch = await factory.tip_batch.insert({
+    amount_each: 1000,
+    idempotency_key: `${Chat.reactionTipIdempotencyPrefix}${Nanoid.generate()}`,
+    provider: 'slack',
+    provider_channel_id: channelId,
+    provider_id: providerId,
+    recipient_count: 1,
+    sender_member_id: connected.senderMember.id,
+    source: 'reaction',
+    status: 'confirmed',
+    token_address: Tempo.addressLookup.pathUsd,
+    total_amount: 1000,
+    transaction_hash: transactionHash,
+    workspace_id: connected.workspace.id,
+  })
+  const tip = await factory.tip.insert({
+    access_key_id: connected.accessKey.id,
+    batch_id: batch.id,
+    chain_id: connected.workspace.chain_id,
+    confirmed_at: new Date().toISOString(),
+    idempotency_key: batch.idempotency_key,
+    recipient_id: connected.recipientAccount.id,
+    recipient_member_id: connected.recipientMember.id,
+    sender_id: connected.senderAccount.id,
+    sender_member_id: connected.senderMember.id,
+    token_address: Tempo.addressLookup.pathUsd,
+    workspace_id: connected.workspace.id,
+  })
+  await factory.reaction_tip.insert({
+    channel_id: channelId,
+    idempotency_key: tip.idempotency_key,
+    message_ts: parent.ts,
+    reaction: 'money_with_wings',
+    recipient_member_id: connected.recipientMember.id,
+    sender_member_id: connected.senderMember.id,
+    thread_ts: parent.ts,
+    tip_id: tip.id,
+    workspace_id: connected.workspace.id,
+  })
+  await Chat.updateReactionTipAggregate(providerId, {
+    channelId,
+    threadTs: parent.ts,
+    workspaceId: connected.workspace.id,
+  })
+  const thread = await slack.conversations.replies({ channel: channelId, ts: parent.ts })
+  const aggregate = thread.messages?.find((message) => message.text?.startsWith('Reaction tips'))
+  if (!aggregate?.ts) throw new Error('Expected reaction tip aggregate timestamp.')
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+  const boostResponse = await postSlackReaction({
+    channelId,
+    messageTs: aggregate.ts,
+    reaction: '+',
+    userId: Constants.slack.adminUserId,
+  })
+  const boostCount = await db
+    .selectFrom('tip_batch')
+    .innerJoin('workspace', 'workspace.id', 'tip_batch.workspace_id')
+    .select(({ fn }) => fn.count<number>('tip_batch.id').as('count'))
+    .where('workspace.provider_id', '=', providerId)
+    .where('tip_batch.idempotency_key', 'like', `${Chat.receiptBoostIdempotencyPrefix}%`)
+    .executeTakeFirstOrThrow()
+
+  expect(boostResponse.status).toBe(200)
+  expect(boostCount.count).toBe(0)
+  expect(
+    fetchSpy.mock.calls.some((call) => {
+      const input = call[0]
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      return url.endsWith('/chat.postEphemeral')
+    }),
+  ).toBe(false)
+  fetchSpy.mockRestore()
+}, 20_000) // 20 seconds
+
 test('reaction tipping ignores one-time confirmed tips for access key limit', async () => {
   const connected = await connectTipAccounts()
   if (!connected.recipientMember) throw new Error('Expected connected recipient.')
