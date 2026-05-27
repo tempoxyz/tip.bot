@@ -830,6 +830,35 @@ describe('/tip @account', () => {
     await expectSlackMessage('Run `/tip connect` to receive it')
   })
 
+  test('queues multiple tips for same unconnected recipient', async () => {
+    const connected = await connectTipAccounts({ recipient: false })
+
+    await postSlashCommand(`<@${Constants.slack.memberUserId}> $0.001 for first`, {
+      triggerId: 'queue-first-tip',
+    })
+    await postSlashCommand(`<@${Constants.slack.memberUserId}> $0.002 for second`, {
+      triggerId: 'queue-second-tip',
+    })
+    const pendingTips = await db
+      .selectFrom('pending_tip')
+      .select(['amount', 'memo', 'status'])
+      .where('sender_member_id', '=', connected.senderMember.id)
+      .where('recipient_provider_user_id', '=', Constants.slack.memberUserId)
+      .orderBy('amount', 'asc')
+      .execute()
+
+    expect(pendingTips).toEqual([
+      { amount: 1000, memo: 'first', status: 'pending' },
+      { amount: 2000, memo: 'second', status: 'pending' },
+    ])
+    await expectSlackMessage(
+      `<@${Constants.slack.adminUserId}> queued <@${Constants.slack.memberUserId}> $0.001 for first`,
+    )
+    await expectSlackMessage(
+      `<@${Constants.slack.adminUserId}> queued <@${Constants.slack.memberUserId}> $0.002 for second`,
+    )
+  })
+
   test('claims pending tip when recipient connects', async () => {
     const connected = await connectTipAccounts({ recipient: false })
 
@@ -884,6 +913,40 @@ describe('/tip @account', () => {
         .where('idempotency_key', '=', `pending:${pending.id}`)
         .execute(),
     ).resolves.toHaveLength(1)
+  }, 20_000) // 20 seconds
+
+  test('posts new receipt when queued message was deleted before claim update', async () => {
+    const connected = await connectTipAccounts({ recipient: false })
+
+    await postSlashCommand(`<@${Constants.slack.memberUserId}> for fallback`)
+    const pending = await db
+      .selectFrom('pending_tip')
+      .selectAll()
+      .where('sender_member_id', '=', connected.senderMember.id)
+      .executeTakeFirstOrThrow()
+    if (!pending.provider_message_ts) throw new Error('Expected queued Slack message timestamp.')
+    await slack.chat.delete({
+      channel: Constants.slack.channelId,
+      ts: pending.provider_message_ts,
+    })
+    await Chat.updateSlackPendingTipMessage(db, {
+      amount: '0.001',
+      chainId: pending.chain_id,
+      isDefaultToken: true,
+      memo: pending.memo,
+      ok: true,
+      pendingTip: pending,
+      recipientProviderUserId: pending.recipient_provider_user_id,
+      senderProviderUserId: pending.sender_provider_user_id,
+      status: 'sent',
+      tokenCurrency: 'USD',
+      tokenSymbol: 'PathUSD',
+      transactionHash: `0x${'1'.repeat(64)}`,
+    })
+
+    await expectSlackMessage(
+      `<@${Constants.slack.adminUserId}> sent <@${Constants.slack.memberUserId}> $0.001 for fallback · Receipt`,
+    )
   }, 20_000) // 20 seconds
 
   test('expires pending tip without sending payment', async () => {
@@ -3452,6 +3515,29 @@ test('reaction tipping sends tip from single channel guest', async () => {
     })
   await expectSlackThreadMessage(message.ts, 'tipped', { channelId, wait: true })
 }, 20_000) // 20 seconds
+
+test('queued tip to single-channel guest uses mention connect instruction', async () => {
+  const connected = await connectTipAccounts({ recipient: false })
+
+  const response = await postSlashCommand(`<@${Constants.slack.singleChannelGuestUserId}>`)
+  const pendingTip = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('sender_member_id', '=', connected.senderMember.id)
+    .where('recipient_provider_user_id', '=', Constants.slack.singleChannelGuestUserId)
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(pendingTip).toMatchObject({
+    recipient_provider_user_id: Constants.slack.singleChannelGuestUserId,
+    status: 'pending',
+    workspace_id: connected.workspace.id,
+  })
+  await expectSlackMessage(
+    `<@${Constants.slack.adminUserId}> queued <@${Constants.slack.singleChannelGuestUserId}> $0.001`,
+  )
+  await expectSlackMessage('Run `@Tipbot connect` to receive it')
+})
 
 test('reaction tipping sends Slack Connect tip to recipient home workspace member', async () => {
   await deleteSlackConnectWorkspace()
