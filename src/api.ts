@@ -246,6 +246,11 @@ export const api = new Hono<{
           })
           .where('id', '=', link.id)
           .execute()
+        c.executionCtx.waitUntil(
+          Tip.enqueuePendingTipsForMember(c.env, { memberId: link.member_id }).catch((error) => {
+            console.error('Failed to enqueue pending tips after wallet connection:', error)
+          }),
+        )
 
         if (link.provider_channel_id)
           c.executionCtx.waitUntil(
@@ -707,6 +712,7 @@ export const api = new Hono<{
               console.error('Failed to post Slack receipt after confirmation:', error)
             }),
           )
+        if (!('transactionHash' in result)) throw new Error('Payment failed.')
         return c.json({ ok: true as const, transactionHash: result.transactionHash })
       } catch (error) {
         return c.json(

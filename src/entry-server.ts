@@ -1,6 +1,8 @@
 import serverEntry from '@tanstack/react-start/server-entry'
 import { api } from '#/api.ts'
 import { rpc } from '#/lib/rpc.ts'
+import { processPendingTipMessage } from '#/queues/pendingTip.ts'
+import { z } from 'zod'
 
 export default {
   async fetch(request, env, ctx) {
@@ -13,7 +15,25 @@ export default {
     if (url.pathname.startsWith('/api/')) return api.fetch(new Request(url, request), env, ctx)
     return serverEntry.fetch(request, { context: { ctx, env, request } })
   },
-} satisfies ExportedHandler<Env>
+  async queue(batch, env) {
+    const queueName = (() => {
+      const previewApex = env.HOST.endsWith('.tip.bot') ? env.HOST.replace('.tip.bot', '') : ''
+      if (previewApex) return batch.queue.replace(`-${previewApex}`, '')
+      return batch.queue
+    })()
+    const queue = z.parse(z.enum([processPendingTipMessage.queueName]), queueName)
+    const handler = { [processPendingTipMessage.queueName]: processPendingTipMessage }[queue]
+    for (const message of batch.messages) {
+      try {
+        await handler(message as never)
+        message.ack()
+      } catch (error) {
+        console.error(`Queue message ${message.id} failed:`, error)
+        message.retry()
+      }
+    }
+  },
+} satisfies ExportedHandler<Env, processPendingTipMessage.Body>
 
 declare module '@tanstack/react-start' {
   interface Register {

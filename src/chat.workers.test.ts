@@ -825,9 +825,9 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      `Payment not sent. <@${Constants.slack.memberUserId}> needs to connect Tipbot before receiving payments.`,
+      `<@${Constants.slack.adminUserId}> queued <@${Constants.slack.memberUserId}> $0.001`,
     )
-    await expectSlackMessageNotContaining('tried to tip you')
+    await expectSlackMessage('Run `/tip connect` to receive it')
   })
 
   test('handles insufficient funds', async () => {
@@ -3423,8 +3423,7 @@ test('reaction tipping sends Slack Connect external sender tip from sender works
   await expectSlackThreadMessage(message.ts, '$0.001', { channelId, wait: true })
 }, 20_000) // 20 seconds
 
-test('reaction tipping reports unconnected recipient', async () => {
-  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+test('reaction tipping queues unconnected recipient', async () => {
   await connectTipAccounts({ recipient: false })
   const channelId = await createSlackTestChannel('rt')
   const message = await memberSlack.chat.postMessage({
@@ -3448,12 +3447,15 @@ test('reaction tipping reports unconnected recipient', async () => {
 
   expect(response.status).toBe(200)
   expect(reactionTips).toHaveLength(0)
-  await expectSlackPostEphemeralCall(
-    fetchSpy,
-    `Payment not sent. <@${Constants.slack.memberUserId}> needs to connect Tipbot before receiving payments.`,
+  await expectSlackThreadMessage(
+    message.ts,
+    `<@${Constants.slack.adminUserId}> queued a boost for <@${Constants.slack.memberUserId}>`,
+    { channelId, wait: true },
   )
-  await expectSlackThreadMessageNotContaining(message.ts, 'tipped', { channelId })
-  fetchSpy.mockRestore()
+  await expectSlackThreadMessage(message.ts, 'Run `/tip connect` to receive it', {
+    channelId,
+    wait: true,
+  })
 })
 
 test('reaction tipping reports approval required', async () => {
@@ -6037,7 +6039,10 @@ async function deleteSlackConnectWorkspace() {
     if (memberIds.length > 0) {
       await db.deleteFrom('reaction_tip').where('sender_member_id', 'in', memberIds).execute()
       await db.deleteFrom('reaction_tip').where('recipient_member_id', 'in', memberIds).execute()
+      await db.deleteFrom('pending_tip').where('sender_member_id', 'in', memberIds).execute()
+      await db.deleteFrom('pending_tip').where('recipient_member_id', 'in', memberIds).execute()
     }
+    await db.deleteFrom('pending_tip').where('workspace_id', '=', workspace.id).execute()
     await db.deleteFrom('tip').where('workspace_id', '=', workspace.id).execute()
     if (memberIds.length > 0) {
       await db.deleteFrom('tip').where('sender_member_id', 'in', memberIds).execute()

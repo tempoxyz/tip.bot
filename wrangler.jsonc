@@ -28,6 +28,18 @@
       },
     ],
   },
+  "queues": {
+    "producers": [{ "binding": "PENDING_TIP_QUEUE", "queue": "tipbot-pending-tip" }],
+    "consumers": [
+      {
+        "queue": "tipbot-pending-tip",
+        "max_batch_size": 1,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "dead_letter_queue": "tipbot-pending-tip-dlq",
+      },
+    ],
+  },
   "migrations": [
     {
       "tag": "chat_state_v1",
@@ -79,6 +91,20 @@
       ],
       "ai": {
         "binding": "AI",
+      },
+      "queues": {
+        "producers": [
+          { "binding": "PENDING_TIP_QUEUE", "queue": "tipbot-pending-tip-__PREVIEW_APEX__" },
+        ],
+        "consumers": [
+          {
+            "queue": "tipbot-pending-tip-__PREVIEW_APEX__",
+            "max_batch_size": 1,
+            "max_batch_timeout": 5,
+            "max_retries": 3,
+            "dead_letter_queue": "tipbot-pending-tip-__PREVIEW_APEX__-dlq",
+          },
+        ],
       },
       "observability": {
         "enabled": true,
@@ -145,6 +171,18 @@
       ],
       "ai": {
         "binding": "AI",
+      },
+      "queues": {
+        "producers": [{ "binding": "PENDING_TIP_QUEUE", "queue": "tipbot-pending-tip" }],
+        "consumers": [
+          {
+            "queue": "tipbot-pending-tip",
+            "max_batch_size": 1,
+            "max_batch_timeout": 5,
+            "max_retries": 3,
+            "dead_letter_queue": "tipbot-pending-tip-dlq",
+          },
+        ],
       },
       "secrets": {
         "required": [

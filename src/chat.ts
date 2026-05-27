@@ -1370,6 +1370,7 @@ const handlers = {
               recipientProviderWorkspaceId: plan.recipients[0]?.recipientProviderWorkspaceId,
               senderProviderUserId: event.user.userId,
               settingsProviderId: ctx.settingsProviderId,
+              source: options.mention ? 'mention' : 'command',
               tokenAddress: tokenAddress ?? undefined,
               workspaceProviderId: ctx.provider.id,
             })
@@ -1406,6 +1407,16 @@ const handlers = {
           threadTs: options.threadTs,
           usergroupId: plan.usergroupId,
           usergroupLabel: plan.usergroupLabel,
+        })
+      } else if (result.ok && result.status === 'queued') {
+        const messageTs = await postSlackQueuedTipMessage(ctx, result, {
+          channelId: event.channel.id,
+          mentionUser: (providerUserId) => event.channel.mentionUser(providerUserId),
+          threadTs: options.threadTs,
+        })
+        await Tip.recordPendingTipMessage(env, {
+          pendingTipId: result.pendingTipId,
+          providerMessageTs: messageTs,
         })
       } else if (result.ok && result.status === 'sent' && !('recipients' in result)) {
         await postSlackReceiptMessage(
@@ -1979,6 +1990,8 @@ async function getSlackUserInfo(botToken: string, providerUserId: string) {
           id: z.string().optional(),
           is_app_user: z.boolean().optional(),
           is_bot: z.boolean().optional(),
+          is_restricted: z.boolean().optional(),
+          is_ultra_restricted: z.boolean().optional(),
           name: z.string().optional(),
           profile: z
             .object({
@@ -2548,13 +2561,58 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
   const recipient = resolvedRecipient.value
     ? await getConnectedSlackRecipient(db, provider.type, workspace, resolvedRecipient.value)
     : null
+  const idempotencyKey = [
+    reactionTipIdempotencyPrefix,
+    workspace.id,
+    event.item.channel,
+    event.item.ts,
+    event.reaction,
+    sender.memberId,
+    event.event_ts,
+  ].join(':')
   if (!recipient) {
-    await postSlackEphemeral(
-      provider.id,
-      event.item.channel,
-      event.user,
-      `Payment not sent. <@${recipientProviderUserId}> needs to connect Tipbot before receiving payments.`,
+    const result = await Tip.handleTipRequest(env, {
+      amount: reactionTipConfig.amount,
+      idempotencyKey,
+      memo: null,
+      provider: provider.type,
+      providerChannelId: event.item.channel,
+      providerId: provider.id,
+      providerThreadId: message.thread_ts ?? event.item.ts,
+      recipientProviderUserId,
+      recipientProviderWorkspaceId:
+        resolvedRecipient.value && 'recipientProviderWorkspaceId' in resolvedRecipient.value
+          ? resolvedRecipient.value.recipientProviderWorkspaceId
+          : undefined,
+      senderProviderUserId: sender.providerUserId,
+      settingsProviderId: provider.id,
+      source: 'reaction',
+      workspaceProviderId: workspace.provider_id,
+    }).catch(
+      (error) =>
+        ({
+          code: 'failed',
+          message: error instanceof Error ? error.message : 'Reaction tip failed.',
+          ok: false,
+        }) satisfies Tip.TipResult,
     )
+    if (result.ok && result.status === 'queued') {
+      const messageTs = await postSlackQueuedTipMessage(
+        { db, provider, text: '', threadTs: message.thread_ts ?? event.item.ts },
+        result,
+        {
+          channelId: `slack:${event.item.channel}`,
+          mentionUser: (providerUserId) => `<@${providerUserId}>`,
+          threadTs: message.thread_ts ?? event.item.ts,
+        },
+      )
+      await Tip.recordPendingTipMessage(env, {
+        pendingTipId: result.pendingTipId,
+        providerMessageTs: messageTs,
+      })
+      return
+    }
+    await postSlackEphemeral(provider.id, event.item.channel, event.user, 'Payment not sent.')
     return
   }
 
@@ -2569,15 +2627,6 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
     .executeTakeFirst()
   if (existing) return
 
-  const idempotencyKey = [
-    reactionTipIdempotencyPrefix,
-    workspace.id,
-    event.item.channel,
-    event.item.ts,
-    event.reaction,
-    sender.memberId,
-    event.event_ts,
-  ].join(':')
   const inserted = await (async () => {
     const now = new Date().toISOString()
     try {
@@ -3776,6 +3825,79 @@ async function postTipResult(
   await postPrivateReply(event, event.user, 'Payment already sent.')
 }
 
+async function postSlackQueuedTipMessage(
+  ctx: HandlerContext,
+  result: Extract<Tip.TipResult, { ok: true; status: 'queued' }>,
+  options: {
+    channelId: string
+    mentionUser: (providerUserId: string) => string
+    threadTs?: string
+  },
+) {
+  const installation = await getSlack().getInstallation(ctx.channelProviderId ?? ctx.provider.id)
+  if (!installation) throw new Error('Tibot app not installed for this workspace.')
+
+  const amount = result.isDefaultToken
+    ? formatCurrencyAmount(result.amount, result.tokenCurrency)
+    : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
+  const text =
+    result.source === 'reaction'
+      ? `${options.mentionUser(result.senderProviderUserId)} queued a boost for ${options.mentionUser(result.recipientProviderUserId)}`
+      : `${options.mentionUser(result.senderProviderUserId)} queued ${options.mentionUser(result.recipientProviderUserId)} ${amount}${result.memo ? ` for ${result.memo}` : ''}`
+  const connectCommand = (await usesMentionConnectInstruction(ctx, result.recipientProviderUserId))
+    ? `@${getSlackBotDisplayName(env.HOST)} connect`
+    : `${getSlackCommand(env.HOST)} connect`
+  const context = `Run \`${connectCommand}\` to receive it`
+  const body = new URLSearchParams()
+  body.set(
+    'blocks',
+    JSON.stringify([
+      {
+        text: { text, type: 'mrkdwn' },
+        type: 'section',
+      },
+      {
+        elements: [{ text: context, type: 'mrkdwn' }],
+        type: 'context',
+      },
+    ]),
+  )
+  body.set('channel', options.channelId.replace(/^slack:/, ''))
+  body.set('text', `${text}. ${context}`)
+  if (options.threadTs) body.set('thread_ts', options.threadTs)
+  body.set('unfurl_links', 'false')
+  body.set('unfurl_media', 'false')
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
+      body,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+      ts: z.string().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok || !json.ts) throw Slack.slackApiError('chat.postMessage', json.error)
+  return json.ts
+}
+
+async function usesMentionConnectInstruction(ctx: HandlerContext, providerUserId: string) {
+  if (
+    ctx.externalSlackConnect ||
+    (ctx.channelProviderId && ctx.channelProviderId !== ctx.provider.id)
+  )
+    return true
+  const installation = await getSlack().getInstallation(ctx.channelProviderId ?? ctx.provider.id)
+  if (!installation) return false
+  const user = await getSlackUserInfo(installation.botToken, providerUserId).catch(() => undefined)
+  return Boolean(user?.is_restricted || user?.is_ultra_restricted)
+}
+
 async function postSlackReceiptMessage(
   event: TipEvent,
   ctx: HandlerContext,
@@ -3874,6 +3996,135 @@ export async function recordSlackReceiptMessageForTransaction(
     threadTs: options.threadTs,
     tipBatchId: batch.id,
     workspaceId: batch.workspace_id,
+  })
+}
+
+export async function updateSlackPendingTipMessage(db: DB.Type, result: Tip.PendingTipClaimResult) {
+  const installation = await getSlack().getInstallation(result.pendingTip.provider_id)
+  if (!installation || !result.pendingTip.provider_message_ts) return
+
+  const channelId = result.pendingTip.provider_channel_id.replace(/^slack:/, '')
+  const tokenMetadata = await Tempo.getTokenMetadata(
+    env,
+    result.pendingTip.chain_id,
+    result.pendingTip.token_address,
+  )
+  const workspace = await db
+    .selectFrom('workspace')
+    .select('default_token_address')
+    .where('id', '=', result.pendingTip.workspace_id)
+    .executeTakeFirst()
+  const amount = Address.isEqual(
+    Address.checksum(result.pendingTip.token_address),
+    Address.checksum(workspace?.default_token_address ?? Tempo.addressLookup.pathUsd),
+  )
+    ? formatCurrencyAmount(formatAmount(result.pendingTip.amount), tokenMetadata.currency)
+    : formatTipAmount(
+        formatAmount(result.pendingTip.amount),
+        tokenMetadata.currency,
+        tokenMetadata.symbol,
+      )
+  const originalText =
+    result.pendingTip.source === 'reaction'
+      ? `<@${result.pendingTip.sender_provider_user_id}> queued a boost for <@${result.pendingTip.recipient_provider_user_id}>`
+      : `<@${result.pendingTip.sender_provider_user_id}> queued <@${result.pendingTip.recipient_provider_user_id}> ${amount}${result.pendingTip.memo ? ` for ${result.pendingTip.memo}` : ''}`
+  const text = (() => {
+    if (!result.ok) return originalText
+    if (result.pendingTip.source === 'reaction')
+      return `<@${result.senderProviderUserId}> boosted this message`
+    return `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} <@${result.recipientProviderUserId}> ${amount}${result.memo ? ` for ${result.memo}` : ''}`
+  })()
+  const context = result.ok
+    ? undefined
+    : result.status === 'expired'
+      ? `Expired before <@${result.pendingTip.recipient_provider_user_id}> connected. No payment was sent`
+      : 'Could not be sent. No payment was sent'
+  const receiptLink = result.ok
+    ? `<${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`
+    : undefined
+  const blocks = [
+    {
+      text: { text: receiptLink ? formatReceiptText(text, receiptLink) : text, type: 'mrkdwn' },
+      type: 'section',
+    },
+    ...(context
+      ? [
+          {
+            elements: [{ text: context, type: 'mrkdwn' }],
+            type: 'context',
+          },
+        ]
+      : []),
+  ]
+  const body = new URLSearchParams()
+  body.set('blocks', JSON.stringify(blocks))
+  body.set('channel', channelId)
+  body.set(
+    'text',
+    receiptLink ? formatReceiptText(text, 'Receipt') : `${text}${context ? `. ${context}` : ''}`,
+  )
+  body.set('ts', result.pendingTip.provider_message_ts)
+  body.set('unfurl_links', 'false')
+  body.set('unfurl_media', 'false')
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.update`, {
+      body,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+      ts: z.string().optional(),
+    }),
+    await response.json(),
+  )
+  if (json.ok) {
+    if (result.ok)
+      await recordSlackReceiptMessageForTransaction(db, {
+        channelId,
+        messageTs: result.pendingTip.provider_message_ts,
+        threadTs: result.pendingTip.provider_thread_id ?? result.pendingTip.provider_message_ts,
+        transactionHash: result.transactionHash,
+      })
+    return
+  }
+  if (!result.ok) {
+    console.error('Failed to update queued tip message:', json.error)
+    return
+  }
+  const fallback = new URLSearchParams()
+  fallback.set('blocks', JSON.stringify(blocks))
+  fallback.set('channel', channelId)
+  fallback.set('text', formatReceiptText(text, 'Receipt'))
+  if (result.pendingTip.provider_thread_id)
+    fallback.set('thread_ts', result.pendingTip.provider_thread_id)
+  fallback.set('unfurl_links', 'false')
+  fallback.set('unfurl_media', 'false')
+  const fallbackResponse = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
+      body: fallback,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const fallbackJson = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+      ts: z.string().optional(),
+    }),
+    await fallbackResponse.json(),
+  )
+  if (!fallbackJson.ok || !fallbackJson.ts)
+    throw Slack.slackApiError('chat.postMessage', fallbackJson.error)
+  await recordSlackReceiptMessageForTransaction(db, {
+    channelId,
+    messageTs: fallbackJson.ts,
+    threadTs: result.pendingTip.provider_thread_id ?? fallbackJson.ts,
+    transactionHash: result.transactionHash,
   })
 }
 
