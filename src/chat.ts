@@ -266,7 +266,29 @@ export function getChat() {
 
     const context = await (async () => {
       const db = DB.create(env.DB)
+      const existingReceiptWorkspace = isReceiptBoostReaction(reaction.reaction)
+        ? await db
+            .selectFrom('tip_receipt_message')
+            .innerJoin('workspace', 'workspace.id', 'tip_receipt_message.workspace_id')
+            .select([
+              'workspace.chain_id',
+              'workspace.created_at',
+              'workspace.default_amount',
+              'workspace.default_token_address',
+              'workspace.id',
+              'workspace.installed_at',
+              'workspace.name',
+              'workspace.provider',
+              'workspace.provider_id',
+              'workspace.uninstalled_at',
+              'workspace.updated_at',
+            ])
+            .where('tip_receipt_message.channel_id', '=', reaction.item.channel)
+            .where('tip_receipt_message.message_ts', '=', reaction.item.ts)
+            .executeTakeFirst()
+        : null
       const providerId =
+        existingReceiptWorkspace?.provider_id ??
         reaction.authorizations?.find((authorization) => authorization.team_id)?.team_id ??
         reaction.team_id
       const workspace = await db

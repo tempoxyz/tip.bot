@@ -3653,7 +3653,14 @@ test('receipt boost works for Slack Connect slash command receipt', async () => 
     { channelId },
   )
   const boostResponse = await postSlackReaction({
-    authorizations: [{ is_bot: true, team_id: providerId, user_id: Constants.slack.botUserId }],
+    authorizations: [
+      {
+        is_bot: true,
+        team_id: Constants.slackConnect.teamId,
+        user_id: Constants.slackConnect.teamBotUserId,
+      },
+      { is_bot: true, team_id: providerId, user_id: Constants.slack.botUserId },
+    ],
     channelId,
     messageTs: receiptTs,
     reaction: '+',
@@ -3730,7 +3737,14 @@ test('receipt boost works for Slack Connect threaded Tipbot receipt', async () =
   )?.ts
   if (!receiptTs) throw new Error('Expected Slack receipt message timestamp.')
   const boostResponse = await postSlackReaction({
-    authorizations: [{ is_bot: true, team_id: providerId, user_id: Constants.slack.botUserId }],
+    authorizations: [
+      {
+        is_bot: true,
+        team_id: Constants.slackConnect.teamId,
+        user_id: Constants.slackConnect.teamBotUserId,
+      },
+      { is_bot: true, team_id: providerId, user_id: Constants.slack.botUserId },
+    ],
     channelId,
     messageTs: receiptTs,
     reaction: '+',
