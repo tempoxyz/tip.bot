@@ -2985,21 +2985,21 @@ export async function updateReactionTipAggregate(
     [] as Array<{ lines: string[]; messageTs: string; recipientProviderUserId: string }>,
   )
   const text = (() => {
-    const title = 'Reaction tips received'
+    const title = 'Reaction tips'
     if (messageGroups.length === 1) {
       const reactedMessageUrl = new URL('slack://channel')
       reactedMessageUrl.searchParams.set('team', providerId)
       reactedMessageUrl.searchParams.set('id', options.channelId)
       reactedMessageUrl.searchParams.set('message', messageGroups[0]!.messageTs)
-      return `${title} on this message:\n\n<@${messageGroups[0]!.recipientProviderUserId}> received ${rowTexts.length === 1 ? 'a tip' : 'tips'} on <${reactedMessageUrl}|this> message:\n${messageGroups[0]!.lines.join('\n')}`
+      return `${title}\n\n<@${messageGroups[0]!.recipientProviderUserId}> received ${rowTexts.length === 1 ? 'a tip' : 'tips'} on <${reactedMessageUrl}|this message>:\n${messageGroups[0]!.lines.join('\n')}`
     }
-    return `${title} in this thread:\n\n${messageGroups
+    return `${title}\n\n${messageGroups
       .map((group) => {
         const reactedMessageUrl = new URL('slack://channel')
         reactedMessageUrl.searchParams.set('team', providerId)
         reactedMessageUrl.searchParams.set('id', options.channelId)
         reactedMessageUrl.searchParams.set('message', group.messageTs)
-        return `<@${group.recipientProviderUserId}> received ${group.lines.length === 1 ? 'a tip' : 'tips'} on <${reactedMessageUrl}|this> message:\n${group.lines.join('\n')}`
+        return `<@${group.recipientProviderUserId}> received ${group.lines.length === 1 ? 'a tip' : 'tips'} on <${reactedMessageUrl}|this message>:\n${group.lines.join('\n')}`
       })
       .join('\n\n')}`
   })()
