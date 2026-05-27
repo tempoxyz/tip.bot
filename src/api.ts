@@ -247,7 +247,16 @@ export const api = new Hono<{
           .where('id', '=', link.id)
           .execute()
         c.executionCtx.waitUntil(
-          Tip.enqueuePendingTipsForMember(c.env, { memberId: link.member_id }).catch((error) => {
+          (async () => {
+            const pendingTips = await c.var.db
+              .selectFrom('pending_tip')
+              .select('id')
+              .where('recipient_member_id', '=', link.member_id)
+              .where('status', '=', 'pending')
+              .execute()
+            for (const pendingTip of pendingTips)
+              await c.env.PENDING_TIP_QUEUE.send({ pendingTipId: pendingTip.id })
+          })().catch((error) => {
             console.error('Failed to enqueue pending tips after wallet connection:', error)
           }),
         )

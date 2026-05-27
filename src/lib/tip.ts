@@ -938,16 +938,6 @@ export async function recordPendingTipMessage(
     .execute()
 }
 
-export async function enqueuePendingTipsForMember(env: Env, input: { memberId: string }) {
-  const rows = await DB.create(env.DB)
-    .selectFrom('pending_tip')
-    .select('id')
-    .where('recipient_member_id', '=', input.memberId)
-    .where('status', '=', 'pending')
-    .execute()
-  for (const row of rows) await env.PENDING_TIP_QUEUE.send({ pendingTipId: row.id })
-}
-
 export async function claimPendingTip(
   env: Env,
   input: { pendingTipId: string },
