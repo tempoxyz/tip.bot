@@ -81,6 +81,28 @@ export type TipBatchResult =
       tokenCurrency: string
       tokenSymbol: string
       transactionHash: string
+      queuedRecipients?: Array<{
+        pendingTipId: string
+        recipientProviderLabel?: string
+        recipientProviderUserId: string
+      }>
+    }
+  | {
+      amount: string
+      chainId: number
+      isDefaultToken: boolean
+      memo: string | null
+      ok: true
+      queuedRecipients: Array<{
+        pendingTipId: string
+        recipientProviderLabel?: string
+        recipientProviderUserId: string
+      }>
+      senderProviderUserId: string
+      skippedRecipients?: TipSkippedRecipient[]
+      status: 'queued'
+      tokenCurrency: string
+      tokenSymbol: string
     }
   | Extract<TipResult, { ok: false }>
 
@@ -312,6 +334,7 @@ export async function handleTipBatchRequest(
     providerChannelId: string
     providerId: string
     providerThreadId?: string
+    pendingRecipients?: TipRecipientInput[]
     recipients: TipRecipientInput[]
     senderProviderUserId: string
     settingsProviderId?: string
@@ -368,17 +391,20 @@ export async function handleTipBatchRequest(
     default_amount: settingsWorkspace.default_amount,
     default_token_address: settingsWorkspace.default_token_address,
   }
+  const recipientCount = input.recipients.length + (input.pendingRecipients?.length ?? 0)
   const recipients = input.recipients.slice(0, maxTipBatchRecipients)
-  if (input.recipients.length === 0)
+  const pendingRecipients = (input.pendingRecipients ?? []).slice(0, maxTipBatchRecipients)
+  const allRecipients = [...recipients, ...pendingRecipients]
+  if (recipientCount === 0)
     return { code: 'failed', message: 'Payment must have at least one recipient.', ok: false }
-  if (input.recipients.length > maxTipBatchRecipients)
+  if (recipientCount > maxTipBatchRecipients)
     return {
       code: 'failed',
       message: `Multi-tip supports up to ${maxTipBatchRecipients} recipients.`,
       ok: false,
     }
   if (
-    recipients.some(
+    allRecipients.some(
       (recipient) =>
         recipient.recipientProviderUserId === input.senderProviderUserId &&
         (!recipient.recipientProviderWorkspaceId ||
@@ -389,7 +415,7 @@ export async function handleTipBatchRequest(
     return { code: 'self_tip', ok: false }
 
   const amount = input.amount ?? executionWorkspace.default_amount
-  const totalAmount = amount * recipients.length
+  const totalAmount = amount * allRecipients.length
   if (!Number.isSafeInteger(totalAmount) || totalAmount <= 0)
     return { code: 'failed', message: 'Payment amount is too large.', ok: false }
   const tokenAddress = Address.checksum(
@@ -408,6 +434,8 @@ export async function handleTipBatchRequest(
   const sender = await getConnectedMember(db, workspace.id, input.senderProviderUserId)
   if (!sender) return { code: 'sender_unconnected', ok: false }
   const connectedRecipients = [] as ConnectedMember[]
+  const connectedRecipientInputs = [] as TipRecipientInput[]
+  const actuallyPendingRecipients = [] as TipRecipientInput[]
   for (const recipient of recipients) {
     const connected = await getConnectedRecipient(db, workspace, input.provider, recipient)
     if (connected?.account.id === sender.account.id) return { code: 'self_tip', ok: false }
@@ -419,6 +447,15 @@ export async function handleTipBatchRequest(
         senderProviderUserId: input.senderProviderUserId,
       }
     connectedRecipients.push(connected)
+    connectedRecipientInputs.push(recipient)
+  }
+  for (const recipient of pendingRecipients) {
+    const connected = await getConnectedRecipient(db, workspace, input.provider, recipient)
+    if (connected?.account.id === sender.account.id) return { code: 'self_tip', ok: false }
+    if (connected) {
+      connectedRecipients.push(connected)
+      connectedRecipientInputs.push(recipient)
+    } else actuallyPendingRecipients.push(recipient)
   }
 
   const accessKeys = await db
@@ -480,29 +517,83 @@ export async function handleTipBatchRequest(
       },
     )) as Extract<TipBatchResult, { ok: false }>
 
-  return await submitTipBatch(env, db, {
-    accessKeyId: accessKey.id,
-    accessKeyPrivateKey: await AccessKey.decrypt(env, accessKey.ciphertext),
-    amount,
-    authorizationUsedAt: accessKey.authorization_used_at,
-    connectedRecipients,
-    idempotencyKey: input.idempotencyKey,
-    keyAuthorization: KeyAuthorization.fromRpc(JSON.parse(accessKey.authorization) as never),
+  const sentResult = connectedRecipients.length
+    ? await submitTipBatch(env, db, {
+        accessKeyId: accessKey.id,
+        accessKeyPrivateKey: await AccessKey.decrypt(env, accessKey.ciphertext),
+        amount,
+        authorizationUsedAt: accessKey.authorization_used_at,
+        connectedRecipients,
+        idempotencyKey: input.idempotencyKey,
+        keyAuthorization: KeyAuthorization.fromRpc(JSON.parse(accessKey.authorization) as never),
+        memo: input.memo,
+        provider: input.provider,
+        providerChannelId: input.providerChannelId,
+        providerId: input.providerId,
+        providerThreadId: input.providerThreadId,
+        recipients: connectedRecipientInputs,
+        sender,
+        senderProviderUserId: input.senderProviderUserId,
+        skippedRecipients: input.skippedRecipients,
+        source: input.source,
+        tokenAddress,
+        usergroupId: input.usergroupId,
+        usergroupLabel: input.usergroupLabel,
+        workspace: executionWorkspace,
+      })
+    : null
+  if (sentResult && !sentResult.ok) return sentResult
+
+  const queuedRecipients = [] as Array<{
+    pendingTipId: string
+    recipientProviderLabel?: string
+    recipientProviderUserId: string
+  }>
+  for (const recipient of actuallyPendingRecipients) {
+    const result = await createPendingTip(env, db, {
+      accessKey,
+      amount,
+      idempotencyKey: `${input.idempotencyKey}:${recipient.recipientProviderUserId}`,
+      memo: input.memo,
+      provider: input.provider,
+      providerChannelId: input.providerChannelId,
+      providerId: input.providerId,
+      providerThreadId: input.providerThreadId,
+      recipientProviderUserId: recipient.recipientProviderUserId,
+      recipientProviderWorkspaceId: recipient.recipientProviderWorkspaceId,
+      sender,
+      senderProviderUserId: input.senderProviderUserId,
+      source: input.source,
+      tokenAddress,
+      workspace: executionWorkspace,
+    })
+    if (!result.ok) return result
+    if (result.status !== 'queued') continue
+    queuedRecipients.push({
+      pendingTipId: result.pendingTipId,
+      recipientProviderLabel: recipient.recipientProviderLabel,
+      recipientProviderUserId: recipient.recipientProviderUserId,
+    })
+  }
+  if (sentResult?.ok) return { ...sentResult, queuedRecipients }
+
+  const tokenMetadata = await Tempo.getTokenMetadata(env, executionWorkspace.chain_id, tokenAddress)
+  return {
+    amount: formatAmount(amount),
+    chainId: executionWorkspace.chain_id,
+    isDefaultToken: Address.isEqual(
+      Address.checksum(tokenAddress),
+      Address.checksum(executionWorkspace.default_token_address ?? Tempo.addressLookup.pathUsd),
+    ),
     memo: input.memo,
-    provider: input.provider,
-    providerChannelId: input.providerChannelId,
-    providerId: input.providerId,
-    providerThreadId: input.providerThreadId,
-    recipients,
-    sender,
+    ok: true,
+    queuedRecipients,
     senderProviderUserId: input.senderProviderUserId,
     skippedRecipients: input.skippedRecipients,
-    source: input.source,
-    tokenAddress,
-    usergroupId: input.usergroupId,
-    usergroupLabel: input.usergroupLabel,
-    workspace: executionWorkspace,
-  })
+    status: 'queued',
+    tokenCurrency: tokenMetadata.currency,
+    tokenSymbol: tokenMetadata.symbol,
+  }
 }
 
 export function parseAmount(value: string) {
@@ -1029,6 +1120,7 @@ export async function claimPendingTip(
       authorization,
       authorizationUsedAt: accessKey.authorization_used_at,
       chainId: pending.chain_id,
+      excludePendingTipId: pending.id,
       tokenAddress: pending.token_address,
     }))
   )
@@ -1895,6 +1987,8 @@ async function submitTip(
     workspace: input.workspace,
   })
   if (!result.ok) return result
+  if (result.status === 'queued')
+    return { code: 'failed', message: 'Payment could not be sent.', ok: false }
   return {
     amount: result.amount,
     chainId: result.chainId,
@@ -2375,6 +2469,7 @@ async function hasTrackedAccessKeyLimitRemaining(
     authorization: KeyAuthorization.KeyAuthorization
     authorizationUsedAt: string | null
     chainId: number
+    excludePendingTipId?: string
     tokenAddress: string
   },
 ) {
@@ -2401,7 +2496,20 @@ async function hasTrackedAccessKeyLimitRemaining(
       .where('confirmed_at', 'is not', null)
       .where('confirmed_at', '>=', usedSince)
       .execute()
-    const used = tips.reduce((total, tip) => total + BigInt(tip.amount), 0n)
+    const pendingTips = await db
+      .selectFrom('pending_tip')
+      .select('amount')
+      .where('access_key_id', '=', input.accessKeyId)
+      .where('sender_id', '=', input.accountId)
+      .where('chain_id', '=', input.chainId)
+      .where('token_address', '=', Address.checksum(input.tokenAddress))
+      .where('status', 'in', ['pending', 'sending'])
+      .where('expires_at', '>', new Date().toISOString())
+      .$if(Boolean(input.excludePendingTipId), (qb) =>
+        qb.where('id', '!=', input.excludePendingTipId!),
+      )
+      .execute()
+    const used = [...tips, ...pendingTips].reduce((total, tip) => total + BigInt(tip.amount), 0n)
     if (used + BigInt(input.amount) <= limit.limit) return true
   }
   return false

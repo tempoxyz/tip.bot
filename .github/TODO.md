@@ -1,6 +1,7 @@
 # TODO
 
 - Use Workers AI to parse more flexible natural-language tip commands after explicit amount/token syntax is stable.
+- Support queued tips for group/usergroup recipients after explicit multi-recipient pending tips roll out.
 - Production setup guide (see below)
 
 ## Production

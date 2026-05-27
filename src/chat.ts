@@ -1309,6 +1309,7 @@ const handlers = {
     const plan = !shouldResolvePlan
       ? {
           ok: true as const,
+          pendingRecipients: [],
           previewRequired: false,
           recipients: parsed.recipients,
           skippedRecipients: [],
@@ -1356,7 +1357,7 @@ const handlers = {
       })
     try {
       const result = await (
-        plan.recipients.length === 1 && !plan.usergroupId
+        plan.recipients.length === 1 && plan.pendingRecipients.length === 0 && !plan.usergroupId
           ? Tip.handleTipRequest(env, {
               amount: parsed.amount,
               idempotencyKey: options.idempotencyKey,
@@ -1382,6 +1383,7 @@ const handlers = {
               providerChannelId: event.channel.id,
               providerId: ctx.channelProviderId ?? ctx.provider.id,
               providerThreadId: options.threadTs,
+              pendingRecipients: plan.pendingRecipients,
               recipients: plan.recipients,
               senderProviderUserId: event.user.userId,
               settingsProviderId: ctx.settingsProviderId,
@@ -1401,14 +1403,33 @@ const handlers = {
           }) satisfies Tip.TipResult,
       )
 
-      if (result.ok && result.status === 'sent' && 'recipients' in result) {
+      if (result.ok && 'queuedRecipients' in result && result.queuedRecipients?.length) {
+        const messageTs = await postSlackQueuedTipBatchMessage(
+          ctx,
+          {
+            ...result,
+            queuedRecipients: result.queuedRecipients,
+          },
+          {
+            channelId: event.channel.id,
+            mentionUser: (providerUserId) => event.channel.mentionUser(providerUserId),
+            threadTs: options.threadTs,
+          },
+        )
+        for (const recipient of result.queuedRecipients) {
+          await Tip.recordPendingTipMessage(env, {
+            pendingTipId: recipient.pendingTipId,
+            providerMessageTs: messageTs,
+          })
+        }
+      } else if (result.ok && result.status === 'sent' && 'recipients' in result) {
         await postTipResult(event, ctx, result, {
           skippedRecipients: plan.skippedRecipients,
           threadTs: options.threadTs,
           usergroupId: plan.usergroupId,
           usergroupLabel: plan.usergroupLabel,
         })
-      } else if (result.ok && result.status === 'queued') {
+      } else if (result.ok && result.status === 'queued' && 'pendingTipId' in result) {
         const messageTs = await postSlackQueuedTipMessage(ctx, result, {
           channelId: event.channel.id,
           mentionUser: (providerUserId) => event.channel.mentionUser(providerUserId),
@@ -1434,7 +1455,7 @@ const handlers = {
         )
         if (result.memo && options.threadTs)
           await postSlackMemoReply(event, ctx, result.memo, options.threadTs)
-      } else if (result.ok)
+      } else if (result.ok && 'transactionHash' in result)
         await postSlackReceiptMessage(
           event,
           ctx,
@@ -1447,6 +1468,7 @@ const handlers = {
             : undefined,
           options.threadTs,
         )
+      else if (result.ok) await postPrivateReply(event, event.user, 'Payment already sent.')
       else {
         if (result.code === 'confirmation_required' && result.confirmUrl) {
           await postSlackPaymentConfirmation(event, ctx, result.confirmUrl, {
@@ -1671,6 +1693,7 @@ async function resolveSlackTipPlan(
 ): Promise<
   | {
       ok: true
+      pendingRecipients: Tip.TipRecipientInput[]
       previewRequired: boolean
       recipients: Tip.TipRecipientInput[]
       skippedRecipients: Tip.TipSkippedRecipient[]
@@ -1682,6 +1705,7 @@ async function resolveSlackTipPlan(
   if (ctx.provider.type !== 'slack')
     return {
       ok: true,
+      pendingRecipients: [],
       previewRequired: false,
       recipients: parsed.recipients,
       skippedRecipients: [],
@@ -1695,6 +1719,7 @@ async function resolveSlackTipPlan(
   if (!installation)
     return {
       ok: true,
+      pendingRecipients: [],
       previewRequired: false,
       recipients: parsed.recipients,
       skippedRecipients: [],
@@ -1818,7 +1843,9 @@ async function resolveSlackTipPlan(
   }
 
   const recipients = [] as Tip.TipRecipientInput[]
+  const pendingRecipients = [] as Tip.TipRecipientInput[]
   const skippedRecipients = [] as Tip.TipSkippedRecipient[]
+  const explicitRecipientCount = parsed.recipients.length
   const senderAccount = await ctx.db
     .selectFrom('workspace')
     .innerJoin('member', 'member.workspace_id', 'workspace.id')
@@ -1839,7 +1866,7 @@ async function resolveSlackTipPlan(
     }
 
     const allowUnconnectedSingleRecipient = Boolean(
-      conversation.isShared && target.source === 'explicit' && targets.length === 1,
+      conversation.isShared && target.source === 'explicit',
     )
     const recipient = conversation.isShared
       ? await resolveSlackConnectRecipient(ctx, conversation.teamIds, target.recipient, {
@@ -1848,11 +1875,15 @@ async function resolveSlackTipPlan(
       : await resolveLocalSlackRecipient(ctx, target.recipient)
     if ('message' in recipient) return { message: recipient.message, ok: false }
     if (!recipient.value) {
-      skippedRecipients.push({
-        reason: 'not_connected',
-        recipientProviderLabel: target.recipient.recipientProviderLabel,
-        recipientProviderUserId: target.recipient.recipientProviderUserId,
-      })
+      if (target.source === 'explicit') pendingRecipients.push(target.recipient)
+      else {
+        // TODO: support queued tips for group/usergroup recipients after explicit multi-recipient rollout.
+        skippedRecipients.push({
+          reason: 'not_connected',
+          recipientProviderLabel: target.recipient.recipientProviderLabel,
+          recipientProviderUserId: target.recipient.recipientProviderUserId,
+        })
+      }
       continue
     }
     if (recipient.accountId && recipient.accountId === senderAccount?.account_id) {
@@ -1860,10 +1891,14 @@ async function resolveSlackTipPlan(
         return { message: 'Payment not sent. Cannot send a payment to yourself.', ok: false }
       continue
     }
+    if (target.source === 'explicit' && !recipient.accountId && explicitRecipientCount > 1) {
+      pendingRecipients.push(recipient.value)
+      continue
+    }
     recipients.push(recipient.value)
   }
 
-  if (recipients.length === 0) {
+  if (recipients.length === 0 && pendingRecipients.length === 0) {
     const usergroup = parsed.usergroups?.[0]
     return {
       message: usergroup
@@ -1887,8 +1922,8 @@ async function resolveSlackTipPlan(
   )
   return {
     ok: true,
-    previewRequired:
-      groupPreviewRequired || (!parsed.usergroups?.length && skippedRecipients.length > 0),
+    pendingRecipients,
+    previewRequired: groupPreviewRequired,
     recipients,
     skippedRecipients,
     usergroupId: parsed.usergroups?.[0]?.providerUsergroupId,
@@ -4141,6 +4176,90 @@ async function postSlackQueuedTipMessage(
   return json.ts
 }
 
+async function postSlackQueuedTipBatchMessage(
+  ctx: HandlerContext,
+  result: Extract<Tip.TipBatchResult, { ok: true }> & {
+    queuedRecipients: NonNullable<Extract<Tip.TipBatchResult, { ok: true }>['queuedRecipients']>
+  },
+  options: {
+    channelId: string
+    mentionUser: (providerUserId: string) => string
+    threadTs?: string
+  },
+) {
+  const installation = await getSlack().getInstallation(ctx.channelProviderId ?? ctx.provider.id)
+  if (!installation) throw new Error('Tibot app not installed for this workspace.')
+
+  const amount = result.isDefaultToken
+    ? formatCurrencyAmount(result.amount, result.tokenCurrency)
+    : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
+  const queued = formatSlackMentionList(
+    result.queuedRecipients.map((recipient) => recipient.recipientProviderUserId),
+    options.mentionUser,
+  )
+  const queuedAmount = `${amount}${result.queuedRecipients.length === 1 ? '' : ' each'}`
+  const queuedText = `queued ${queued} ${queuedAmount}`
+  const baseText =
+    result.status === 'sent'
+      ? `${options.mentionUser(result.senderProviderUserId)} ${result.memo ? 'sent' : 'tipped'} ${formatSlackMentionList(
+          result.recipients.map((recipient) => recipient.recipientProviderUserId),
+          options.mentionUser,
+        )} ${amount}${result.memo ? ` for ${result.memo}` : ''}`
+      : `${options.mentionUser(result.senderProviderUserId)} ${queuedText}${result.memo ? ` for ${result.memo}` : ''}`
+  const context = `Run \`${getSlackCommand(env.HOST)} connect\` to receive it`
+  const receiptLink =
+    result.status === 'sent'
+      ? `<${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`
+      : undefined
+  const blocks = [
+    {
+      text: {
+        text: `${receiptLink ? formatReceiptText(baseText, receiptLink) : baseText}${result.status === 'sent' ? ` (${queuedText})` : ''}`,
+        type: 'mrkdwn',
+      },
+      type: 'section',
+    },
+    {
+      elements: [{ text: context, type: 'mrkdwn' }],
+      type: 'context',
+    },
+  ]
+  const body = new URLSearchParams()
+  body.set('blocks', JSON.stringify(blocks))
+  body.set('channel', options.channelId.replace(/^slack:/, ''))
+  body.set(
+    'text',
+    `${receiptLink ? formatReceiptText(baseText, 'Receipt') : baseText}${result.status === 'sent' ? ` (${queuedText})` : ''}. ${context}`,
+  )
+  if (options.threadTs) body.set('thread_ts', options.threadTs)
+  body.set('unfurl_links', 'false')
+  body.set('unfurl_media', 'false')
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
+      body,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+      ts: z.string().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok || !json.ts) throw Slack.slackApiError('chat.postMessage', json.error)
+  if (result.status === 'sent')
+    await recordSlackReceiptMessageForTransaction(ctx.db, {
+      channelId: options.channelId.replace(/^slack:/, ''),
+      messageTs: json.ts,
+      threadTs: options.threadTs ?? json.ts,
+      transactionHash: result.transactionHash,
+    })
+  return json.ts
+}
+
 async function postSlackReceiptMessage(
   event: TipEvent,
   ctx: HandlerContext,
@@ -4245,6 +4364,12 @@ export async function recordSlackReceiptMessageForTransaction(
 export async function updateSlackPendingTipMessage(db: DB.Type, result: Tip.PendingTipClaimResult) {
   const installation = await getSlack().getInstallation(result.pendingTip.provider_id)
   if (!installation || !result.pendingTip.provider_message_ts) return
+
+  const aggregate = await getSlackPendingTipAggregate(db, result.pendingTip)
+  if (aggregate) {
+    await updateSlackPendingTipAggregateMessage(db, result, aggregate, installation.botToken)
+    return
+  }
 
   const channelId = result.pendingTip.provider_channel_id.replace(/^slack:/, '')
   const tokenMetadata = await Tempo.getTokenMetadata(
@@ -4371,6 +4496,182 @@ export async function updateSlackPendingTipMessage(db: DB.Type, result: Tip.Pend
   })
 }
 
+async function getSlackPendingTipAggregate(db: DB.Type, pendingTip: DB_gen.Selectable.pending_tip) {
+  if (!pendingTip.provider_message_ts) return null
+
+  const pendingTips = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('workspace_id', '=', pendingTip.workspace_id)
+    .where('provider_channel_id', '=', pendingTip.provider_channel_id)
+    .where('provider_message_ts', '=', pendingTip.provider_message_ts)
+    .orderBy('created_at', 'asc')
+    .execute()
+  const batchIdempotencyKey = pendingTip.idempotency_key.endsWith(
+    `:${pendingTip.recipient_provider_user_id}`,
+  )
+    ? pendingTip.idempotency_key.slice(0, -1 * (pendingTip.recipient_provider_user_id.length + 1))
+    : null
+  const batch = batchIdempotencyKey
+    ? await db
+        .selectFrom('tip_batch')
+        .selectAll()
+        .where('workspace_id', '=', pendingTip.workspace_id)
+        .where('idempotency_key', '=', batchIdempotencyKey)
+        .executeTakeFirst()
+    : null
+  if (pendingTips.length <= 1 && !batch) return null
+
+  const batchRecipients = batch
+    ? await db
+        .selectFrom('tip')
+        .innerJoin('member', 'member.id', 'tip.recipient_member_id')
+        .select('member.provider_user_id')
+        .where('tip.batch_id', '=', batch.id)
+        .where('tip.confirmed_at', 'is not', null)
+        .orderBy('tip.created_at', 'asc')
+        .execute()
+    : []
+  const sentPendingTips = await db
+    .selectFrom('pending_tip')
+    .leftJoin('tip', 'tip.id', 'pending_tip.tip_id')
+    .leftJoin('tip_batch', 'tip_batch.id', 'tip.batch_id')
+    .select([
+      'pending_tip.id',
+      'pending_tip.recipient_provider_user_id',
+      'tip_batch.transaction_hash',
+    ])
+    .where('pending_tip.workspace_id', '=', pendingTip.workspace_id)
+    .where('pending_tip.provider_channel_id', '=', pendingTip.provider_channel_id)
+    .where('pending_tip.provider_message_ts', '=', pendingTip.provider_message_ts)
+    .where('pending_tip.status', '=', 'sent')
+    .orderBy('pending_tip.created_at', 'asc')
+    .execute()
+  return { batch, batchRecipients, pendingTips, sentPendingTips }
+}
+
+async function updateSlackPendingTipAggregateMessage(
+  db: DB.Type,
+  result: Tip.PendingTipClaimResult,
+  aggregate: NonNullable<Awaited<ReturnType<typeof getSlackPendingTipAggregate>>>,
+  botToken: string,
+) {
+  if (!result.pendingTip.provider_message_ts) return
+  const channelId = result.pendingTip.provider_channel_id.replace(/^slack:/, '')
+  const tokenMetadata = await Tempo.getTokenMetadata(
+    env,
+    result.pendingTip.chain_id,
+    result.pendingTip.token_address,
+  )
+  const workspace = await db
+    .selectFrom('workspace')
+    .select('default_token_address')
+    .where('id', '=', result.pendingTip.workspace_id)
+    .executeTakeFirst()
+  const amount = Address.isEqual(
+    Address.checksum(result.pendingTip.token_address),
+    Address.checksum(workspace?.default_token_address ?? Tempo.addressLookup.pathUsd),
+  )
+    ? formatCurrencyAmount(formatAmount(result.pendingTip.amount), tokenMetadata.currency)
+    : formatTipAmount(
+        formatAmount(result.pendingTip.amount),
+        tokenMetadata.currency,
+        tokenMetadata.symbol,
+      )
+  const completedProviderUserIds = [
+    ...(aggregate.batch?.status === 'confirmed' && aggregate.batch.transaction_hash
+      ? aggregate.batchRecipients.map((recipient) => recipient.provider_user_id)
+      : []),
+    ...aggregate.sentPendingTips.map((pending) => pending.recipient_provider_user_id),
+  ]
+  const queuedProviderUserIds = aggregate.pendingTips
+    .filter((pending) => pending.status === 'pending' || pending.status === 'sending')
+    .map((pending) => pending.recipient_provider_user_id)
+  const expiredProviderUserIds = aggregate.pendingTips
+    .filter((pending) => pending.status === 'expired')
+    .map((pending) => pending.recipient_provider_user_id)
+  const failedProviderUserIds = aggregate.pendingTips
+    .filter((pending) => pending.status === 'failed')
+    .map((pending) => pending.recipient_provider_user_id)
+  const mentionUser = (providerUserId: string) => `<@${providerUserId}>`
+  const statusSegments = [
+    ...(queuedProviderUserIds.length
+      ? [
+          `queued ${formatSlackMentionList(queuedProviderUserIds, mentionUser)} ${amount}${queuedProviderUserIds.length === 1 ? '' : ' each'}`,
+        ]
+      : []),
+    ...(expiredProviderUserIds.length
+      ? [`expired ${formatSlackMentionList(expiredProviderUserIds, mentionUser)}`]
+      : []),
+    ...(failedProviderUserIds.length
+      ? [`failed ${formatSlackMentionList(failedProviderUserIds, mentionUser)}`]
+      : []),
+  ]
+  const text = completedProviderUserIds.length
+    ? `<@${result.pendingTip.sender_provider_user_id}> ${result.pendingTip.memo ? 'sent' : 'tipped'} ${formatSlackMentionList(completedProviderUserIds, mentionUser)} ${amount}${result.pendingTip.memo ? ` for ${result.pendingTip.memo}` : ''}${statusSegments.length ? ` (${statusSegments.join('; ')})` : ''}`
+    : `<@${result.pendingTip.sender_provider_user_id}> queued ${formatSlackMentionList(queuedProviderUserIds, mentionUser)} ${amount}${queuedProviderUserIds.length === 1 ? '' : ' each'}${result.pendingTip.memo ? ` for ${result.pendingTip.memo}` : ''}${statusSegments.length && !queuedProviderUserIds.length ? ` (${statusSegments.join('; ')})` : ''}`
+  const receiptLinks = [
+    ...(aggregate.batch?.status === 'confirmed' && aggregate.batch.transaction_hash
+      ? [
+          `<${Tempo.formatTxLink(result.pendingTip.chain_id, aggregate.batch.transaction_hash)}|Receipt>`,
+        ]
+      : []),
+    ...aggregate.sentPendingTips
+      .filter((pending) => pending.transaction_hash)
+      .map(
+        (pending) =>
+          `<${Tempo.formatTxLink(result.pendingTip.chain_id, pending.transaction_hash!)}|Receipt>`,
+      ),
+  ]
+  const context = queuedProviderUserIds.length
+    ? `Run \`${getSlackCommand(env.HOST)} connect\` to receive it`
+    : undefined
+  const blocks = [
+    {
+      text: {
+        text: receiptLinks.length ? formatReceiptText(text, receiptLinks.join(' ')) : text,
+        type: 'mrkdwn',
+      },
+      type: 'section',
+    },
+    ...(context
+      ? [
+          {
+            elements: [{ text: context, type: 'mrkdwn' }],
+            type: 'context',
+          },
+        ]
+      : []),
+  ]
+  const body = new URLSearchParams()
+  body.set('blocks', JSON.stringify(blocks))
+  body.set('channel', channelId)
+  body.set(
+    'text',
+    receiptLinks.length
+      ? formatReceiptText(text, receiptLinks.map(() => 'Receipt').join(' '))
+      : `${text}${context ? `. ${context}` : ''}`,
+  )
+  body.set('ts', result.pendingTip.provider_message_ts)
+  body.set('unfurl_links', 'false')
+  body.set('unfurl_media', 'false')
+  const response = await getSlack().withBotToken(botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.update`, {
+      body,
+      headers: { authorization: `Bearer ${botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok) console.error('Failed to update queued tip message:', json.error)
+}
+
 async function recordSlackReceiptMessage(
   db: DB.Type,
   options: {
@@ -4477,6 +4778,13 @@ function formatReceiptText(text: string, receipt: string) {
   const lineBreakIndex = text.indexOf('\n')
   if (lineBreakIndex === -1) return `${text} · ${receipt}`
   return `${text.slice(0, lineBreakIndex).replace(/\.$/, '')} · ${receipt}${text.slice(lineBreakIndex)}`
+}
+
+function formatSlackMentionList(
+  providerUserIds: string[],
+  mentionUser: (providerUserId: string) => string,
+) {
+  return providerUserIds.map((providerUserId) => mentionUser(providerUserId)).join(', ')
 }
 
 async function isSlackAdmin(providerId: string, providerUserId: string) {
