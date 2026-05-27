@@ -1411,6 +1411,10 @@ const handlers = {
       } else if (result.ok && result.status === 'queued') {
         const messageTs = await postSlackQueuedTipMessage(ctx, result, {
           channelId: event.channel.id,
+          mentionConnectCommand: Boolean(
+            plan.recipients[0]?.recipientProviderWorkspaceId &&
+            plan.recipients[0].recipientProviderWorkspaceId !== ctx.provider.id,
+          ),
           mentionUser: (providerUserId) => event.channel.mentionUser(providerUserId),
           threadTs: options.threadTs,
         })
@@ -1837,8 +1841,13 @@ async function resolveSlackTipPlan(
       continue
     }
 
+    const allowUnconnectedSingleRecipient = Boolean(
+      conversation.isShared && target.source === 'explicit' && targets.length === 1,
+    )
     const recipient = conversation.isShared
-      ? await resolveSlackConnectRecipient(ctx, conversation.teamIds, target.recipient)
+      ? await resolveSlackConnectRecipient(ctx, conversation.teamIds, target.recipient, {
+          allowUnconnected: allowUnconnectedSingleRecipient,
+        })
       : await resolveLocalSlackRecipient(ctx, target.recipient)
     if ('message' in recipient) return { message: recipient.message, ok: false }
     if (!recipient.value) {
@@ -2032,7 +2041,9 @@ async function resolveSlackConnectRecipient(
   ctx: Pick<HandlerContext, 'channelProviderId' | 'db' | 'provider'>,
   teamIds: Set<string>,
   recipient: Tip.TipRecipientInput,
+  options: { allowUnconnected?: boolean } = {},
 ) {
+  let resolvedUnconnectedRecipient: Tip.TipRecipientInput | null = null
   const candidates = [...teamIds, ctx.channelProviderId, ctx.provider.id]
     .filter((providerWorkspaceId) => providerWorkspaceId !== undefined)
     .map((providerWorkspaceId) => ({
@@ -2047,6 +2058,12 @@ async function resolveSlackConnectRecipient(
       recipient.recipientProviderUserId,
     )
     if (!info?.id || !info.team_id) continue
+    if (options.allowUnconnected)
+      resolvedUnconnectedRecipient = {
+        ...recipient,
+        recipientProviderUserId: info.id,
+        recipientProviderWorkspaceId: info.team_id,
+      }
     candidates.push({ providerUserId: info.id, providerWorkspaceId: info.team_id })
   }
 
@@ -2081,7 +2098,11 @@ async function resolveSlackConnectRecipient(
     return {
       message: `Payment not sent. <@${recipient.recipientProviderUserId}> could not be resolved safely across Slack workspaces.`,
     }
-  if (matches.length === 0) return { value: null }
+  if (matches.length === 0)
+    return {
+      accountId: null,
+      value: options.allowUnconnected ? resolvedUnconnectedRecipient : null,
+    }
   return {
     accountId: matches[0]!.accountId,
     value: {
@@ -4041,6 +4062,7 @@ async function postSlackQueuedTipMessage(
   result: Extract<Tip.TipResult, { ok: true; status: 'queued' }>,
   options: {
     channelId: string
+    mentionConnectCommand?: boolean
     mentionUser: (providerUserId: string) => string
     threadTs?: string
   },
@@ -4058,6 +4080,7 @@ async function postSlackQueuedTipMessage(
   const connectCommand = await (async () => {
     // Slack Connect and single-channel guests need mention commands because slash commands are unavailable.
     if (
+      options.mentionConnectCommand ||
       ctx.externalSlackConnect ||
       (ctx.channelProviderId && ctx.channelProviderId !== ctx.provider.id)
     )

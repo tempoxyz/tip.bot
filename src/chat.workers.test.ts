@@ -2292,22 +2292,47 @@ test('@Tipbot mention confirms Slack Connect external sender tip from sender wor
   fetchSpy.mockRestore()
 }, 20_000) // 20 seconds
 
-test('@Tipbot mention fails closed when Slack Connect recipient workspace is not installed', async () => {
-  const fetchSpy = vi.spyOn(globalThis, 'fetch')
-  await connectTipAccounts({ recipient: false })
+test('@Tipbot mention queues Slack Connect tip for unconnected recipient workspace', async () => {
+  const connected = await connectTipAccounts({ recipient: false })
   await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
   const channelId = await getSlackConnectChannelId()
   const messageTs = `1700000000.${Nanoid.generate().slice(0, 6)}`
+  await expectSlackConnectEmulator(channelId)
 
   const response = await postSlackAppMention({
     channelId,
     messageTs,
     text: `<@${Constants.slack.botUserId}> <@${Constants.slackConnect.userId}>`,
   })
+  const pendingTip = await db
+    .selectFrom('pending_tip')
+    .selectAll()
+    .where('sender_member_id', '=', connected.senderMember.id)
+    .where('recipient_provider_user_id', '=', Constants.slackConnect.userId)
+    .executeTakeFirstOrThrow()
 
   expect(response.status).toBe(200)
-  await expectSlackPostEphemeralCall(fetchSpy, '')
-  fetchSpy.mockRestore()
+  expect(pendingTip).toMatchObject({
+    recipient_provider_user_id: Constants.slackConnect.userId,
+    status: 'pending',
+    workspace_id: connected.workspace.id,
+  })
+  await expectSlackThreadMessage(
+    messageTs,
+    `<@${Constants.slack.adminUserId}> queued <@${Constants.slackConnect.userId}> $0.001`,
+    { channelId },
+  )
+  await expectSlackThreadMessage(messageTs, 'Run `@Tipbot connect` to receive it', { channelId })
 }, 20_000) // 20 seconds
 
 test.each([
