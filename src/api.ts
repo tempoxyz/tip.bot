@@ -514,6 +514,98 @@ export const api = new Hono<{
               )
             }),
           )
+        else if (
+          result.status === 'sent' &&
+          Chat.isReceiptBoostIdempotencyKey(data.payload.idempotencyKey)
+        )
+          c.executionCtx.waitUntil(
+            (async () => {
+              await Chat.getChat().initialize()
+              const installation = await Chat.getSlack().getInstallation(data.payload.providerId)
+              if (!installation) return
+
+              const [, workspaceId, channelId, messageTs] = data.payload.idempotencyKey.split(':')
+              if (!workspaceId || !channelId || !messageTs) return
+              const receipt = await c.var.db
+                .selectFrom('tip_receipt_message')
+                .select(['message_ts', 'thread_ts'])
+                .where('workspace_id', '=', workspaceId)
+                .where('channel_id', '=', channelId)
+                .where('message_ts', '=', messageTs)
+                .executeTakeFirst()
+              if (!receipt) return
+
+              const originalReceiptLink = (() => {
+                if (receipt.thread_ts === receipt.message_ts) return ''
+                const url = new URL('slack://channel')
+                url.searchParams.set('team', data.payload.providerId)
+                url.searchParams.set('id', channelId)
+                url.searchParams.set('message', receipt.message_ts)
+                return ` <${url}|this message>`
+              })()
+              const receiptLink = `<${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`
+              const text = `<@${result.senderProviderUserId}> boosted${originalReceiptLink} · ${receiptLink}`
+              const body = new URLSearchParams()
+              body.set(
+                'blocks',
+                JSON.stringify([
+                  {
+                    text: { text, type: 'mrkdwn' },
+                    type: 'section',
+                  },
+                ]),
+              )
+              body.set('channel', channelId)
+              body.set('text', text.replace(receiptLink, 'Receipt'))
+              body.set('thread_ts', receipt.thread_ts)
+              body.set('unfurl_links', 'false')
+              body.set('unfurl_media', 'false')
+              const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
+                fetch(`${c.env.SLACK_API_URL}/chat.postMessage`, {
+                  body,
+                  headers: { authorization: `Bearer ${installation.botToken}` },
+                  method: 'POST',
+                }),
+              )
+              const json = z.parse(
+                z.object({
+                  error: z.string().optional(),
+                  ok: z.boolean().optional(),
+                  ts: z.string().optional(),
+                }),
+                await response.json(),
+              )
+              if (!json.ok || !json.ts)
+                throw new Error(json.error ?? 'Slack API chat.postMessage failed.')
+              await Chat.recordSlackReceiptMessageForTransaction(c.var.db, {
+                channelId,
+                messageTs: json.ts,
+                threadTs: receipt.thread_ts,
+                transactionHash: result.transactionHash,
+              })
+              if (data.payload.skippedRecipients?.length) {
+                const skippedBody = new URLSearchParams()
+                const recipientCount = data.payload.recipients?.length ?? 1
+                const skippedCount = data.payload.skippedRecipients.length
+                skippedBody.set('channel', channelId)
+                skippedBody.set(
+                  'text',
+                  `Boost sent to ${recipientCount} ${recipientCount === 1 ? 'account' : 'accounts'}. Skipped ${skippedCount} ${skippedCount === 1 ? 'account' : 'accounts'} that can no longer receive payments.`,
+                )
+                skippedBody.set('thread_ts', receipt.thread_ts)
+                skippedBody.set('user', data.payload.senderProviderUserId)
+                await Chat.getSlack().withBotToken(installation.botToken, () =>
+                  fetch(`${c.env.SLACK_API_URL}/chat.postEphemeral`, {
+                    body: skippedBody,
+                    headers: { authorization: `Bearer ${installation.botToken}` },
+                    method: 'POST',
+                  }),
+                )
+              }
+            })().catch((error) => {
+              console.error('Failed to post Slack boost receipt after confirmation:', error)
+            }),
+          )
         else if (result.status === 'sent')
           c.executionCtx.waitUntil(
             (async () => {
@@ -581,10 +673,18 @@ export const api = new Hono<{
                   z.object({
                     error: z.string().optional(),
                     ok: z.boolean().optional(),
+                    ts: z.string().optional(),
                   }),
                   await response.json(),
                 )
                 if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postMessage failed.')
+                if (json.ts)
+                  await Chat.recordSlackReceiptMessageForTransaction(c.var.db, {
+                    channelId: data.payload.providerChannelId.replace(/^slack:/, ''),
+                    messageTs: json.ts,
+                    threadTs: threadId ?? json.ts,
+                    transactionHash: result.transactionHash,
+                  })
               } finally {
                 if (threadId) {
                   const statusBody = new URLSearchParams()

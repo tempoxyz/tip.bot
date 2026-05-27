@@ -14,3 +14,8 @@ test('returns deterministic preview reaction tip emojis by PR host', () => {
     'white_check_mark',
   ])
 })
+
+test('returns deterministic receipt boost emoji by host', () => {
+  expect(App.getReceiptBoostReaction('tip.bot')).toBe('heavy_plus_sign')
+  expect(App.getReceiptBoostReaction('pr44.tip.bot')).toBe('chart_with_upwards_trend')
+})

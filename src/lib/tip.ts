@@ -240,6 +240,7 @@ export async function handleTipRequest(
     recipientProviderUserId: input.recipientProviderUserId,
     sender,
     senderProviderUserId: input.senderProviderUserId,
+    source: 'command',
     tokenAddress,
     workspace: executionWorkspace,
   })
@@ -249,6 +250,7 @@ export async function handleTipBatchRequest(
   env: Env,
   input: {
     amount?: number
+    chainId?: number
     idempotencyKey: string
     memo: string | null
     provider: Database.Selectable.workspace['provider']
@@ -307,7 +309,7 @@ export async function handleTipBatchRequest(
     : workspace
   const executionWorkspace = {
     ...workspace,
-    chain_id: settingsWorkspace.chain_id,
+    chain_id: input.chainId ?? settingsWorkspace.chain_id,
     default_amount: settingsWorkspace.default_amount,
     default_token_address: settingsWorkspace.default_token_address,
   }
@@ -410,6 +412,7 @@ export async function handleTipBatchRequest(
         recipients,
         senderProviderUserId: input.senderProviderUserId,
         skippedRecipients: input.skippedRecipients,
+        source: input.source,
         usergroupId: input.usergroupId,
         usergroupLabel: input.usergroupLabel,
       },
@@ -788,7 +791,7 @@ export async function confirmTipRequest(
       sender,
       senderProviderUserId: payload.senderProviderUserId,
       skippedRecipients: payload.skippedRecipients,
-      source: 'command',
+      source: payload.source ?? 'command',
       tokenAddress: Address.checksum(payload.tokenAddress),
       usergroupId: payload.groupId,
       usergroupLabel: payload.groupLabel,
@@ -811,6 +814,7 @@ export async function confirmTipRequest(
     recipientProviderUserId: payload.recipientProviderUserId,
     sender,
     senderProviderUserId: payload.senderProviderUserId,
+    source: payload.source,
     tokenAddress: Address.checksum(payload.tokenAddress),
     workspace,
   })
@@ -1041,6 +1045,7 @@ async function createConfirmationRequired(
     recipients?: TipRecipientInput[]
     senderProviderUserId: string
     skippedRecipients?: TipSkippedRecipient[]
+    source?: 'command' | 'mention' | 'reaction'
     usergroupId?: string
     usergroupLabel?: string
   },
@@ -1082,6 +1087,7 @@ async function createConfirmationRequired(
     recipientProviderWorkspaceId: input.recipientProviderWorkspaceId,
     senderProviderUserId: input.senderProviderUserId,
     tokenAddress,
+    source: input.source,
     ...(options.accessKeyLimit ? { accessKeyLimit: options.accessKeyLimit.toString() } : {}),
     workspaceId: workspace.id,
   } as Confirmation.Payload & { accessKeyLimit?: string })
@@ -1356,6 +1362,7 @@ async function submitTip(
     recipientProviderUserId: string
     sender: ConnectedMember
     senderProviderUserId: string
+    source?: 'command' | 'mention' | 'reaction'
     tokenAddress: string
     workspace: Database.Selectable.workspace
   },
@@ -1380,7 +1387,7 @@ async function submitTip(
     ],
     sender: input.sender,
     senderProviderUserId: input.senderProviderUserId,
-    source: 'command',
+    source: input.source ?? 'command',
     tokenAddress: input.tokenAddress,
     workspace: input.workspace,
   })
@@ -1493,7 +1500,7 @@ async function submitSignedTipBatch(
       provider_thread_id: input.payload.providerThreadId ?? null,
       recipient_count: input.connectedRecipients.length,
       sender_member_id: input.sender.member.id,
-      source: 'command',
+      source: input.payload.source ?? 'command',
       status: 'pending',
       token_address: input.tokenAddress,
       total_amount: input.payload.amount * input.connectedRecipients.length,
@@ -1640,7 +1647,7 @@ async function submitSignedTip(
       provider_thread_id: input.payload.providerThreadId ?? null,
       recipient_count: 1,
       sender_member_id: input.sender.member.id,
-      source: 'command',
+      source: input.payload.source ?? 'command',
       status: 'pending',
       token_address: input.tokenAddress,
       total_amount: input.payload.amount,
