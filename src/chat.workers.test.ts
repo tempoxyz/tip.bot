@@ -3702,7 +3702,7 @@ test('receipt boost aggregates threaded receipt boosts', async () => {
           channel: Constants.slack.channelId,
           ts: parentTs,
         })
-        return replies.messages?.find((message) => message.text?.startsWith('Boosts'))?.text ?? ''
+        return replies.messages?.find((message) => message.text?.startsWith('Boosted '))?.text ?? ''
       },
       { timeout: 5_000 }, // 5 seconds
     )
@@ -3711,7 +3711,9 @@ test('receipt boost aggregates threaded receipt boosts', async () => {
     channel: Constants.slack.channelId,
     ts: parentTs,
   })
-  const aggregate = aggregateReplies.messages?.find((message) => message.text?.startsWith('Boosts'))
+  const aggregate = aggregateReplies.messages?.find((message) =>
+    message.text?.startsWith('Boosted '),
+  )
   if (!aggregate?.ts || !aggregate.text) throw new Error('Expected boost aggregate reply.')
   const ignoredResponse = await postSlackReaction({
     eventTs: `${aggregate.ts}-boost-ignored`,
@@ -3734,7 +3736,7 @@ test('receipt boost aggregates threaded receipt boosts', async () => {
   expect(aggregate.text).toContain(`• <@${Constants.slack.adminUserId}> boosted · <`)
   expect(aggregate.text).toContain(`• <@${unconnectedProviderUserId}> boosted · <`)
   expect(
-    aggregateReplies.messages?.filter((message) => message.text?.startsWith('Boosts')),
+    aggregateReplies.messages?.filter((message) => message.text?.startsWith('Boosted ')),
   ).toHaveLength(1)
   expect(
     aggregateReplies.messages?.some((message) =>
@@ -4135,7 +4137,7 @@ test('threaded receipt boost confirms into aggregate after approval', async () =
   const confirmationJson = await confirmation.json()
   if (!confirmationJson.ok) throw new Error('Expected confirmation metadata.')
   if (!confirmationJson.transactionRequest) throw new Error('Expected transaction request.')
-  await expectSlackThreadMessageNotContaining(parentTs, 'Boosts')
+  await expectSlackThreadMessageNotContaining(parentTs, 'Boosted ')
 
   const provider = Provider.create({
     adapter: dangerous_secp256k1({ privateKey: Constants.tip.senderRootPrivateKey }),
@@ -4169,7 +4171,7 @@ test('threaded receipt boost confirms into aggregate after approval', async () =
   expect(confirmationJson).toMatchObject({ kind: 'onetime_payment' })
   expect(confirmResponse.status).toBe(200)
   await expect(confirmResponse.json()).resolves.toMatchObject({ ok: true })
-  await expectSlackThreadMessage(parentTs, 'Boosts', { wait: true })
+  await expectSlackThreadMessage(parentTs, 'Boosted ', { wait: true })
   await expectSlackThreadMessage(
     parentTs,
     `Boosted <slack://channel?team=${providerId}&id=${Constants.slack.channelId}&message=${receiptTs}|this message> $0.001:`,

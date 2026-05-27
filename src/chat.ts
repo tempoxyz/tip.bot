@@ -2266,7 +2266,7 @@ async function handleSlackReactionTip(event: SlackReactionEvent, context: Reacti
       }
 
       // Backfill older receipts by parsing the receipt link from the Slack message.
-      if (message?.text?.startsWith('Reaction tips') || message?.text?.startsWith('Boosts'))
+      if (message?.text?.startsWith('Reaction tips') || message?.text?.startsWith('Boosted '))
         return null
       const transactionHash = JSON.stringify(message ?? {}).match(
         /\/receipt\/(0x[0-9a-fA-F]{64})/,
@@ -3228,7 +3228,7 @@ export async function updateReceiptBoostAggregate(
       return `Boosted ${Slack.formatMessageLink(providerId, options.channelId, group.messageTs)} ${displayAmount}:\n${group.lines.join('\n')}`
     }),
   )
-  const text = `Boosts\n\n${groupTexts.join('\n\n')}`
+  const text = groupTexts.join('\n\n')
   const existing = await db
     .selectFrom('receipt_boost_thread')
     .selectAll()
