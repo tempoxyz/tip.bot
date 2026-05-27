@@ -2447,7 +2447,7 @@ async function handleSlackReceiptBoost(
   }
 
   const idempotencyKey = [
-    receiptBoostIdempotencyPrefix,
+    receiptBoostIdempotencyPrefix.replace(/:$/, ''),
     receipt.workspaceId,
     event.item.channel,
     receipt.messageTs,

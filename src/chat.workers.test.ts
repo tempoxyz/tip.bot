@@ -3518,13 +3518,23 @@ test('plus reaction boosts a receipt', async () => {
         db
           .selectFrom('tip_batch')
           .innerJoin('workspace', 'workspace.id', 'tip_batch.workspace_id')
-          .select(['tip_batch.amount_each', 'tip_batch.recipient_count', 'tip_batch.status'])
+          .select([
+            'tip_batch.amount_each',
+            'tip_batch.idempotency_key',
+            'tip_batch.recipient_count',
+            'tip_batch.status',
+          ])
           .where('workspace.provider_id', '=', providerId)
           .where('tip_batch.idempotency_key', 'like', `${Chat.receiptBoostIdempotencyPrefix}%`)
           .executeTakeFirst(),
       { timeout: 10_000 }, // 10 seconds
     )
-    .toMatchObject({ amount_each: 1000, recipient_count: 1, status: 'confirmed' })
+    .toMatchObject({
+      amount_each: 1000,
+      idempotency_key: expect.stringMatching(/^boost:[^:]/),
+      recipient_count: 1,
+      status: 'confirmed',
+    })
   await expectSlackThreadMessage(receiptTs, `<@${Constants.slack.adminUserId}> boosted`, {
     wait: true,
   })
