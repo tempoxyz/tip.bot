@@ -2,6 +2,7 @@ import { Provider, dangerous_secp256k1 } from 'accounts'
 import { WebClient } from '@slack/web-api'
 import { env } from 'cloudflare:workers'
 import { testClient } from 'hono/testing'
+import { HttpResponse, http as mswHttp } from 'msw'
 import { Address, Secp256k1 } from 'ox'
 import { http, toHex } from 'viem'
 import { Account } from 'viem/tempo'
@@ -21,6 +22,7 @@ import * as Schema from '#db/schemas.gen.ts'
 import type { DB as DB_gen } from '#db/types.gen.ts'
 import * as Constants from '#test/constants.ts'
 import * as Factory from '#test/factory.ts'
+import { server } from '#test/workers.server.ts'
 
 let apiChannelId = ''
 let waitUntil: Promise<unknown>[] = []
@@ -54,6 +56,79 @@ test('/api/health returns ok', async () => {
 
   expect(response.status).toBe(200)
   await expect(response.json()).resolves.toEqual({ ok: true })
+})
+
+describe('/api/chat/twitter', () => {
+  test('responds to Twitter CRC challenge', async () => {
+    const response = await api.fetch(
+      new Request('https://tip.bot/api/chat/twitter?crc_token=twitter-crc'),
+      twitterEnv(),
+      executionCtx,
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      response_token: `sha256=${await hmacBase64('twitter-consumer-secret', 'twitter-crc')}`,
+    })
+  })
+
+  test('valid tip from unconnected Twitter sender replies with connect link', async () => {
+    const posts: Array<{ authorization: string | null; body: unknown }> = []
+    server.use(
+      mswHttp.get('https://api.twitter.com/2/users/by/username/alice', () =>
+        HttpResponse.json({ data: { id: '200', username: 'alice' } }),
+      ),
+      mswHttp.post('https://api.twitter.com/2/tweets', async ({ request }) => {
+        posts.push({
+          authorization: request.headers.get('authorization'),
+          body: await request.json(),
+        })
+        return HttpResponse.json({ data: { id: 'reply-1', text: 'ok' } })
+      }),
+    )
+
+    const response = await postTwitterWebhook({
+      authorHandle: 'bob',
+      authorId: '100',
+      id: 'tweet-1',
+      text: '@tipbotgg @alice $5',
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: true })
+    expect(posts).toEqual([
+      {
+        authorization: expect.stringContaining('OAuth oauth_consumer_key="twitter-consumer-key"'),
+        body: {
+          reply: { in_reply_to_tweet_id: 'tweet-1' },
+          text: 'Connect at tip.bot/link/x to send tips.',
+        },
+      },
+    ])
+    expect(posts[0]?.authorization).toContain('oauth_signature=')
+    expect(posts[0]?.authorization).not.toContain('Bearer')
+  })
+
+  test('ignores Twitter connect chatter', async () => {
+    const fetchSpy = vi.fn()
+    server.use(
+      mswHttp.all('https://api.twitter.com/*', () => {
+        fetchSpy()
+        return HttpResponse.json({ ok: true })
+      }),
+    )
+
+    const response = await postTwitterWebhook({
+      authorHandle: 'bob',
+      authorId: '100',
+      id: 'tweet-connect',
+      text: '@tipbotgg connect',
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: true })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
 })
 
 describe('/api/chat/slack', () => {
@@ -1347,6 +1422,52 @@ async function expectSlackViewsPublishCall(fetchSpy: {
     user_id: json.user_id,
     view: typeof json.view === 'string' ? JSON.parse(json.view) : json.view,
   } as { user_id: string; view: Record<string, unknown> }
+}
+
+async function postTwitterWebhook(tweet: {
+  authorHandle: string
+  authorId: string
+  id: string
+  text: string
+}) {
+  return await api.fetch(
+    new Request('https://tip.bot/api/chat/twitter', {
+      body: JSON.stringify(tweet),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    }),
+    twitterEnv(),
+    executionCtx,
+  )
+}
+
+function twitterEnv() {
+  return {
+    ...env,
+    TWITTER_ACCESS_TOKEN: 'twitter-access-token',
+    TWITTER_ACCESS_TOKEN_SECRET: 'twitter-access-token-secret',
+    TWITTER_API_URL: 'https://api.twitter.com',
+    TWITTER_BEARER_TOKEN: 'twitter-bearer-token',
+    TWITTER_BOT_HANDLE: 'tipbotgg',
+    TWITTER_CONSUMER_KEY: 'twitter-consumer-key',
+    TWITTER_CONSUMER_SECRET: 'twitter-consumer-secret',
+  } satisfies Env
+}
+
+async function hmacBase64(key: string, message: string) {
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(key),
+    { hash: 'SHA-256', name: 'HMAC' },
+    false,
+    ['sign'],
+  )
+  const signature = new Uint8Array(
+    await crypto.subtle.sign('HMAC', cryptoKey, new TextEncoder().encode(message)),
+  )
+  let binary = ''
+  for (const byte of signature) binary += String.fromCharCode(byte)
+  return btoa(binary)
 }
 
 async function expectSlackMessage(channelId: string, text: string) {
