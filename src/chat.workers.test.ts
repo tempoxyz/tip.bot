@@ -3206,7 +3206,7 @@ test('reaction tipping sends default tip and updates aggregate thread reply', as
   expect(tips[0]).toMatchObject({ amount: 1000, confirmed_at: expect.any(String) })
   await expectSlackThreadMessage(
     message.ts,
-    `Reaction tips\n\n<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this message>:\n• :money_with_wings: <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
+    `Reaction tips received in this thread:\n\n<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this message>:\n• :money_with_wings: <@${Constants.slack.adminUserId}> tipped $0.001 · <`,
     { channelId },
   )
 })
@@ -3261,7 +3261,7 @@ for (const reactionTipCase of [
     expect(tips[0]).toMatchObject({ amount: config.amount, confirmed_at: expect.any(String) })
     await expectSlackThreadMessage(
       message.ts,
-      `Reaction tips\n\n<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this message>:\n• :${reactionTipCase.emoji}: <@${Constants.slack.adminUserId}> tipped ${reactionTipCase.amountText} · <`,
+      `Reaction tips received in this thread:\n\n<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this message>:\n• :${reactionTipCase.emoji}: <@${Constants.slack.adminUserId}> tipped ${reactionTipCase.amountText} · <`,
       { channelId, wait: true },
     )
   })
@@ -3340,7 +3340,7 @@ test('reaction tipping uses workspace configured emoji amounts', async () => {
   expect(tip).toMatchObject({ amount: 2000, confirmed_at: expect.any(String) })
   await expectSlackThreadMessage(
     message.ts,
-    `Reaction tips\n\n<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this message>:\n• :moneybag: <@${Constants.slack.adminUserId}> tipped $0.002 · <`,
+    `Reaction tips received in this thread:\n\n<@${Constants.slack.memberUserId}> received a tip on <slack://channel?team=${providerId}&id=${channelId}&message=${message.ts}|this message>:\n• :moneybag: <@${Constants.slack.adminUserId}> tipped $0.002 · <`,
     { channelId, wait: true },
   )
 }, 20_000) // 20 seconds
@@ -3968,16 +3968,202 @@ test('reaction tipping queues unconnected recipient', async () => {
 
   expect(response.status).toBe(200)
   expect(reactionTips).toHaveLength(0)
-  await expectSlackThreadMessage(
-    message.ts,
-    `<@${Constants.slack.adminUserId}> queued a tip for <@${Constants.slack.memberUserId}>`,
-    { channelId, wait: true },
-  )
+  await expectSlackThreadMessage(message.ts, 'Reaction tips received in this thread:', {
+    channelId,
+    wait: true,
+  })
+  await expectSlackThreadMessage(message.ts, `<@${Constants.slack.memberUserId}> received a tip`, {
+    channelId,
+    wait: true,
+  })
+  await expectSlackThreadMessage(message.ts, ':money_with_wings:', { channelId, wait: true })
+  await expectSlackThreadMessage(message.ts, `<@${Constants.slack.adminUserId}> queued $0.001`, {
+    channelId,
+    wait: true,
+  })
   await expectSlackThreadMessage(message.ts, 'Run `/tip connect` to receive it', {
     channelId,
     wait: true,
   })
 })
+
+test('reaction tipping aggregates queued messages for unconnected recipient', async () => {
+  await connectTipAccounts({ recipient: false })
+  await connectTipAccounts({
+    recipient: false,
+    senderProviderUserId: Constants.slack.unconnectedUserId,
+  })
+  const channelId = await createSlackTestChannel('rt')
+  const message = await memberSlack.chat.postMessage({
+    channel: channelId,
+    text: 'unconnected recipient should receive one queued reaction tip message',
+  })
+  if (!message.ts) throw new Error('Expected Slack message timestamp.')
+  const messageTs = message.ts
+
+  const first = await postSlackReaction({
+    channelId,
+    messageTs,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.adminUserId,
+  })
+  const second = await postSlackReaction({
+    channelId,
+    eventTs: `${messageTs}-reaction-second`,
+    messageTs,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.unconnectedUserId,
+  })
+
+  expect(first.status).toBe(200)
+  expect(second.status).toBe(200)
+  await expect
+    .poll(
+      async () => {
+        const history = await slack.conversations.replies({ channel: channelId, ts: messageTs })
+        const queuedMessages =
+          history.messages?.filter((reply) => reply.text?.includes('Reaction tips')) ?? []
+        return (
+          history.ok &&
+          queuedMessages.length === 1 &&
+          Boolean(queuedMessages[0]?.text?.includes('received tips on')) &&
+          Boolean(queuedMessages[0]?.text?.includes(':money_with_wings:')) &&
+          Boolean(queuedMessages[0]?.text?.includes('queued $0.001')) &&
+          Boolean(queuedMessages[0]?.text?.includes(Constants.slack.adminUserId)) &&
+          Boolean(queuedMessages[0]?.text?.includes(Constants.slack.memberUserId)) &&
+          Boolean(queuedMessages[0]?.text?.includes(Constants.slack.unconnectedUserId))
+        )
+      },
+      { interval: 25, timeout: 5_000 }, // 25 milliseconds, 5 seconds
+    )
+    .toBe(true)
+}, 20_000) // 20 seconds
+
+test('reaction tipping aggregates sent and queued messages together', async () => {
+  await connectTipAccounts()
+  const channelId = await createSlackTestChannel('rt')
+  const parent = await memberSlack.chat.postMessage({
+    channel: channelId,
+    text: 'connected recipient should receive tip',
+  })
+  if (!parent.ts) throw new Error('Expected Slack parent timestamp.')
+  const parentTs = parent.ts
+  const reply = await memberSlack.chat.postMessage({
+    channel: channelId,
+    text: 'unconnected recipient should queue tip',
+    thread_ts: parentTs,
+  })
+  if (!reply.ts) throw new Error('Expected Slack reply timestamp.')
+
+  const sent = await postSlackReaction({
+    channelId,
+    messageTs: parentTs,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.adminUserId,
+  })
+  const queued = await postSlackReaction({
+    channelId,
+    eventTs: `${reply.ts}-reaction`,
+    itemUserId: Constants.slack.unconnectedUserId,
+    messageTs: reply.ts,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.adminUserId,
+  })
+
+  expect(sent.status).toBe(200)
+  expect(queued.status).toBe(200)
+  await expect
+    .poll(
+      async () => {
+        const history = await slack.conversations.replies({ channel: channelId, ts: parentTs })
+        const aggregates =
+          history.messages?.filter((message) => message.text?.includes('Reaction tips')) ?? []
+        return (
+          history.ok &&
+          aggregates.length === 1 &&
+          Boolean(aggregates[0]?.text?.includes('tipped $0.001')) &&
+          Boolean(aggregates[0]?.text?.includes('queued $0.001')) &&
+          Boolean(aggregates[0]?.text?.includes('Run `/tip connect` to receive it'))
+        )
+      },
+      { interval: 25, timeout: 5_000 }, // 25 milliseconds, 5 seconds
+    )
+    .toBe(true)
+}, 20_000) // 20 seconds
+
+test('reaction tipping updates queued aggregate when pending tip is claimed', async () => {
+  const connected = await connectTipAccounts({ recipient: false })
+  const channelId = await createSlackTestChannel('rt')
+  const message = await memberSlack.chat.postMessage({
+    channel: channelId,
+    text: 'queued reaction should become sent when recipient connects',
+  })
+  if (!message.ts) throw new Error('Expected Slack message timestamp.')
+  const messageTs = message.ts
+
+  const response = await postSlackReaction({
+    channelId,
+    messageTs,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.adminUserId,
+  })
+  const pending = await expect
+    .poll(
+      async () =>
+        await db
+          .selectFrom('pending_tip')
+          .selectAll()
+          .where('workspace_id', '=', connected.workspace.id)
+          .where('recipient_provider_user_id', '=', Constants.slack.memberUserId)
+          .executeTakeFirst(),
+      { interval: 25, timeout: 5_000 }, // 25 milliseconds, 5 seconds
+    )
+    .toBeDefined()
+    .then(
+      async () =>
+        await db
+          .selectFrom('pending_tip')
+          .selectAll()
+          .where('workspace_id', '=', connected.workspace.id)
+          .where('recipient_provider_user_id', '=', Constants.slack.memberUserId)
+          .executeTakeFirstOrThrow(),
+    )
+  const recipientMember = await db
+    .selectFrom('member')
+    .select('provider_identity_id')
+    .where('id', '=', pending.recipient_member_id)
+    .executeTakeFirstOrThrow()
+
+  await db
+    .updateTable('provider_identity')
+    .set({ account_id: connected.recipientAccount.id, updated_at: new Date().toISOString() })
+    .where('id', '=', recipientMember.provider_identity_id)
+    .execute()
+  const result = await Tip.claimPendingTip(env, { pendingTipId: pending.id })
+  if (!result) throw new Error('Expected pending tip claim result.')
+  await Chat.updateSlackPendingTipMessage(db, result)
+
+  expect(response.status).toBe(200)
+  expect(result).toMatchObject({ ok: true, status: 'sent' })
+  await expect
+    .poll(
+      async () => {
+        const history = await slack.conversations.replies({ channel: channelId, ts: messageTs })
+        const aggregates =
+          history.messages?.filter((reply) => reply.text?.includes('Reaction tips')) ?? []
+        return (
+          history.ok &&
+          aggregates.length === 1 &&
+          Boolean(aggregates[0]?.text?.includes('tipped $0.001')) &&
+          Boolean(aggregates[0]?.text?.includes('Receipt')) &&
+          !aggregates[0]?.text?.includes('queued $0.001') &&
+          !aggregates[0]?.text?.includes('Run `/tip connect` to receive it')
+        )
+      },
+      { interval: 25, timeout: 5_000 }, // 25 milliseconds, 5 seconds
+    )
+    .toBe(true)
+}, 20_000) // 20 seconds
 
 test('reaction tipping reports approval required', async () => {
   const fetchSpy = vi.spyOn(globalThis, 'fetch')

@@ -2184,7 +2184,8 @@ async function handleSlackReactionTip(event: Slack.ReactionEvent, context: React
 
       // Backfill older receipts by parsing the receipt link from the Slack message.
       if (
-        message?.text?.startsWith('Reaction tips') ||
+        message?.text?.startsWith('Reaction tips received in this thread:') ||
+        message?.text?.startsWith('Reaction tips\n') ||
         message?.text?.startsWith('Boosts received in this thread:')
       )
         return null
@@ -2868,88 +2869,15 @@ export async function updateReactionTipAggregate(
   },
 ) {
   const db = DB.create(env.DB)
-  const rows = await db
-    .selectFrom('reaction_tip')
-    .innerJoin('tip', 'tip.id', 'reaction_tip.tip_id')
-    .innerJoin('tip_batch', 'tip_batch.id', 'tip.batch_id')
-    .innerJoin('member as sender', 'sender.id', 'reaction_tip.sender_member_id')
-    .innerJoin('member as recipient', 'recipient.id', 'reaction_tip.recipient_member_id')
-    .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
-    .select([
-      'reaction_tip.message_ts',
-      'reaction_tip.reaction',
-      'recipient.provider_user_id as recipient_provider_user_id',
-      'sender.provider_user_id as sender_provider_user_id',
-      'tip.amount',
-      'tip.chain_id',
-      'tip.token_address',
-      'tip_batch.transaction_hash',
-      'workspace.default_token_address',
-    ])
-    .where('reaction_tip.workspace_id', '=', options.workspaceId)
-    .where('reaction_tip.channel_id', '=', options.channelId)
-    .where('reaction_tip.thread_ts', '=', options.threadTs)
-    .where('tip.confirmed_at', 'is not', null)
-    .where('tip_batch.transaction_hash', 'is not', null)
-    .orderBy('reaction_tip.created_at', 'asc')
-    .execute()
-  if (rows.length === 0) return
-
   const installation = await getSlack().getInstallation(providerId)
   if (!installation) return
-
-  const rowTexts = await Promise.all(
-    rows.map(async (row) => {
-      const token = await Tempo.getTokenMetadata(env, row.chain_id, row.token_address)
-      const amount = formatAmount(row.amount)
-      const displayAmount = Address.isEqual(
-        Address.checksum(row.token_address),
-        Address.checksum(row.default_token_address ?? Tempo.addressLookup.pathUsd),
-      )
-        ? formatCurrencyAmount(amount, token.currency)
-        : formatTipAmount(amount, token.currency, token.symbol)
-      return {
-        messageTs: row.message_ts,
-        recipientProviderUserId: row.recipient_provider_user_id,
-        text: `• :${row.reaction}: <@${row.sender_provider_user_id}> tipped ${displayAmount} · <${Tempo.formatTxLink(row.chain_id, row.transaction_hash!)}|Receipt>`,
-      }
-    }),
-  )
-  const messageGroups = rowTexts.reduce(
-    (groups, row) => {
-      const group = groups.find((group) => group.messageTs === row.messageTs)
-      if (group) {
-        group.lines.push(row.text)
-        return groups
-      }
-      groups.push({
-        lines: [row.text],
-        messageTs: row.messageTs,
-        recipientProviderUserId: row.recipientProviderUserId,
-      })
-      return groups
-    },
-    [] as Array<{ lines: string[]; messageTs: string; recipientProviderUserId: string }>,
-  )
-  const text = (() => {
-    const title = 'Reaction tips'
-    if (messageGroups.length === 1) {
-      const reactedMessageUrl = new URL('slack://channel')
-      reactedMessageUrl.searchParams.set('team', providerId)
-      reactedMessageUrl.searchParams.set('id', options.channelId)
-      reactedMessageUrl.searchParams.set('message', messageGroups[0]!.messageTs)
-      return `${title}\n\n<@${messageGroups[0]!.recipientProviderUserId}> received ${rowTexts.length === 1 ? 'a tip' : 'tips'} on <${reactedMessageUrl}|this message>:\n${messageGroups[0]!.lines.join('\n')}`
-    }
-    return `${title}\n\n${messageGroups
-      .map((group) => {
-        const reactedMessageUrl = new URL('slack://channel')
-        reactedMessageUrl.searchParams.set('team', providerId)
-        reactedMessageUrl.searchParams.set('id', options.channelId)
-        reactedMessageUrl.searchParams.set('message', group.messageTs)
-        return `<@${group.recipientProviderUserId}> received ${group.lines.length === 1 ? 'a tip' : 'tips'} on <${reactedMessageUrl}|this message>:\n${group.lines.join('\n')}`
-      })
-      .join('\n\n')}`
-  })()
+  const text = await reactionTipAggregateText(db, {
+    channelId: options.channelId,
+    providerId,
+    threadTs: options.threadTs,
+    workspaceId: options.workspaceId,
+  })
+  if (!text) return
   const existing = await db
     .selectFrom('reaction_tip_thread')
     .selectAll()
@@ -2983,7 +2911,7 @@ export async function updateReactionTipAggregate(
       .set({ updated_at: new Date().toISOString() })
       .where('id', '=', existing.id)
       .execute()
-    return
+    return existing.reply_ts
   }
 
   const body = new URLSearchParams()
@@ -3026,6 +2954,7 @@ export async function updateReactionTipAggregate(
   } catch (error) {
     if (!isUniqueConstraintError(error)) throw error
   }
+  return json.ts
 }
 
 export async function updateReceiptBoostAggregate(
@@ -3907,6 +3836,19 @@ async function postSlackQueuedTipMessage(
     return `${getSlackCommand(env.HOST)} connect`
   })()
   const context = `Run \`${connectCommand}\` to receive it`
+  if (result.source === 'reaction') {
+    const messageTs = await updateSlackQueuedReactionTipMessage(
+      ctx.db,
+      installation.botToken,
+      result,
+      {
+        channelId: options.channelId,
+        context,
+        mentionUser: options.mentionUser,
+      },
+    )
+    if (messageTs) return messageTs
+  }
   const body = new URLSearchParams()
   body.set(
     'blocks',
@@ -3942,7 +3884,381 @@ async function postSlackQueuedTipMessage(
     await response.json(),
   )
   if (!json.ok || !json.ts) throw Slack.slackApiError('chat.postMessage', json.error)
+  if (result.source === 'reaction') {
+    await Tip.recordPendingTipMessage(env, {
+      pendingTipId: result.pendingTipId,
+      providerMessageTs: json.ts,
+    })
+    return (
+      (await updateSlackQueuedReactionTipMessage(ctx.db, installation.botToken, result, {
+        channelId: options.channelId,
+        context,
+        deleteDuplicateMessages: true,
+        mentionUser: options.mentionUser,
+      })) ?? json.ts
+    )
+  }
   return json.ts
+}
+
+async function updateSlackQueuedReactionTipMessage(
+  db: DB.Type,
+  botToken: string,
+  result: Extract<Tip.TipResult, { ok: true; status: 'queued' }>,
+  options: {
+    channelId: string
+    context: string
+    deleteDuplicateMessages?: boolean
+    mentionUser: (providerUserId: string) => string
+  },
+) {
+  const pending = await db
+    .selectFrom('pending_tip')
+    .select([
+      'provider_channel_id',
+      'provider_id',
+      'provider_thread_id',
+      'recipient_provider_user_id',
+      'workspace_id',
+    ])
+    .where('id', '=', result.pendingTipId)
+    .executeTakeFirst()
+  if (!pending) return null
+  const existing = await db
+    .selectFrom('reaction_tip_thread')
+    .selectAll()
+    .where('workspace_id', '=', pending.workspace_id)
+    .where('channel_id', '=', pending.provider_channel_id.replace(/^slack:/, ''))
+    .where('message_ts', '=', pending.provider_thread_id)
+    .executeTakeFirst()
+  const { messageTs, rows } = await (async () => {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const rows = await db
+        .selectFrom('pending_tip')
+        .innerJoin('workspace', 'workspace.id', 'pending_tip.workspace_id')
+        .select([
+          'pending_tip.amount',
+          'pending_tip.chain_id',
+          'pending_tip.created_at',
+          'pending_tip.idempotency_key',
+          'pending_tip.provider_message_ts',
+          'pending_tip.recipient_provider_user_id',
+          'pending_tip.sender_provider_user_id',
+          'pending_tip.token_address',
+          'workspace.default_token_address',
+        ])
+        .where('pending_tip.workspace_id', '=', pending.workspace_id)
+        .where('pending_tip.provider_id', '=', pending.provider_id)
+        .where('pending_tip.provider_channel_id', '=', pending.provider_channel_id)
+        .where('pending_tip.provider_thread_id', '=', pending.provider_thread_id)
+        .where('pending_tip.recipient_provider_user_id', '=', pending.recipient_provider_user_id)
+        .where('pending_tip.source', '=', 'reaction')
+        .where('pending_tip.status', 'in', ['pending', 'sending'])
+        .orderBy('pending_tip.created_at', 'asc')
+        .execute()
+      const messageTs =
+        existing?.reply_ts ?? rows.find((row) => row.provider_message_ts)?.provider_message_ts
+      if (messageTs || rows.length <= 1) return { messageTs, rows }
+      await new Promise((resolve) => setTimeout(resolve, 25)) // 25 milliseconds
+    }
+    return { messageTs: null, rows: [] }
+  })()
+  if (!messageTs) return null
+
+  const text = await reactionTipAggregateText(db, {
+    channelId: options.channelId,
+    connectContext: options.context,
+    providerId: pending.provider_id,
+    threadTs: pending.provider_thread_id ?? messageTs,
+    workspaceId: pending.workspace_id,
+  })
+  if (!text) return null
+  const body = new URLSearchParams()
+  body.set(
+    'blocks',
+    JSON.stringify([
+      {
+        text: { text, type: 'mrkdwn' },
+        type: 'section',
+      },
+      {
+        elements: [{ text: options.context, type: 'mrkdwn' }],
+        type: 'context',
+      },
+    ]),
+  )
+  body.set('channel', options.channelId.replace(/^slack:/, ''))
+  body.set('text', `${text}. ${options.context}`)
+  body.set('ts', messageTs)
+  body.set('unfurl_links', 'false')
+  body.set('unfurl_media', 'false')
+  const response = await getSlack().withBotToken(botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.update`, {
+      body,
+      headers: { authorization: `Bearer ${botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok) throw Slack.slackApiError('chat.update', json.error)
+  if (existing)
+    await db
+      .updateTable('reaction_tip_thread')
+      .set({ updated_at: new Date().toISOString() })
+      .where('id', '=', existing.id)
+      .execute()
+  else {
+    const now = new Date().toISOString()
+    try {
+      await db
+        .insertInto('reaction_tip_thread')
+        .values({
+          channel_id: options.channelId.replace(/^slack:/, ''),
+          created_at: now,
+          id: Nanoid.generate(),
+          message_ts: pending.provider_thread_id ?? messageTs,
+          reply_ts: messageTs,
+          updated_at: now,
+          workspace_id: pending.workspace_id,
+        })
+        .execute()
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error
+    }
+  }
+  if (options.deleteDuplicateMessages) {
+    for (const duplicateMessageTs of new Set(
+      rows
+        .map((row) => row.provider_message_ts)
+        .filter(
+          (duplicateMessageTs): duplicateMessageTs is string =>
+            Boolean(duplicateMessageTs) && duplicateMessageTs !== messageTs,
+        ),
+    )) {
+      const deleteResponse = await getSlack().withBotToken(botToken, () =>
+        fetch(`${env.SLACK_API_URL}/chat.delete`, {
+          body: new URLSearchParams({
+            channel: options.channelId.replace(/^slack:/, ''),
+            ts: duplicateMessageTs,
+          }),
+          headers: { authorization: `Bearer ${botToken}` },
+          method: 'POST',
+        }),
+      )
+      const deleteJson = z.parse(
+        z.object({
+          ok: z.boolean().optional(),
+        }),
+        await deleteResponse.json(),
+      )
+      if (deleteJson.ok)
+        await db
+          .updateTable('pending_tip')
+          .set({ provider_message_ts: messageTs, updated_at: new Date().toISOString() })
+          .where('workspace_id', '=', pending.workspace_id)
+          .where('provider_id', '=', pending.provider_id)
+          .where('provider_channel_id', '=', pending.provider_channel_id)
+          .where('provider_thread_id', '=', pending.provider_thread_id)
+          .where('provider_message_ts', '=', duplicateMessageTs)
+          .execute()
+    }
+  }
+  return messageTs
+}
+
+async function reactionTipAggregateText(
+  db: DB.Type,
+  options: {
+    channelId: string
+    connectContext?: string
+    providerId: string
+    threadTs: string
+    workspaceId: string
+  },
+) {
+  const sentRows = await db
+    .selectFrom('reaction_tip')
+    .innerJoin('tip', 'tip.id', 'reaction_tip.tip_id')
+    .innerJoin('tip_batch', 'tip_batch.id', 'tip.batch_id')
+    .innerJoin('member as sender', 'sender.id', 'reaction_tip.sender_member_id')
+    .innerJoin('member as recipient', 'recipient.id', 'reaction_tip.recipient_member_id')
+    .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
+    .select([
+      'reaction_tip.created_at',
+      'reaction_tip.message_ts',
+      'reaction_tip.reaction',
+      'recipient.provider_user_id as recipient_provider_user_id',
+      'sender.provider_user_id as sender_provider_user_id',
+      'tip.amount',
+      'tip.chain_id',
+      'tip.token_address',
+      'tip_batch.transaction_hash',
+      'workspace.default_token_address',
+    ])
+    .where('reaction_tip.workspace_id', '=', options.workspaceId)
+    .where('reaction_tip.channel_id', '=', options.channelId.replace(/^slack:/, ''))
+    .where('reaction_tip.thread_ts', '=', options.threadTs)
+    .where('tip.confirmed_at', 'is not', null)
+    .where('tip_batch.transaction_hash', 'is not', null)
+    .execute()
+  const queuedRows = await db
+    .selectFrom('pending_tip')
+    .innerJoin('workspace', 'workspace.id', 'pending_tip.workspace_id')
+    .select([
+      'pending_tip.amount',
+      'pending_tip.chain_id',
+      'pending_tip.created_at',
+      'pending_tip.idempotency_key',
+      'pending_tip.recipient_provider_user_id',
+      'pending_tip.sender_provider_user_id',
+      'pending_tip.token_address',
+      'workspace.default_token_address',
+    ])
+    .where('pending_tip.workspace_id', '=', options.workspaceId)
+    .where('pending_tip.provider_channel_id', '=', options.channelId.replace(/^slack:/, ''))
+    .where('pending_tip.provider_thread_id', '=', options.threadTs)
+    .where('pending_tip.source', '=', 'reaction')
+    .where('pending_tip.status', 'in', ['pending', 'sending'])
+    .execute()
+  const sentPendingRows = await db
+    .selectFrom('pending_tip')
+    .innerJoin('tip', 'tip.id', 'pending_tip.tip_id')
+    .innerJoin('tip_batch', 'tip_batch.id', 'tip.batch_id')
+    .innerJoin('workspace', 'workspace.id', 'pending_tip.workspace_id')
+    .select([
+      'pending_tip.amount',
+      'pending_tip.chain_id',
+      'pending_tip.created_at',
+      'pending_tip.idempotency_key',
+      'pending_tip.recipient_provider_user_id',
+      'pending_tip.sender_provider_user_id',
+      'pending_tip.token_address',
+      'tip_batch.transaction_hash',
+      'workspace.default_token_address',
+    ])
+    .where('pending_tip.workspace_id', '=', options.workspaceId)
+    .where('pending_tip.provider_channel_id', '=', options.channelId.replace(/^slack:/, ''))
+    .where('pending_tip.provider_thread_id', '=', options.threadTs)
+    .where('pending_tip.source', '=', 'reaction')
+    .where('pending_tip.status', '=', 'sent')
+    .where('tip_batch.transaction_hash', 'is not', null)
+    .execute()
+  if (sentRows.length === 0 && queuedRows.length === 0 && sentPendingRows.length === 0) return null
+
+  const sentRowTexts = await Promise.all(
+    sentRows.map(async (row) => {
+      const token = await Tempo.getTokenMetadata(env, row.chain_id, row.token_address)
+      const amount = formatAmount(row.amount)
+      const displayAmount = Address.isEqual(
+        Address.checksum(row.token_address),
+        Address.checksum(row.default_token_address ?? Tempo.addressLookup.pathUsd),
+      )
+        ? formatCurrencyAmount(amount, token.currency)
+        : formatTipAmount(amount, token.currency, token.symbol)
+      return {
+        createdAt: row.created_at,
+        messageTs: row.message_ts,
+        recipientProviderUserId: row.recipient_provider_user_id,
+        text: `• :${row.reaction}: <@${row.sender_provider_user_id}> tipped ${displayAmount} · <${Tempo.formatTxLink(row.chain_id, row.transaction_hash!)}|Receipt>`,
+      }
+    }),
+  )
+  const queuedRowTexts = await Promise.all(
+    queuedRows.map(async (row) => {
+      const token = await Tempo.getTokenMetadata(env, row.chain_id, row.token_address)
+      const amount = formatAmount(row.amount)
+      const displayAmount = Address.isEqual(
+        Address.checksum(row.token_address),
+        Address.checksum(row.default_token_address ?? Tempo.addressLookup.pathUsd),
+      )
+        ? formatCurrencyAmount(amount, token.currency)
+        : formatTipAmount(amount, token.currency, token.symbol)
+      const reactionTip = (() => {
+        const parts = row.idempotency_key
+          .replace(reactionTipIdempotencyPrefix, '')
+          .replace(/^:/, '')
+          .split(':')
+        return { messageTs: parts[2] ?? '', reaction: parts[3] ?? 'money_with_wings' }
+      })()
+      return {
+        createdAt: row.created_at,
+        messageTs: reactionTip.messageTs,
+        recipientProviderUserId: row.recipient_provider_user_id,
+        text: `• :${reactionTip.reaction}: <@${row.sender_provider_user_id}> queued ${displayAmount}`,
+      }
+    }),
+  )
+  const sentPendingRowTexts = await Promise.all(
+    sentPendingRows.map(async (row) => {
+      const token = await Tempo.getTokenMetadata(env, row.chain_id, row.token_address)
+      const amount = formatAmount(row.amount)
+      const displayAmount = Address.isEqual(
+        Address.checksum(row.token_address),
+        Address.checksum(row.default_token_address ?? Tempo.addressLookup.pathUsd),
+      )
+        ? formatCurrencyAmount(amount, token.currency)
+        : formatTipAmount(amount, token.currency, token.symbol)
+      const reactionTip = (() => {
+        const parts = row.idempotency_key
+          .replace(reactionTipIdempotencyPrefix, '')
+          .replace(/^:/, '')
+          .split(':')
+        return { messageTs: parts[2] ?? '', reaction: parts[3] ?? 'money_with_wings' }
+      })()
+      return {
+        createdAt: row.created_at,
+        messageTs: reactionTip.messageTs,
+        recipientProviderUserId: row.recipient_provider_user_id,
+        text: `• :${reactionTip.reaction}: <@${row.sender_provider_user_id}> tipped ${displayAmount} · <${Tempo.formatTxLink(row.chain_id, row.transaction_hash!)}|Receipt>`,
+      }
+    }),
+  )
+  const rowTexts = [...sentRowTexts, ...queuedRowTexts, ...sentPendingRowTexts].sort((a, b) =>
+    a.createdAt.localeCompare(b.createdAt),
+  )
+  const messageGroups = rowTexts.reduce(
+    (groups, row) => {
+      const group = groups.find((group) => group.messageTs === row.messageTs)
+      if (group) {
+        group.lines.push(row.text)
+        return groups
+      }
+      groups.push({
+        lines: [row.text],
+        messageTs: row.messageTs,
+        recipientProviderUserId: row.recipientProviderUserId,
+      })
+      return groups
+    },
+    [] as Array<{ lines: string[]; messageTs: string; recipientProviderUserId: string }>,
+  )
+  const title = 'Reaction tips received in this thread:'
+  const text = (() => {
+    if (messageGroups.length === 1) {
+      const reactedMessageUrl = new URL('slack://channel')
+      reactedMessageUrl.searchParams.set('team', options.providerId)
+      reactedMessageUrl.searchParams.set('id', options.channelId.replace(/^slack:/, ''))
+      reactedMessageUrl.searchParams.set('message', messageGroups[0]!.messageTs)
+      return `${title}\n\n<@${messageGroups[0]!.recipientProviderUserId}> received ${rowTexts.length === 1 ? 'a tip' : 'tips'} on <${reactedMessageUrl}|this message>:\n${messageGroups[0]!.lines.join('\n')}`
+    }
+    return `${title}\n\n${messageGroups
+      .map((group) => {
+        const reactedMessageUrl = new URL('slack://channel')
+        reactedMessageUrl.searchParams.set('team', options.providerId)
+        reactedMessageUrl.searchParams.set('id', options.channelId.replace(/^slack:/, ''))
+        reactedMessageUrl.searchParams.set('message', group.messageTs)
+        return `<@${group.recipientProviderUserId}> received ${group.lines.length === 1 ? 'a tip' : 'tips'} on <${reactedMessageUrl}|this message>:\n${group.lines.join('\n')}`
+      })
+      .join('\n\n')}`
+  })()
+  if (queuedRows.length === 0) return text
+  return `${text}\n\n${options.connectContext ?? `Run \`${getSlackCommand(env.HOST)} connect\` to receive it`}`
 }
 
 async function postSlackReceiptMessage(
@@ -4051,6 +4367,18 @@ export async function updateSlackPendingTipMessage(db: DB.Type, result: Tip.Pend
   if (!installation || !result.pendingTip.provider_message_ts) return
 
   const channelId = result.pendingTip.provider_channel_id.replace(/^slack:/, '')
+  if (
+    result.pendingTip.source === 'reaction' &&
+    result.ok &&
+    result.pendingTip.provider_thread_id
+  ) {
+    await updateReactionTipAggregate(result.pendingTip.provider_id, {
+      channelId,
+      threadTs: result.pendingTip.provider_thread_id,
+      workspaceId: result.pendingTip.workspace_id,
+    })
+    return
+  }
   const tokenMetadata = await Tempo.getTokenMetadata(
     env,
     result.pendingTip.chain_id,
