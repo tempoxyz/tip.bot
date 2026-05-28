@@ -4072,7 +4072,7 @@ async function postSlackQueuedTipMessage(
     : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
   const text =
     result.source === 'reaction'
-      ? `${options.mentionUser(result.senderProviderUserId)} queued a boost for ${options.mentionUser(result.recipientProviderUserId)}`
+      ? `${options.mentionUser(result.senderProviderUserId)} queued a tip for ${options.mentionUser(result.recipientProviderUserId)}`
       : `${options.mentionUser(result.senderProviderUserId)} queued ${options.mentionUser(result.recipientProviderUserId)} ${amount}${result.memo ? ` for ${result.memo}` : ''}`
   const connectCommand = await (async () => {
     const recipientWorkspace = await (async () => {
@@ -4269,12 +4269,12 @@ export async function updateSlackPendingTipMessage(db: DB.Type, result: Tip.Pend
       )
   const originalText =
     result.pendingTip.source === 'reaction'
-      ? `<@${result.pendingTip.sender_provider_user_id}> queued a boost for <@${result.pendingTip.recipient_provider_user_id}>`
+      ? `<@${result.pendingTip.sender_provider_user_id}> queued a tip for <@${result.pendingTip.recipient_provider_user_id}>`
       : `<@${result.pendingTip.sender_provider_user_id}> queued <@${result.pendingTip.recipient_provider_user_id}> ${amount}${result.pendingTip.memo ? ` for ${result.pendingTip.memo}` : ''}`
   const text = (() => {
     if (!result.ok) return originalText
     if (result.pendingTip.source === 'reaction')
-      return `<@${result.senderProviderUserId}> boosted this message`
+      return `<@${result.senderProviderUserId}> tipped this message`
     return `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} <@${result.recipientProviderUserId}> ${amount}${result.memo ? ` for ${result.memo}` : ''}`
   })()
   const context = result.ok

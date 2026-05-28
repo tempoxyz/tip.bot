@@ -3970,7 +3970,7 @@ test('reaction tipping queues unconnected recipient', async () => {
   expect(reactionTips).toHaveLength(0)
   await expectSlackThreadMessage(
     message.ts,
-    `<@${Constants.slack.adminUserId}> queued a boost for <@${Constants.slack.memberUserId}>`,
+    `<@${Constants.slack.adminUserId}> queued a tip for <@${Constants.slack.memberUserId}>`,
     { channelId, wait: true },
   )
   await expectSlackThreadMessage(message.ts, 'Run `/tip connect` to receive it', {
