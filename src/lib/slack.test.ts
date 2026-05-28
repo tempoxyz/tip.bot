@@ -32,3 +32,14 @@ test('normalizes Slack adapter channel ids', () => {
   expect(Slack.isDMChannelId('slack:D123:1700000000.000100')).toBe(true)
   expect(Slack.isDMChannelId('slack:C123')).toBe(false)
 })
+
+test('normalizes Slack mention text by removing bot mentions', () => {
+  expect(Slack.normalizeMentionText('<@U123>   tip <@U456>', 'U123')).toBe('tip <@U456>')
+  expect(Slack.normalizeMentionText('<@U123|tipbot> hello <@U123>', 'U123')).toBe('hello')
+})
+
+test('parses Slack mention tip text only when recipient intent is clear', () => {
+  expect(Slack.parseMentionTipText('tip <@U456> for coffee')).toBe('<@U456> for coffee')
+  expect(Slack.parseMentionTipText('hello <@U456>')).toBe(null)
+  expect(Slack.parseMentionTipText('send <!subteam^S123|@team> 1')).toBe('<!subteam^S123|@team> 1')
+})
