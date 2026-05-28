@@ -3,6 +3,7 @@ import { Address, Hex } from 'ox'
 import { createClient, http } from 'viem'
 import { multicall } from 'viem/actions'
 import { Actions } from 'viem/tempo'
+import { z } from 'zod'
 import { formatAmount, formatCurrencyAmount } from '#/lib/format.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
@@ -131,6 +132,299 @@ export function formatMessageLink(providerId: string, channelId: string, message
 
 export function isDMChannelId(channelId: string) {
   return getChannelId(channelId).startsWith('D')
+}
+
+export const reactionEventSchema = z.object({
+  authorizations: z
+    .array(
+      z.object({
+        is_bot: z.boolean().optional(),
+        team_id: z.string().min(1).nullable().optional(),
+        user_id: z.string().min(1).nullable().optional(),
+      }),
+    )
+    .optional(),
+  event_id: z.string().min(1).optional(),
+  event_ts: z.string().min(1),
+  item: z.object({
+    channel: z.string().min(1),
+    ts: z.string().min(1),
+    type: z.string().min(1),
+  }),
+  item_user: z.string().min(1).optional(),
+  reaction: z.string().min(1),
+  team_id: z.string().min(1),
+  type: z.enum(['reaction_added', 'reaction_removed']),
+  user: z.string().min(1),
+})
+
+export function formatUsergroupMention(usergroupId: string, usergroupLabel?: string) {
+  if (['channel', 'here'].includes(usergroupId)) return `<!${usergroupId}>`
+  return `<!subteam^${usergroupId}${usergroupLabel ? `|@${usergroupLabel}` : ''}>`
+}
+
+export function normalizeMentionText(value: string, botUserId: string) {
+  const botMentionPattern = new RegExp(
+    `<@${botUserId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\|[^>]+)?>`,
+    'g',
+  )
+  return value.replace(botMentionPattern, ' ').replace(/\s+/g, ' ').trim()
+}
+
+export function parseMentionTipText(text: string) {
+  const target = text.match(
+    /<@[A-Z0-9_]+(?:\|[^>]+)?>|<!subteam\^[A-Z0-9_]+(?:\|[^>]+)?>|<!(?:channel|here)(?:\|[^>]+)?>/,
+  )
+  if (!target) return null
+  const prefix = text.slice(0, target.index).trim().toLowerCase()
+  if (prefix && !['pay', 'send', 'tip'].includes(prefix)) return null
+  return text.slice(target.index).trim()
+}
+
+export function tableCell(text: string, style?: { code?: boolean }) {
+  return {
+    elements: [
+      {
+        elements: [style ? { style, text, type: 'text' } : { text, type: 'text' }],
+        type: 'rich_text_section',
+      },
+    ],
+    type: 'rich_text',
+  }
+}
+
+export function tableUserCell(providerUserId: string) {
+  return {
+    elements: [
+      {
+        elements: [{ type: 'user', user_id: providerUserId }],
+        type: 'rich_text_section',
+      },
+    ],
+    type: 'rich_text',
+  }
+}
+
+export const connectExternalCommandNames = ['connect', 'disconnect', 'help', 'status'] as const
+
+export function isConnectExternalCommand(
+  value: string,
+): value is (typeof connectExternalCommandNames)[number] {
+  return connectExternalCommandNames.includes(value as (typeof connectExternalCommandNames)[number])
+}
+
+export type ReactionEvent = z.infer<typeof reactionEventSchema>
+
+type SlackBotTokenInput = {
+  apiUrl: string
+  botToken: string
+  withBotToken?: <value>(
+    botToken: string,
+    fn: () => value | Promise<value>,
+  ) => value | Promise<value>
+}
+
+export async function setAssistantThreadStatus(input: {
+  apiUrl: string
+  channelId: string
+  getInstallation: (providerId: string) => Promise<{ botToken: string } | null | undefined>
+  loadingMessages?: readonly string[]
+  providerId: string
+  status: string
+  threadTs: string
+}) {
+  const installation = await input.getInstallation(input.providerId)
+  if (!installation) return
+
+  const body = new URLSearchParams()
+  body.set('channel_id', getChannelId(input.channelId))
+  if (input.loadingMessages) body.set('loading_messages', JSON.stringify(input.loadingMessages))
+  body.set('status', input.status)
+  body.set('thread_ts', input.threadTs)
+  await fetch(`${input.apiUrl}/assistant.threads.setStatus`, {
+    body,
+    headers: { authorization: `Bearer ${installation.botToken}` },
+    method: 'POST',
+  })
+}
+
+export async function getConversationInfo(input: SlackBotTokenInput & { channelId: string }) {
+  const body = new URLSearchParams()
+  body.set('channel', getChannelId(input.channelId))
+  const response = await withSlackBotToken(input, () =>
+    fetch(`${input.apiUrl}/conversations.info`, {
+      body,
+      headers: { authorization: `Bearer ${input.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      channel: z
+        .object({
+          context_team_id: z.string().optional(),
+          is_ext_shared: z.boolean().optional(),
+          is_im: z.boolean().optional(),
+          is_mpim: z.boolean().optional(),
+          is_shared: z.boolean().optional(),
+          shared_team_ids: z.array(z.string()).optional(),
+        })
+        .optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  const isShared = Boolean(
+    json.channel?.is_ext_shared ||
+    json.channel?.is_shared ||
+    json.channel?.shared_team_ids?.some((teamId) => teamId !== json.channel?.context_team_id),
+  )
+  return {
+    contextTeamId: json.channel?.context_team_id,
+    isIm: Boolean(json.ok && json.channel?.is_im),
+    isMpim: Boolean(json.ok && json.channel?.is_mpim),
+    isShared: Boolean(json.ok && json.channel && isShared),
+    teamIds: new Set(
+      [json.channel?.context_team_id, ...(json.channel?.shared_team_ids ?? [])].filter(
+        (teamId) => teamId !== undefined,
+      ),
+    ),
+  }
+}
+
+export async function getUserInfo(input: SlackBotTokenInput & { providerUserId: string }) {
+  const body = new URLSearchParams()
+  body.set('user', input.providerUserId)
+  const response = await withSlackBotToken(input, () =>
+    fetch(`${input.apiUrl}/users.info`, {
+      body,
+      headers: { authorization: `Bearer ${input.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      ok: z.boolean().optional(),
+      user: z
+        .object({
+          deleted: z.boolean().optional(),
+          id: z.string().optional(),
+          is_app_user: z.boolean().optional(),
+          is_bot: z.boolean().optional(),
+          is_restricted: z.boolean().optional(),
+          is_ultra_restricted: z.boolean().optional(),
+          name: z.string().optional(),
+          profile: z
+            .object({
+              display_name: z.string().optional(),
+              real_name: z.string().optional(),
+            })
+            .optional(),
+          real_name: z.string().optional(),
+          team_id: z.string().optional(),
+        })
+        .optional(),
+    }),
+    await response.json(),
+  )
+  return json.ok ? json.user : undefined
+}
+
+export async function isAdmin(input: SlackBotTokenInput & { providerUserId: string }) {
+  const body = new URLSearchParams()
+  body.set('user', input.providerUserId)
+  const response = await withSlackBotToken(input, () =>
+    fetch(`${input.apiUrl}/users.info`, {
+      body,
+      headers: { authorization: `Bearer ${input.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const info = z.parse(
+    z.object({
+      ok: z.boolean().optional(),
+      user: z
+        .object({
+          is_admin: z.boolean().optional(),
+          is_owner: z.boolean().optional(),
+        })
+        .optional(),
+    }),
+    await response.json(),
+  )
+  return Boolean(info.ok && (info.user?.is_admin || info.user?.is_owner))
+}
+
+export async function getUsergroupMembers(
+  input: SlackBotTokenInput & { usergroup: Tip.TipUsergroupInput },
+): Promise<{ ok: true; providerUserIds: string[] } | { message: string; ok: false }> {
+  const response = await withSlackBotToken(input, () => {
+    const body = new URLSearchParams()
+    body.set('usergroup', input.usergroup.providerUsergroupId)
+    return fetch(`${input.apiUrl}/usergroups.users.list`, {
+      body,
+      headers: { authorization: `Bearer ${input.botToken}` },
+      method: 'POST',
+    })
+  })
+  const json = z.parse(
+    z.object({
+      ok: z.boolean().optional(),
+      users: z.array(z.string()).optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok)
+    return {
+      message: `Payment not sent. I could not read ${formatUsergroupMention(input.usergroup.providerUsergroupId, input.usergroup.providerUsergroupLabel)}.`,
+      ok: false,
+    }
+  // Slack usergroups.users.list is treated as authoritative flat membership; no recursive
+  // usergroup expansion.
+  return { ok: true, providerUserIds: json.users ?? [] }
+}
+
+export function formatConversationMembersError(error?: string) {
+  if (error === 'not_in_channel' || error === 'no_permission' || error === 'channel_not_found')
+    return 'Payment not sent. Tipbot could not read the channel members. Invite Tipbot to this channel and try again.'
+  if (error === 'missing_scope')
+    return 'Payment not sent. Tipbot could not read the channel members because Tipbot is missing Slack permissions. Reinstall Tipbot and try again.'
+  return `Payment not sent. Tipbot could not read the channel members${error ? ` (${error})` : ''}.`
+}
+
+export async function resolveConnectActor(input: {
+  apiUrl: string
+  channelId: string
+  getInstallation: (providerId: string) => Promise<{ botToken: string } | null | undefined>
+  providerId: string
+  providerUserId: string
+  withBotToken?: <value>(
+    botToken: string,
+    fn: () => value | Promise<value>,
+  ) => value | Promise<value>
+}) {
+  const installation = await input.getInstallation(input.providerId)
+  if (!installation) return { blocked: false as const, external: false as const }
+
+  const conversation = await getConversationInfo({
+    apiUrl: input.apiUrl,
+    botToken: installation.botToken,
+    channelId: input.channelId,
+    withBotToken: input.withBotToken,
+  })
+  if (!conversation.isShared) return { blocked: false as const, external: false as const }
+
+  const info = await getUserInfo({
+    apiUrl: input.apiUrl,
+    botToken: installation.botToken,
+    providerUserId: input.providerUserId,
+    withBotToken: input.withBotToken,
+  })
+  if (!info?.team_id) return { blocked: true as const, external: false as const }
+
+  const localTeamIds = new Set([input.providerId, conversation.contextTeamId].filter(Boolean))
+  if (localTeamIds.has(info.team_id)) return { blocked: false as const, external: false as const }
+  return { blocked: false as const, external: true as const, providerId: info.team_id }
 }
 
 function stringValue(value: unknown) {
@@ -638,4 +932,12 @@ async function buildHomeView(input: {
 function getSlackCommand(host: string) {
   const previewPrNumber = host.match(/^pr(\d+)\.tip\.bot$/)?.[1]
   return previewPrNumber ? `/tippr${previewPrNumber}` : '/tip'
+}
+
+async function withSlackBotToken<value>(
+  input: SlackBotTokenInput,
+  fn: () => value | Promise<value>,
+) {
+  if (input.withBotToken) return await input.withBotToken(input.botToken, fn)
+  return await fn()
 }
