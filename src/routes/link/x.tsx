@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { parseUnits } from 'viem'
 import * as React from 'react'
 import { useConnect, useConnection, useConnectors } from 'wagmi'
+import { WalletProviders } from '#/components/WalletProviders.tsx'
 import { getErrorMessage } from '#/lib/error.ts'
 import { rpc } from '#/lib/rpc.ts'
 
@@ -13,6 +14,14 @@ export const Route = createFileRoute('/link/x')({
 const verificationPollMs = 5 * 1000 // 5 seconds
 
 function Component() {
+  return (
+    <WalletProviders.Root>
+      <LinkPanel />
+    </WalletProviders.Root>
+  )
+}
+
+function LinkPanel() {
   const connect = useConnect()
   const connection = useConnection()
   const connectors = useConnectors()
@@ -37,16 +46,12 @@ function Component() {
     try {
       const connector = connection.connector ?? connectors[0]
       if (!connector) throw new Error('Tempo Wallet is unavailable.')
-      const account =
+      const address =
         connection.status === 'connected' && connection.address
-          ? { address: connection.address }
-          : (
-              (await connect.connectAsync({ connector })) as unknown as {
-                accounts: readonly [{ address: string }, ...{ address: string }[]]
-              }
-            ).accounts[0]
+          ? connection.address
+          : getConnectedAddress(await connect.connectAsync({ connector }))
       const challengeResponse = await rpc.api.link.twitter.challenge.$post({
-        json: { address: account.address },
+        json: { address },
       })
       const challengeJson = (await challengeResponse.json()) as ChallengeResponse
       if (!challengeJson.ok)
@@ -265,4 +270,12 @@ function getAuthorizeAccessKey(data: {
       { address: data.tokenAddress, selector: 'transferWithMemo(address,uint256,bytes32)' },
     ],
   }
+}
+
+function getConnectedAddress(result: unknown) {
+  const account = (result as { accounts?: readonly (string | { address?: string })[] })
+    .accounts?.[0]
+  const address = typeof account === 'string' ? account : account?.address
+  if (!address) throw new Error('Tempo Wallet did not return an account.')
+  return address
 }
