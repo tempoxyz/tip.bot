@@ -9,6 +9,10 @@ on:
       sha:
         required: true
         type: string
+      twitter_bot_handle:
+        default: tipbotgg
+        required: false
+        type: string
     secrets:
       CLOUDFLARE_ACCOUNT_ID:
         required: true
@@ -26,6 +30,16 @@ on:
         required: false
       SLACK_CONFIG_REFRESH_TOKEN:
         required: false
+      TWITTER_ACCESS_TOKEN:
+        required: true
+      TWITTER_ACCESS_TOKEN_SECRET:
+        required: true
+      TWITTER_BEARER_TOKEN:
+        required: true
+      TWITTER_CONSUMER_KEY:
+        required: true
+      TWITTER_CONSUMER_SECRET:
+        required: true
 
 permissions:
   contents: read
@@ -39,6 +53,7 @@ env:
   SLACK_BOT_DISPLAY_NAME: Tipbot PR ${{ inputs.pr_number }}
   SLACK_COMMAND: /tippr${{ inputs.pr_number }}
   SLACK_APP_NAME: Tipbot PR ${{ inputs.pr_number }}
+  TWITTER_BOT_HANDLE: ${{ inputs.twitter_bot_handle }}
   WRANGLER_SEND_METRICS: false
 
 jobs:
@@ -358,11 +373,13 @@ jobs:
         env:
           D1_ID: ${{ steps.d1.outputs.id }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          TWITTER_BOT_HANDLE: ${{ vars.TWITTER_BOT_HANDLE || env.TWITTER_BOT_HANDLE }}
         run: |
           sed -i.bak \
             -e "s|__PREVIEW_NAME__|${PREVIEW_NAME}|g" \
             -e "s|__PREVIEW_APEX__|${PREVIEW_APEX}|g" \
             -e "s|__PREVIEW_PR_NUMBER__|${PR_NUMBER}|g" \
+            -e "s|__PREVIEW_TWITTER_BOT_HANDLE__|${TWITTER_BOT_HANDLE}|g" \
             -e "s|__PREVIEW_D1_ID__|${D1_ID}|g" \
             wrangler.jsonc
 
@@ -415,6 +432,11 @@ jobs:
             SLACK_CLIENT_ID
             SLACK_CLIENT_SECRET
             SLACK_SIGNING_SECRET
+            TWITTER_ACCESS_TOKEN
+            TWITTER_ACCESS_TOKEN_SECRET
+            TWITTER_BEARER_TOKEN
+            TWITTER_CONSUMER_KEY
+            TWITTER_CONSUMER_SECRET
         env:
           FEE_PAYER_PRIVATE_KEY_MAINNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_MAINNET }}
           FEE_PAYER_PRIVATE_KEY_TESTNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_TESTNET }}
@@ -422,6 +444,11 @@ jobs:
           SLACK_CLIENT_ID: ${{ steps.slack.outputs.client_id || steps.state.outputs.client_id }}
           SLACK_CLIENT_SECRET: ${{ steps.slack.outputs.client_secret || steps.state.outputs.client_secret }}
           SLACK_SIGNING_SECRET: ${{ steps.slack.outputs.signing_secret || steps.state.outputs.signing_secret }}
+          TWITTER_ACCESS_TOKEN: ${{ secrets.TWITTER_ACCESS_TOKEN }}
+          TWITTER_ACCESS_TOKEN_SECRET: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET }}
+          TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
+          TWITTER_CONSUMER_KEY: ${{ secrets.TWITTER_CONSUMER_KEY }}
+          TWITTER_CONSUMER_SECRET: ${{ secrets.TWITTER_CONSUMER_SECRET }}
 
       - name: Enable Slack event subscriptions
         if: steps.slack.outputs.created == 'true'

@@ -142,7 +142,7 @@
         "HOST": "__PREVIEW_APEX__.tip.bot",
         "SLACK_API_URL": "https://slack.com/api",
         "TWITTER_API_URL": "https://api.twitter.com",
-        "TWITTER_BOT_HANDLE": "tipbotgg",
+        "TWITTER_BOT_HANDLE": "__PREVIEW_TWITTER_BOT_HANDLE__",
       },
       "version_metadata": {
         "binding": "CF_VERSION_METADATA",
