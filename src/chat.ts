@@ -4364,7 +4364,7 @@ export async function recordSlackReceiptMessageForTransaction(
 
 export async function updateSlackPendingTipMessage(db: DB.Type, result: Tip.PendingTipClaimResult) {
   const installation = await getSlack().getInstallation(result.pendingTip.provider_id)
-  if (!installation || !result.pendingTip.provider_message_ts) return
+  if (!installation) return
 
   const channelId = result.pendingTip.provider_channel_id.replace(/^slack:/, '')
   if (
@@ -4379,6 +4379,7 @@ export async function updateSlackPendingTipMessage(db: DB.Type, result: Tip.Pend
     })
     return
   }
+  if (!result.pendingTip.provider_message_ts) return
   const tokenMetadata = await Tempo.getTokenMetadata(
     env,
     result.pendingTip.chain_id,
