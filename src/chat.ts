@@ -3055,10 +3055,13 @@ export async function updateReceiptBoostAggregate(
         .orderBy('tip.created_at', 'asc')
         .execute()
       const recipientCount = recipients.length
+      const recipientMentions = formatProviderUserMentionSummary(
+        recipients.map((recipient) => recipient.provider_user_id),
+      )
       const recipientText =
         recipientCount === 1
           ? `<@${recipients[0]!.provider_user_id}> received a boost`
-          : `${recipientCount} accounts received boosts`
+          : `${recipientMentions} received boosts`
       const amountText = recipientCount === 1 ? displayAmount : `${displayAmount} each`
       return `${recipientText} on ${Slack.formatMessageLink(providerId, options.channelId, group.messageTs)} ${amountText}:\n${group.lines.join('\n')}`
     }),
@@ -3691,7 +3694,10 @@ async function postSlackTipPreview(
       children: [
         chat.CardText(
           [
-            `You’re about to tip ${pending.usergroupId ? `${Slack.formatUsergroupMention(pending.usergroupId, pending.usergroupLabel)} ` : ''}${pending.recipients.length} accounts ${pending.amountText} each${pending.memo ? ` for ${pending.memo}` : ''}.`,
+            `You’re about to tip ${pending.usergroupId ? `${Slack.formatUsergroupMention(pending.usergroupId, pending.usergroupLabel)} ` : ''}${formatProviderUserMentionSummary(
+              pending.recipients.map((recipient) => recipient.recipientProviderUserId),
+              (providerUserId) => event.channel.mentionUser(providerUserId),
+            )} ${pending.amountText} each${pending.memo ? ` for ${pending.memo}` : ''}.`,
             ...(totalAmount ? [`Total: ${totalAmount}`] : []),
             '',
             '*Recipients:*',
@@ -3707,7 +3713,10 @@ async function postSlackTipPreview(
         ]),
       ],
     }),
-    fallbackText: `Confirm tip: ${pending.recipients.length} accounts ${pending.amountText} each.`,
+    fallbackText: `Confirm tip: ${formatProviderUserMentionSummary(
+      pending.recipients.map((recipient) => recipient.recipientProviderUserId),
+      (providerUserId) => event.channel.mentionUser(providerUserId),
+    )} ${pending.amountText} each.`,
   })
 }
 
@@ -3765,7 +3774,10 @@ async function postTipResult(
     await postSlackReceiptMessage(
       event,
       ctx,
-      `${event.channel.mentionUser(result.senderProviderUserId)} ${result.memo ? 'sent' : 'tipped'} ${options.usergroupId ? `${Slack.formatUsergroupMention(options.usergroupId, options.usergroupLabel)} ` : ''}${result.recipients.length} accounts ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${[
+      `${event.channel.mentionUser(result.senderProviderUserId)} ${result.memo ? 'sent' : 'tipped'} ${options.usergroupId ? `${Slack.formatUsergroupMention(options.usergroupId, options.usergroupLabel)} ` : ''}${formatProviderUserMentionSummary(
+        result.recipients.map((recipient) => recipient.recipientProviderUserId),
+        (providerUserId) => event.channel.mentionUser(providerUserId),
+      )} ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${[
         ...result.recipients.map(
           (recipient) => `• ${event.channel.mentionUser(recipient.recipientProviderUserId)}`,
         ),
@@ -3981,14 +3993,10 @@ async function updateSlackQueuedReactionTipMessage(
         text: { text, type: 'mrkdwn' },
         type: 'section',
       },
-      {
-        elements: [{ text: options.context, type: 'mrkdwn' }],
-        type: 'context',
-      },
     ]),
   )
   body.set('channel', options.channelId.replace(/^slack:/, ''))
-  body.set('text', `${text}. ${options.context}`)
+  body.set('text', text)
   body.set('ts', messageTs)
   body.set('unfurl_links', 'false')
   body.set('unfurl_media', 'false')
@@ -4610,6 +4618,18 @@ function formatReceiptText(text: string, receipt: string) {
   const lineBreakIndex = text.indexOf('\n')
   if (lineBreakIndex === -1) return `${text} · ${receipt}`
   return `${text.slice(0, lineBreakIndex).replace(/\.$/, '')} · ${receipt}${text.slice(lineBreakIndex)}`
+}
+
+export function formatProviderUserMentionSummary(
+  providerUserIds: readonly string[],
+  mentionUser: (providerUserId: string) => string = (providerUserId) => `<@${providerUserId}>`,
+) {
+  const mentions = providerUserIds.slice(0, 5).map((providerUserId) => mentionUser(providerUserId))
+  if (providerUserIds.length > mentions.length) {
+    const extra = providerUserIds.length - mentions.length
+    mentions.push(`+ ${extra} ${extra === 1 ? 'other' : 'others'}`)
+  }
+  return mentions.join(' ')
 }
 
 async function canManageSlackWorkspaceSettings(providerId: string, providerUserId: string) {

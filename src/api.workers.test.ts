@@ -842,7 +842,7 @@ describe('/api/confirm/:token', () => {
       history.messages?.some(
         (message) =>
           message.text?.includes(
-            `2 accounts $0.000001 each for ${confirmation.payload.memo} · Receipt`,
+            `<@${Constants.slack.memberUserId}> <@${secondRecipientProviderUserId}> $0.000001 each for ${confirmation.payload.memo} · Receipt`,
           ) &&
           message.text.includes(`<@${Constants.slack.memberUserId}>`) &&
           message.text.includes(`<@${secondRecipientProviderUserId}>`),
