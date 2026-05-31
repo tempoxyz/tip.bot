@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 import { parseUnits } from 'viem'
 import * as React from 'react'
@@ -25,27 +25,12 @@ function LinkPanel() {
   const connection = useConnection()
   const connectors = useConnectors()
   const [challenge, setChallenge] = React.useState<Challenge | null>(null)
-  const [error, setError] = React.useState<string | null>(null)
   const [status, setStatus] = React.useState<
     'idle' | 'signing' | 'tweeting' | 'checking' | 'connected'
   >('idle')
   const [tweetUrl, setTweetUrl] = React.useState('')
-
-  useQuery({
-    enabled: Boolean(challenge && status === 'checking'),
-    queryFn: async () => {
-      await verifyTweet()
-      return null
-    },
-    queryKey: ['twitter-link-verify', challenge?.challengeId, challenge?.proof, tweetUrl.trim()],
-    refetchInterval: 5 * 1000, // 5 seconds
-    retry: false,
-  })
-
-  async function connectTwitter() {
-    setError(null)
-    setStatus('signing')
-    try {
+  const connectMutation = useMutation({
+    mutationFn: async () => {
       const connector = connection.connector ?? connectors[0]
       if (!connector) throw new Error('Tempo Wallet is unavailable.')
       const address =
@@ -113,48 +98,70 @@ function LinkPanel() {
         )
       }
       const proofJson = await proofResponse.json()
-      setChallenge({
+      return {
         challengeId: challengeJson.challengeId,
         intentUrl: proofJson.intentUrl,
         proof: proofJson.proof,
         tweetText: proofJson.tweetText,
-      })
-      setStatus('tweeting')
-      window.open(proofJson.intentUrl, '_blank', 'noopener,noreferrer')
-    } catch (error) {
-      setError(getErrorMessage(error, 'Could not connect Twitter.'))
-      setStatus('idle')
-    }
-  }
-
-  async function verifyTweet(options: { manual?: boolean } = {}) {
-    if (!challenge) return
-    if (options.manual) setError(null)
-    setStatus('checking')
-    try {
-      const response = await rpc.api.link.twitter.verify.$post({
-        json: {
-          challengeId: challenge.challengeId,
-          proof: challenge.proof,
-          ...(tweetUrl.trim() ? { tweetUrl: tweetUrl.trim() } : {}),
-        },
-      })
-      if (response.status !== 200) throw new Error('Could not verify the proof tweet yet.')
-      const json = await response.json()
-      if (json.ok) {
-        setStatus('connected')
-        return
       }
-      if (json.code === 'pending') return
-      if (json.code === 'account_conflict')
-        throw new Error(
-          'This Twitter account or wallet is already connected. Disconnect it from the dashboard, then try again.',
-        )
-      throw new Error('Could not verify the proof tweet yet.')
-    } catch (error) {
-      if (options.manual) setError(getErrorMessage(error, 'Could not verify the proof tweet.'))
+    },
+    onError: () => setStatus('idle'),
+    onMutate: () => setStatus('signing'),
+    onSuccess: (value) => {
+      setChallenge(value)
       setStatus('tweeting')
-    }
+      window.open(value.intentUrl, '_blank', 'noopener,noreferrer')
+    },
+  })
+  const verifyMutation = useMutation({
+    mutationFn: async () => await verifyTweet(),
+    onError: () => setStatus('tweeting'),
+    onMutate: () => setStatus('checking'),
+    onSuccess: (value) => {
+      if (value === 'connected') setStatus('connected')
+    },
+  })
+  const error = connectMutation.error
+    ? getErrorMessage(connectMutation.error, 'Could not connect Twitter.')
+    : verifyMutation.error
+      ? getErrorMessage(verifyMutation.error, 'Could not verify the proof tweet.')
+      : null
+
+  useQuery({
+    enabled: Boolean(challenge && status === 'checking'),
+    queryFn: async () => {
+      try {
+        const result = await verifyTweet()
+        if (result === 'connected') setStatus('connected')
+        return result
+      } catch {
+        setStatus('tweeting')
+        return null
+      }
+    },
+    queryKey: ['twitter-link-verify', challenge?.challengeId, challenge?.proof, tweetUrl.trim()],
+    refetchInterval: 5 * 1000, // 5 seconds
+    retry: false,
+  })
+
+  async function verifyTweet() {
+    if (!challenge) throw new Error('Could not verify the proof tweet yet.')
+    const response = await rpc.api.link.twitter.verify.$post({
+      json: {
+        challengeId: challenge.challengeId,
+        proof: challenge.proof,
+        ...(tweetUrl.trim() ? { tweetUrl: tweetUrl.trim() } : {}),
+      },
+    })
+    if (response.status !== 200) throw new Error('Could not verify the proof tweet yet.')
+    const json = await response.json()
+    if (json.ok) return 'connected' as const
+    if (json.code === 'pending') return 'pending' as const
+    if (json.code === 'account_conflict')
+      throw new Error(
+        'This Twitter account or wallet is already connected. Disconnect it from the dashboard, then try again.',
+      )
+    throw new Error('Could not verify the proof tweet yet.')
   }
 
   return (
@@ -207,7 +214,11 @@ function LinkPanel() {
               <button
                 className="inline-flex h-11 items-center justify-center rounded-lg border border-gray5 bg-bg1 px-4 text-sm font-bold text-gray10 transition hover:bg-gray1 disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue9"
                 disabled={status === 'checking'}
-                onClick={() => verifyTweet({ manual: true })}
+                onClick={() => {
+                  connectMutation.reset()
+                  verifyMutation.reset()
+                  verifyMutation.mutate()
+                }}
                 type="button"
               >
                 {status === 'checking' ? 'Checking' : 'Verify'}
@@ -220,7 +231,11 @@ function LinkPanel() {
           <button
             className="inline-flex h-12 items-center justify-center rounded-lg bg-blue9 px-5 text-base font-bold text-white transition hover:bg-blue10 disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue9"
             disabled={status === 'signing'}
-            onClick={connectTwitter}
+            onClick={() => {
+              connectMutation.reset()
+              verifyMutation.reset()
+              connectMutation.mutate()
+            }}
             type="button"
           >
             {status === 'signing' ? 'Connecting' : 'Connect wallet'}
