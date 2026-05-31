@@ -53,6 +53,15 @@ export default async function (project: TestProject) {
 
   process.env.FEE_PAYER_PRIVATE_KEY_MAINNET = env.FEE_PAYER_PRIVATE_KEY_MAINNET
   process.env.FEE_PAYER_PRIVATE_KEY_TESTNET = env.FEE_PAYER_PRIVATE_KEY_TESTNET
+  process.env.SECRET_KEY = env.SECRET_KEY
+  process.env.SLACK_CLIENT_ID = env.SLACK_CLIENT_ID
+  process.env.SLACK_CLIENT_SECRET = env.SLACK_CLIENT_SECRET
+  process.env.SLACK_SIGNING_SECRET = env.SLACK_SIGNING_SECRET
+  process.env.TWITTER_ACCESS_TOKEN = env.TWITTER_ACCESS_TOKEN
+  process.env.TWITTER_ACCESS_TOKEN_SECRET = env.TWITTER_ACCESS_TOKEN_SECRET
+  process.env.TWITTER_BEARER_TOKEN = env.TWITTER_BEARER_TOKEN
+  process.env.TWITTER_CONSUMER_KEY = env.TWITTER_CONSUMER_KEY
+  process.env.TWITTER_CONSUMER_SECRET = env.TWITTER_CONSUMER_SECRET
   process.env.VITE_RPC_PORT = String(rpcPort)
 
   project.provide('env', JSON.stringify(env))
