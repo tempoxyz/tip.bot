@@ -2,6 +2,7 @@
 
 - Use Workers AI to parse more flexible natural-language tip commands after explicit amount/token syntax is stable.
 - Production setup guide (see below)
+- Rename the Slack-shaped `workspace`/`member` core model to provider-neutral `provider_scope`/`scope_identity` so global providers like X do not need synthetic workspaces.
 
 ## Production
 

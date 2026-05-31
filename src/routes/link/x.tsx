@@ -11,8 +11,6 @@ export const Route = createFileRoute('/link/x')({
   head: () => ({ meta: [{ title: 'Connect X - Tipbot' }] }),
 })
 
-const verificationPollMs = 5 * 1000 // 5 seconds
-
 function Component() {
   return (
     <WalletProviders.Root>
@@ -34,9 +32,12 @@ function LinkPanel() {
 
   React.useEffect(() => {
     if (!challenge || status !== 'checking') return
-    const interval = window.setInterval(() => {
-      void verifyTweet()
-    }, verificationPollMs)
+    const interval = window.setInterval(
+      () => {
+        void verifyTweet()
+      },
+      5 * 1000, // 5 seconds
+    )
     return () => window.clearInterval(interval)
   }, [challenge, status])
 
@@ -49,7 +50,14 @@ function LinkPanel() {
       const address =
         connection.status === 'connected' && connection.address
           ? connection.address
-          : getConnectedAddress(await connect.connectAsync({ connector }))
+          : await (async () => {
+              const result = await connect.connectAsync({ connector })
+              const account = (result as { accounts?: readonly (string | { address?: string })[] })
+                .accounts?.[0]
+              const address = typeof account === 'string' ? account : account?.address
+              if (!address) throw new Error('Tempo Wallet did not return an account.')
+              return address
+            })()
       const challengeResponse = await rpc.api.link.twitter.challenge.$post({
         json: { address },
       })
@@ -60,7 +68,34 @@ function LinkPanel() {
             ? challengeJson.message
             : 'Could not start Twitter connection.',
         )
-      const keyAuthorization = await authorizeAccessKey(connector, challengeJson)
+      const provider = (await connector.getProvider()) as {
+        request: (parameters: { method: string; params: unknown[] }) => Promise<unknown>
+      }
+      const keyAuthorization = (await provider.request({
+        method: 'wallet_authorizeAccessKey',
+        params: [
+          {
+            chainId: BigInt(challengeJson.chainId),
+            expiry: Math.floor(new Date(challengeJson.accessKeyExpiry).getTime() / 1000),
+            keyType: 'secp256k1' as const,
+            limits: [
+              {
+                limit: parseUnits(challengeJson.accessKeyLimit, 6),
+                period: challengeJson.accessKeyLimitPeriodSeconds,
+                token: challengeJson.tokenAddress,
+              },
+            ],
+            publicKey: challengeJson.accessKeyPublicKey,
+            scopes: [
+              { address: challengeJson.tokenAddress, selector: 'transfer(address,uint256)' },
+              {
+                address: challengeJson.tokenAddress,
+                selector: 'transferWithMemo(address,uint256,bytes32)',
+              },
+            ],
+          },
+        ],
+      })) as { keyAuthorization: unknown; rootAddress: string }
       const proofResponse = await rpc.api.link.twitter.proof.$post({
         json: {
           address: keyAuthorization.rootAddress,
@@ -224,58 +259,3 @@ type ProofResponse =
   | { message?: string; ok: false }
 
 type VerifyResponse = { handle?: string; ok: true } | { code: string; message?: string; ok: false }
-
-async function authorizeAccessKey(
-  connector: ReturnType<typeof useConnectors>[number],
-  data: {
-    accessKeyExpiry: string
-    accessKeyLimit: string
-    accessKeyLimitPeriodSeconds: number
-    accessKeyPublicKey: `0x${string}`
-    chainId: number
-    tokenAddress: string
-  },
-) {
-  const provider = (await connector.getProvider()) as {
-    request: (parameters: { method: string; params: unknown[] }) => Promise<unknown>
-  }
-  return (await provider.request({
-    method: 'wallet_authorizeAccessKey',
-    params: [getAuthorizeAccessKey(data)],
-  })) as { keyAuthorization: unknown; rootAddress: string }
-}
-
-function getAuthorizeAccessKey(data: {
-  accessKeyExpiry: string
-  accessKeyLimit: string
-  accessKeyLimitPeriodSeconds: number
-  accessKeyPublicKey: `0x${string}`
-  chainId: number
-  tokenAddress: string
-}) {
-  return {
-    chainId: BigInt(data.chainId),
-    expiry: Math.floor(new Date(data.accessKeyExpiry).getTime() / 1000),
-    keyType: 'secp256k1' as const,
-    limits: [
-      {
-        limit: parseUnits(data.accessKeyLimit, 6),
-        period: data.accessKeyLimitPeriodSeconds,
-        token: data.tokenAddress,
-      },
-    ],
-    publicKey: data.accessKeyPublicKey,
-    scopes: [
-      { address: data.tokenAddress, selector: 'transfer(address,uint256)' },
-      { address: data.tokenAddress, selector: 'transferWithMemo(address,uint256,bytes32)' },
-    ],
-  }
-}
-
-function getConnectedAddress(result: unknown) {
-  const account = (result as { accounts?: readonly (string | { address?: string })[] })
-    .accounts?.[0]
-  const address = typeof account === 'string' ? account : account?.address
-  if (!address) throw new Error('Tempo Wallet did not return an account.')
-  return address
-}

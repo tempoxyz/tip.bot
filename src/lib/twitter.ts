@@ -96,7 +96,7 @@ export async function createProof(
     .execute()
 
   const tweetText = [
-    `Verifying my identity for @${getBotHandle(env)}`,
+    `Verifying my identity for @${env.TWITTER_BOT_HANDLE.replace(/^@+/, '')}`,
     '',
     proof,
     '',
@@ -139,9 +139,10 @@ export async function verifyLinkChallenge(
 }
 
 export async function handleTweet(env: Env, input: TwitterTweetInput) {
-  const botHandle = getBotHandle(env).toLowerCase()
+  const botHandle = env.TWITTER_BOT_HANDLE.replace(/^@+/, '').toLowerCase()
   if (input.authorHandle?.toLowerCase() === botHandle) return
-  if (!mentionsBot(input.text, botHandle)) return
+  if (!new RegExp(`(^|[^\\p{L}\\p{N}_])@${escapeRegex(botHandle)}\\b`, 'iu').test(input.text))
+    return
 
   const parsed = await parseTwitterTip(env, input)
   if (!parsed) return
@@ -215,8 +216,9 @@ export async function handleWebhook(env: Env, body: unknown) {
 }
 
 export async function handleCrcChallenge(env: Env, crcToken: string) {
+  if (!env.TWITTER_CONSUMER_SECRET) throw new Error('Twitter is not configured.')
   return Response.json({
-    response_token: `sha256=${await hmacBase64('SHA-256', getConsumerSecret(env), crcToken)}`,
+    response_token: `sha256=${await hmacBase64('SHA-256', env.TWITTER_CONSUMER_SECRET, crcToken)}`,
   })
 }
 
@@ -245,20 +247,21 @@ export async function updatePendingTipMessage(env: Env, result: Tip.PendingTipCl
 }
 
 export function parseWebhookTweets(body: unknown): TwitterTweetInput[] {
-  const simple = z
-    .object({
+  const simple = z.safeParse(
+    z.object({
       authorHandle: z.string().optional(),
       authorId: z.string(),
       conversationId: z.string().optional(),
       id: z.string(),
       replyToAuthorId: z.string().optional(),
       text: z.string(),
-    })
-    .safeParse(body)
+    }),
+    body,
+  )
   if (simple.success) return [simple.data]
 
-  const v1 = z
-    .object({
+  const v1 = z.safeParse(
+    z.object({
       tweet_create_events: z.array(
         z.object({
           id_str: z.string(),
@@ -268,8 +271,9 @@ export function parseWebhookTweets(body: unknown): TwitterTweetInput[] {
           user: z.object({ id_str: z.string(), screen_name: z.string().optional() }),
         }),
       ),
-    })
-    .safeParse(body)
+    }),
+    body,
+  )
   if (v1.success)
     return v1.data.tweet_create_events.map((tweet) => ({
       authorHandle: tweet.user.screen_name,
@@ -280,8 +284,8 @@ export function parseWebhookTweets(body: unknown): TwitterTweetInput[] {
       text: tweet.text,
     }))
 
-  const v2 = z
-    .object({
+  const v2 = z.safeParse(
+    z.object({
       data: z.object({
         author_id: z.string(),
         conversation_id: z.string().optional(),
@@ -295,8 +299,9 @@ export function parseWebhookTweets(body: unknown): TwitterTweetInput[] {
           users: z.array(z.object({ id: z.string(), username: z.string().optional() })).optional(),
         })
         .optional(),
-    })
-    .safeParse(body)
+    }),
+    body,
+  )
   if (!v2.success) return []
   const reply = v2.data.data.referenced_tweets?.find((tweet) => tweet.type === 'replied_to')
   return [
@@ -430,7 +435,7 @@ async function completeLinkChallenge(
 }
 
 async function parseTwitterTip(env: Env, input: TwitterTweetInput) {
-  const botHandle = getBotHandle(env)
+  const botHandle = env.TWITTER_BOT_HANDLE.replace(/^@+/, '')
   const handles = [...input.text.matchAll(/(^|[^\p{L}\p{N}_])@([A-Za-z0-9_]{1,15})/gu)]
     .map((match) => match[2]!)
     .filter((handle) => handle.toLowerCase() !== botHandle.toLowerCase())
@@ -481,8 +486,8 @@ async function getTweetByUrl(env: Env, tweetUrl: string) {
 }
 
 async function findProofTweet(env: Env, proof: string) {
-  const url = new URL('/2/tweets/search/recent', getApiUrl(env))
-  url.searchParams.set('query', `"${proof}" @${getBotHandle(env)}`)
+  const url = new URL('/2/tweets/search/recent', env.TWITTER_API_URL)
+  url.searchParams.set('query', `"${proof}" @${env.TWITTER_BOT_HANDLE.replace(/^@+/, '')}`)
   url.searchParams.set('tweet.fields', 'author_id,created_at')
   url.searchParams.set('expansions', 'author_id')
   url.searchParams.set('user.fields', 'username')
@@ -508,7 +513,7 @@ async function findProofTweet(env: Env, proof: string) {
 }
 
 async function getTweet(env: Env, tweetId: string) {
-  const url = new URL(`/2/tweets/${tweetId}`, getApiUrl(env))
+  const url = new URL(`/2/tweets/${tweetId}`, env.TWITTER_API_URL)
   url.searchParams.set('tweet.fields', 'author_id,created_at')
   url.searchParams.set('expansions', 'author_id')
   url.searchParams.set('user.fields', 'username')
@@ -531,7 +536,7 @@ async function getTweet(env: Env, tweetId: string) {
 }
 
 async function getUserByUsername(env: Env, username: string) {
-  const url = new URL(`/2/users/by/username/${username.replace(/^@+/, '')}`, getApiUrl(env))
+  const url = new URL(`/2/users/by/username/${username.replace(/^@+/, '')}`, env.TWITTER_API_URL)
   url.searchParams.set('user.fields', 'name,username')
   const json = z.parse(
     z.object({ data: z.object({ id: z.string(), username: z.string() }).optional() }),
@@ -541,30 +546,21 @@ async function getUserByUsername(env: Env, username: string) {
 }
 
 async function postReply(env: Env, replyToTweetId: string, text: string) {
-  const response = await twitterWriteFetch(env, new URL('/2/tweets', getApiUrl(env)), {
+  const url = new URL('/2/tweets', env.TWITTER_API_URL)
+  const headers = new Headers({ 'content-type': 'application/json' })
+  headers.set('authorization', await createOAuth1Header(env, 'POST', url))
+  const response = await fetch(url, {
     body: JSON.stringify({ reply: { in_reply_to_tweet_id: replyToTweetId }, text }),
-    headers: { 'content-type': 'application/json' },
+    headers,
     method: 'POST',
   })
   if (!response.ok) throw new Error(`Twitter API post failed: ${await response.text()}`)
 }
 
 async function twitterFetch(env: Env, url: URL, init: RequestInit = {}) {
-  const token = getApiToken(env)
+  if (!env.TWITTER_BEARER_TOKEN) throw new Error('Twitter is not configured.')
   const headers = new Headers(init.headers)
-  headers.set('authorization', `Bearer ${token}`)
-  const response = await fetch(url, {
-    ...init,
-    headers,
-  })
-  if (!response.ok) throw new Error(`Twitter API request failed: ${response.status}`)
-  return response
-}
-
-async function twitterWriteFetch(env: Env, url: URL, init: RequestInit = {}) {
-  const method = init.method ?? 'GET'
-  const headers = new Headers(init.headers)
-  headers.set('authorization', await createOAuth1Header(env, method, url))
+  headers.set('authorization', `Bearer ${env.TWITTER_BEARER_TOKEN}`)
   const response = await fetch(url, {
     ...init,
     headers,
@@ -574,12 +570,19 @@ async function twitterWriteFetch(env: Env, url: URL, init: RequestInit = {}) {
 }
 
 async function createOAuth1Header(env: Env, method: string, url: URL) {
+  if (
+    !env.TWITTER_ACCESS_TOKEN ||
+    !env.TWITTER_ACCESS_TOKEN_SECRET ||
+    !env.TWITTER_CONSUMER_KEY ||
+    !env.TWITTER_CONSUMER_SECRET
+  )
+    throw new Error('Twitter is not configured.')
   const oauthParams = {
-    oauth_consumer_key: getConsumerKey(env),
+    oauth_consumer_key: env.TWITTER_CONSUMER_KEY,
     oauth_nonce: crypto.randomUUID().replaceAll('-', ''),
     oauth_signature_method: 'HMAC-SHA1',
     oauth_timestamp: Math.floor(Date.now() / 1000).toString(),
-    oauth_token: getAccessToken(env),
+    oauth_token: env.TWITTER_ACCESS_TOKEN,
     oauth_version: '1.0',
   }
   const signatureParams = [...Object.entries(oauthParams), ...url.searchParams.entries()].sort(
@@ -595,7 +598,7 @@ async function createOAuth1Header(env: Env, method: string, url: URL) {
   ].join('&')
   const signature = await hmacBase64(
     'SHA-1',
-    `${oauthEncode(getConsumerSecret(env))}&${oauthEncode(getAccessTokenSecret(env))}`,
+    `${oauthEncode(env.TWITTER_CONSUMER_SECRET)}&${oauthEncode(env.TWITTER_ACCESS_TOKEN_SECRET)}`,
     signatureBaseString,
   )
   return `OAuth ${Object.entries({ ...oauthParams, oauth_signature: signature })
@@ -734,44 +737,6 @@ function formatTwitterAmount(input: {
 function formatHandle(value: string | undefined) {
   if (!value) return '@account'
   return `@${value.replace(/^@+/, '')}`
-}
-
-function mentionsBot(text: string, botHandle: string) {
-  return new RegExp(`(^|[^\\p{L}\\p{N}_])@${escapeRegex(botHandle)}\\b`, 'iu').test(text)
-}
-
-function getApiToken(env: Env) {
-  if (!env.TWITTER_BEARER_TOKEN) throw new Error('TWITTER_BEARER_TOKEN is not configured.')
-  return env.TWITTER_BEARER_TOKEN
-}
-
-function getAccessToken(env: Env) {
-  if (!env.TWITTER_ACCESS_TOKEN) throw new Error('TWITTER_ACCESS_TOKEN is not configured.')
-  return env.TWITTER_ACCESS_TOKEN
-}
-
-function getAccessTokenSecret(env: Env) {
-  if (!env.TWITTER_ACCESS_TOKEN_SECRET)
-    throw new Error('TWITTER_ACCESS_TOKEN_SECRET is not configured.')
-  return env.TWITTER_ACCESS_TOKEN_SECRET
-}
-
-function getApiUrl(env: Env) {
-  return env.TWITTER_API_URL || 'https://api.twitter.com'
-}
-
-function getBotHandle(env: Env) {
-  return (env.TWITTER_BOT_HANDLE || 'tipbotgg').replace(/^@+/, '')
-}
-
-function getConsumerKey(env: Env) {
-  if (!env.TWITTER_CONSUMER_KEY) throw new Error('TWITTER_CONSUMER_KEY is not configured.')
-  return env.TWITTER_CONSUMER_KEY
-}
-
-function getConsumerSecret(env: Env) {
-  if (!env.TWITTER_CONSUMER_SECRET) throw new Error('TWITTER_CONSUMER_SECRET is not configured.')
-  return env.TWITTER_CONSUMER_SECRET
 }
 
 async function hmacBase64(algorithm: 'SHA-1' | 'SHA-256', key: string, message: string) {
