@@ -347,23 +347,17 @@ async function completeLinkChallenge(
     .where('provider_user_id', '=', tweet.authorId)
     .executeTakeFirst()
 
-  if (existingAccount) {
-    const walletTwitterIdentity = await db
-      .selectFrom('provider_identity')
-      .select('id')
-      .where('provider', '=', twitterStorageProvider)
-      .where('provider_workspace_id', '=', twitterProviderId)
-      .where('account_id', '=', existingAccount.id)
-      .where('provider_user_id', '!=', tweet.authorId)
-      .executeTakeFirst()
-    if (walletTwitterIdentity) return { code: 'account_conflict' as const, ok: false as const }
-  }
-  if (existingIdentity?.account_id && existingIdentity.account_id !== existingAccount?.id)
-    return { code: 'account_conflict' as const, ok: false as const }
-
   const account = existingAccount ?? (await createAccount(db, walletAddress, now))
   const workspace = await ensureTwitterWorkspace(db, now)
   const identity = existingIdentity ?? (await createTwitterIdentity(db, account.id, tweet, now))
+  await db
+    .updateTable('provider_identity')
+    .set({ account_id: null, updated_at: now })
+    .where('provider', '=', twitterStorageProvider)
+    .where('provider_workspace_id', '=', twitterProviderId)
+    .where('account_id', '=', account.id)
+    .where('provider_user_id', '!=', tweet.authorId)
+    .execute()
   if (!existingIdentity)
     await db
       .updateTable('provider_identity')

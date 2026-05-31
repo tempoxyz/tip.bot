@@ -417,6 +417,81 @@ describe('/api/link/twitter', () => {
     expect(verifyResponse.status).toBe(200)
     await expect(verifyResponse.json()).resolves.toEqual({ handle: '@bob', ok: true })
   })
+
+  test('verified Twitter relink replaces wallet previous X identity', async () => {
+    const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    const workspace = await ensureTwitterTestWorkspace()
+    const account = await linkTwitterAccount({
+      handle: 'alice',
+      providerUserId: 'twitter-relink-old',
+      root,
+      workspaceId: workspace.id,
+    })
+
+    await completeTwitterProofLink({
+      handle: 'bob',
+      providerUserId: 'twitter-relink-new',
+      root,
+      tweetId: '1001001',
+    })
+
+    await expect(
+      db
+        .selectFrom('provider_identity')
+        .select(['account_id', 'provider_user_id'])
+        .where('provider', '=', 'slack')
+        .where('provider_workspace_id', '=', 'x')
+        .where('provider_user_id', 'in', ['twitter-relink-old', 'twitter-relink-new'])
+        .orderBy('provider_user_id')
+        .execute(),
+    ).resolves.toEqual([
+      { account_id: account.id, provider_user_id: 'twitter-relink-new' },
+      { account_id: null, provider_user_id: 'twitter-relink-old' },
+    ])
+  })
+
+  test('verified Twitter relink moves X identity to new wallet', async () => {
+    const oldRoot = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    const newRoot = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    const workspace = await ensureTwitterTestWorkspace()
+    const oldAccount = await linkTwitterAccount({
+      handle: 'alice',
+      providerUserId: 'twitter-wallet-move',
+      root: oldRoot,
+      workspaceId: workspace.id,
+    })
+
+    await completeTwitterProofLink({
+      handle: 'alice',
+      providerUserId: 'twitter-wallet-move',
+      root: newRoot,
+      tweetId: '1001002',
+    })
+    const newAccount = await db
+      .selectFrom('account')
+      .selectAll()
+      .where('address', '=', newRoot.address)
+      .executeTakeFirstOrThrow()
+
+    await expect(
+      db
+        .selectFrom('provider_identity')
+        .select(['account_id', 'display_name'])
+        .where('provider', '=', 'slack')
+        .where('provider_workspace_id', '=', 'x')
+        .where('provider_user_id', '=', 'twitter-wallet-move')
+        .executeTakeFirstOrThrow(),
+    ).resolves.toEqual({ account_id: newAccount.id, display_name: '@alice' })
+    await expect(
+      db
+        .selectFrom('provider_identity')
+        .select('id')
+        .where('provider', '=', 'slack')
+        .where('provider_workspace_id', '=', 'x')
+        .where('account_id', '=', oldAccount.id)
+        .execute(),
+    ).resolves.toEqual([])
+  })
 })
 
 describe('/api/chat/slack', () => {
@@ -1858,6 +1933,55 @@ async function linkTwitterAccount(input: {
     .where('id', '=', input.memberId)
     .execute()
   return account
+}
+
+async function completeTwitterProofLink(input: {
+  handle: string
+  providerUserId: string
+  root: ReturnType<typeof Account.fromSecp256k1>
+  tweetId: string
+}) {
+  const challengeResponse = await client.api.link.twitter.challenge.$post({
+    json: { address: input.root.address },
+  })
+  expect(challengeResponse.status).toBe(200)
+  if (challengeResponse.status !== 200) throw new Error('Expected Twitter challenge success.')
+  const challenge = await challengeResponse.json()
+  const keyAuthorization = await AccountLink.signKeyAuthorization(input.root, {
+    accessKeyAddress: challenge.accessKeyAddress,
+    chainId: challenge.chainId,
+    expiresAt: challenge.accessKeyExpiry,
+    tokenAddress: challenge.tokenAddress,
+  })
+  const proofResponse = await client.api.link.twitter.proof.$post({
+    json: {
+      address: input.root.address,
+      challengeId: challenge.challengeId,
+      keyAuthorization,
+    },
+  })
+  expect(proofResponse.status).toBe(200)
+  if (proofResponse.status !== 200) throw new Error('Expected Twitter proof success.')
+  const proof = await proofResponse.json()
+  server.use(
+    mswHttp.get(`https://api.twitter.com/2/tweets/${input.tweetId}`, () =>
+      HttpResponse.json({
+        data: { author_id: input.providerUserId, id: input.tweetId, text: proof.tweetText },
+        includes: { users: [{ id: input.providerUserId, username: input.handle }] },
+      }),
+    ),
+  )
+  const verifyResponse = await client.api.link.twitter.verify.$post({
+    json: {
+      challengeId: challenge.challengeId,
+      proof: proof.proof,
+      tweetUrl: `https://x.com/${input.handle}/status/${input.tweetId}`,
+    },
+  })
+
+  expect(verifyResponse.status).toBe(200)
+  await expect(verifyResponse.json()).resolves.toEqual({ handle: `@${input.handle}`, ok: true })
+  return { challenge, keyAuthorization, proof }
 }
 
 async function hmacBase64(key: string, message: string) {

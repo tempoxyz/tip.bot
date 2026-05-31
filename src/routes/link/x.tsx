@@ -159,10 +159,6 @@ function LinkPanel() {
     const json = await response.json()
     if (json.ok) return 'connected' as const
     if (json.code === 'pending') return 'pending' as const
-    if (json.code === 'account_conflict')
-      throw new Error(
-        'This Twitter account or wallet is already connected. Disconnect it from the dashboard, then try again.',
-      )
     throw new Error('Could not verify the proof tweet yet.')
   }
 
