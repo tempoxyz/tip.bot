@@ -37,7 +37,7 @@ function LinkPanel() {
         connection.status === 'connected' && connection.address
           ? connection.address
           : await (async () => {
-              const result = await connect.connectAsync({ connector })
+              const result = await connect.mutateAsync({ connector })
               const account = (result as { accounts?: readonly (string | { address?: string })[] })
                 .accounts?.[0]
               const address = typeof account === 'string' ? account : account?.address

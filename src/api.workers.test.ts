@@ -131,6 +131,89 @@ describe('/api/chat/twitter', () => {
   })
 })
 
+describe('/api/link/twitter', () => {
+  test('completes Twitter proof flow and stores account link', async () => {
+    const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    const challengeResponse = await client.api.link.twitter.challenge.$post({
+      json: { address: root.address },
+    })
+
+    expect(challengeResponse.status).toBe(200)
+    if (challengeResponse.status !== 200) throw new Error('Expected Twitter challenge success.')
+    const challenge = await challengeResponse.json()
+    const keyAuthorization = await AccountLink.signKeyAuthorization(root, {
+      accessKeyAddress: challenge.accessKeyAddress,
+      chainId: challenge.chainId,
+      expiresAt: challenge.accessKeyExpiry,
+      tokenAddress: challenge.tokenAddress,
+    })
+    const proofResponse = await client.api.link.twitter.proof.$post({
+      json: {
+        address: root.address,
+        challengeId: challenge.challengeId,
+        keyAuthorization,
+      },
+    })
+
+    expect(proofResponse.status).toBe(200)
+    if (proofResponse.status !== 200) throw new Error('Expected Twitter proof success.')
+    const proof = await proofResponse.json()
+    server.use(
+      mswHttp.get('https://api.twitter.com/2/tweets/tweet-verify', () =>
+        HttpResponse.json({
+          data: { author_id: 'twitter-user-1', id: 'tweet-verify', text: proof.tweetText },
+          includes: { users: [{ id: 'twitter-user-1', username: 'alice' }] },
+        }),
+      ),
+    )
+    const verifyResponse = await client.api.link.twitter.verify.$post({
+      json: {
+        challengeId: challenge.challengeId,
+        proof: proof.proof,
+        tweetUrl: 'https://x.com/alice/status/tweet-verify',
+      },
+    })
+
+    expect(verifyResponse.status).toBe(200)
+    await expect(verifyResponse.json()).resolves.toEqual({ handle: '@alice', ok: true })
+    const account = await db
+      .selectFrom('account')
+      .selectAll()
+      .where('address', '=', root.address)
+      .executeTakeFirstOrThrow()
+    const identity = await db
+      .selectFrom('provider_identity')
+      .selectAll()
+      .where('account_id', '=', account.id)
+      .where('provider_user_id', '=', 'twitter-user-1')
+      .executeTakeFirstOrThrow()
+    const member = await db
+      .selectFrom('member')
+      .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+      .select(['member.provider_user_id', 'workspace.provider_id'])
+      .where('member.provider_identity_id', '=', identity.id)
+      .executeTakeFirstOrThrow()
+    const accessKey = await db
+      .selectFrom('access_key')
+      .selectAll()
+      .where('account_id', '=', account.id)
+      .executeTakeFirstOrThrow()
+
+    expect(identity).toMatchObject({
+      display_name: '@alice',
+      provider: 'slack',
+      provider_user_id: 'twitter-user-1',
+      provider_workspace_id: 'x',
+    })
+    expect(member).toEqual({ provider_id: 'x', provider_user_id: 'twitter-user-1' })
+    expect(accessKey).toMatchObject({
+      address: challenge.accessKeyAddress,
+      authorization: JSON.stringify(keyAuthorization),
+      token_address: Address.checksum(Tempo.addressLookup.pathUsd),
+    })
+  })
+})
+
 describe('/api/chat/slack', () => {
   test('Slack URL verification reaches the Worker API route', async () => {
     const body = JSON.stringify({
