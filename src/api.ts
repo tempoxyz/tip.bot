@@ -11,6 +11,7 @@ import * as Nanoid from '#/lib/nanoid.ts'
 import * as Slack from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
+import * as Twitter from '#/lib/twitter.ts'
 import * as DB from '#db/client.ts'
 
 export const api = new Hono<{
@@ -323,6 +324,86 @@ export const api = new Hono<{
           {
             code: 'invalid_key_authorization' as const,
             message: error instanceof Error ? error.message : 'Invalid key authorization.',
+          },
+          400,
+        )
+      }
+    },
+  )
+  .post(
+    '/api/link/twitter/challenge',
+    hono.validator(
+      'json',
+      z.object({
+        address: z.string().min(1),
+      }),
+    ),
+    async (c) => {
+      try {
+        return c.json({
+          ...(await Twitter.createLinkChallenge(c.env, c.req.valid('json'))),
+          ok: true as const,
+        })
+      } catch (error) {
+        return c.json(
+          {
+            code: 'twitter_link_challenge_failed' as const,
+            message: error instanceof Error ? error.message : 'Could not start Twitter connection.',
+            ok: false as const,
+          },
+          400,
+        )
+      }
+    },
+  )
+  .post(
+    '/api/link/twitter/proof',
+    hono.validator(
+      'json',
+      z.object({
+        address: z.string().min(1),
+        challengeId: z.string().min(1),
+        keyAuthorization: z.unknown(),
+      }),
+    ),
+    async (c) => {
+      try {
+        return c.json({
+          ...(await Twitter.createProof(c.env, c.req.valid('json'))),
+          ok: true as const,
+        })
+      } catch (error) {
+        return c.json(
+          {
+            code: 'twitter_link_proof_failed' as const,
+            message: error instanceof Error ? error.message : 'Could not prepare Twitter proof.',
+            ok: false as const,
+          },
+          400,
+        )
+      }
+    },
+  )
+  .post(
+    '/api/link/twitter/verify',
+    hono.validator(
+      'json',
+      z.object({
+        challengeId: z.string().min(1),
+        proof: z.string().min(1),
+        tweetUrl: z.string().min(1).optional(),
+      }),
+    ),
+    async (c) => {
+      try {
+        const result = await Twitter.verifyLinkChallenge(c.env, c.req.valid('json'))
+        return c.json(result)
+      } catch (error) {
+        return c.json(
+          {
+            code: 'twitter_link_verify_failed' as const,
+            message: error instanceof Error ? error.message : 'Could not verify Twitter proof.',
+            ok: false as const,
           },
           400,
         )
@@ -763,6 +844,27 @@ export const api = new Hono<{
       }
     },
   )
+  .get('/api/chat/twitter', async (c) => {
+    const crcToken = c.req.query('crc_token')
+    if (!crcToken) return c.json({ ok: false as const }, 400)
+    return await Twitter.handleCrcChallenge(c.env, crcToken)
+  })
+  .post('/api/chat/twitter', async (c) => {
+    try {
+      await Twitter.handleWebhook(c.env, await c.req.json())
+      return c.json({ ok: true as const })
+    } catch (error) {
+      console.error('Twitter webhook failed:', error)
+      return c.json(
+        {
+          code: 'twitter_webhook_failed' as const,
+          message: error instanceof Error ? error.message : 'Twitter webhook failed.',
+          ok: false as const,
+        },
+        400,
+      )
+    }
+  })
   .post('/api/chat/slack', async (c) => {
     const request = c.req.raw
     const body = await request.text()
