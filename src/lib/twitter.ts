@@ -352,6 +352,7 @@ async function completeLinkChallenge(
       .selectFrom('provider_identity')
       .select('id')
       .where('provider', '=', twitterStorageProvider)
+      .where('provider_workspace_id', '=', twitterProviderId)
       .where('account_id', '=', existingAccount.id)
       .where('provider_user_id', '!=', tweet.authorId)
       .executeTakeFirst()
