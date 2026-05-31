@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query'
 import { createFileRoute } from '@tanstack/react-router'
 import { parseUnits } from 'viem'
 import * as React from 'react'
@@ -30,16 +31,16 @@ function LinkPanel() {
   >('idle')
   const [tweetUrl, setTweetUrl] = React.useState('')
 
-  React.useEffect(() => {
-    if (!challenge || status !== 'checking') return
-    const interval = window.setInterval(
-      () => {
-        void verifyTweet()
-      },
-      5 * 1000, // 5 seconds
-    )
-    return () => window.clearInterval(interval)
-  }, [challenge, status])
+  useQuery({
+    enabled: Boolean(challenge && status === 'checking'),
+    queryFn: async () => {
+      await verifyTweet()
+      return null
+    },
+    queryKey: ['twitter-link-verify', challenge?.challengeId, challenge?.proof, tweetUrl.trim()],
+    refetchInterval: 5 * 1000, // 5 seconds
+    retry: false,
+  })
 
   async function connectTwitter() {
     setError(null)
