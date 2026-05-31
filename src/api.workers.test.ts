@@ -212,6 +212,59 @@ describe('/api/link/twitter', () => {
       token_address: Address.checksum(Tempo.addressLookup.pathUsd),
     })
   })
+
+  test('links wallet that already has Slack identities', async () => {
+    const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    const account = await factory.account.insert({ address: root.address })
+    const workspace = await factory.workspace.insert({ provider_id: `T${Nanoid.generate()}` })
+    await insertMember({
+      account_id: account.id,
+      provider_user_id: `U${Nanoid.generate()}`,
+      workspace_id: workspace.id,
+    })
+    const challengeResponse = await client.api.link.twitter.challenge.$post({
+      json: { address: root.address },
+    })
+
+    expect(challengeResponse.status).toBe(200)
+    if (challengeResponse.status !== 200) throw new Error('Expected Twitter challenge success.')
+    const challenge = await challengeResponse.json()
+    const keyAuthorization = await AccountLink.signKeyAuthorization(root, {
+      accessKeyAddress: challenge.accessKeyAddress,
+      chainId: challenge.chainId,
+      expiresAt: challenge.accessKeyExpiry,
+      tokenAddress: challenge.tokenAddress,
+    })
+    const proofResponse = await client.api.link.twitter.proof.$post({
+      json: {
+        address: root.address,
+        challengeId: challenge.challengeId,
+        keyAuthorization,
+      },
+    })
+
+    expect(proofResponse.status).toBe(200)
+    if (proofResponse.status !== 200) throw new Error('Expected Twitter proof success.')
+    const proof = await proofResponse.json()
+    server.use(
+      mswHttp.get('https://api.twitter.com/2/tweets/67890', () =>
+        HttpResponse.json({
+          data: { author_id: 'twitter-user-2', id: '67890', text: proof.tweetText },
+          includes: { users: [{ id: 'twitter-user-2', username: 'bob' }] },
+        }),
+      ),
+    )
+    const verifyResponse = await client.api.link.twitter.verify.$post({
+      json: {
+        challengeId: challenge.challengeId,
+        proof: proof.proof,
+        tweetUrl: 'https://x.com/bob/status/67890',
+      },
+    })
+
+    expect(verifyResponse.status).toBe(200)
+    await expect(verifyResponse.json()).resolves.toEqual({ handle: '@bob', ok: true })
+  })
 })
 
 describe('/api/chat/slack', () => {
