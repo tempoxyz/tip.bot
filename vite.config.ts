@@ -179,24 +179,9 @@ export default defineConfig({
                 miniflare: {
                   bindings: {
                     ...env,
-                    TEST_MIGRATIONS: await (async () => {
-                      const startedAt = Date.now()
-                      console.log('workers: read d1 migrations: starting')
-                      try {
-                        const migrations = await workers.readD1Migrations(
-                          path.join(process.cwd(), 'db/migrations'),
-                        )
-                        console.log(
-                          `workers: read d1 migrations: completed in ${Date.now() - startedAt}ms (${migrations.length} migrations)`,
-                        )
-                        return migrations
-                      } catch (error) {
-                        console.log(
-                          `workers: read d1 migrations: failed in ${Date.now() - startedAt}ms`,
-                        )
-                        throw error
-                      }
-                    })(),
+                    TEST_MIGRATIONS: await workers.readD1Migrations(
+                      path.join(process.cwd(), 'db/migrations'),
+                    ),
                   },
                   compatibilityDate: '2026-05-07',
                   // TODO: Remove once configurable log level is supported
