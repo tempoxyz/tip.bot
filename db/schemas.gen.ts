@@ -94,6 +94,26 @@ export const provider_identity = z.object({
   updated_at: z.string(),
 })
 
+export const provider_link_challenge = z.object({
+  access_key_address: z.string(),
+  access_key_authorization: z.string().nullable(),
+  access_key_ciphertext: z.string(),
+  access_key_expires_at: z.string(),
+  access_key_public_key: z.string(),
+  account_id: z.string().nullable(),
+  created_at: z.string(),
+  expires_at: z.string(),
+  id: z.string(),
+  proof_hash: z.string().nullable(),
+  provider: z.literal('twitter'),
+  provider_handle: z.string().nullable(),
+  provider_user_id: z.string().nullable(),
+  tweet_id: z.string().nullable(),
+  updated_at: z.string(),
+  used_at: z.string().nullable(),
+  wallet_address: z.string(),
+})
+
 export const reaction_tip = z.object({
   channel_id: z.string(),
   created_at: z.string(),
@@ -222,6 +242,7 @@ export const db = {
   member: member,
   pending_tip: pending_tip,
   provider_identity: provider_identity,
+  provider_link_challenge: provider_link_challenge,
   reaction_tip: reaction_tip,
   reaction_tip_config: reaction_tip_config,
   reaction_tip_thread: reaction_tip_thread,

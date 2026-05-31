@@ -1147,7 +1147,7 @@ async function createPendingTip(
     amount: number
     idempotencyKey: string
     memo: string | null
-    provider: 'slack'
+    provider: Database.Selectable.workspace['provider']
     providerChannelId: string
     providerId: string
     providerThreadId?: string

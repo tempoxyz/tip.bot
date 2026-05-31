@@ -9,6 +9,10 @@ on:
       sha:
         required: true
         type: string
+      twitter_bot_handle:
+        default: tipbotgg
+        required: false
+        type: string
     secrets:
       CLOUDFLARE_ACCOUNT_ID:
         required: true
@@ -39,6 +43,7 @@ env:
   SLACK_BOT_DISPLAY_NAME: Tipbot PR ${{ inputs.pr_number }}
   SLACK_COMMAND: /tippr${{ inputs.pr_number }}
   SLACK_APP_NAME: Tipbot PR ${{ inputs.pr_number }}
+  TWITTER_BOT_HANDLE: ${{ inputs.twitter_bot_handle }}
   WRANGLER_SEND_METRICS: false
 
 jobs:
@@ -358,11 +363,13 @@ jobs:
         env:
           D1_ID: ${{ steps.d1.outputs.id }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          TWITTER_BOT_HANDLE: ${{ vars.TWITTER_BOT_HANDLE || env.TWITTER_BOT_HANDLE }}
         run: |
           sed -i.bak \
             -e "s|__PREVIEW_NAME__|${PREVIEW_NAME}|g" \
             -e "s|__PREVIEW_APEX__|${PREVIEW_APEX}|g" \
             -e "s|__PREVIEW_PR_NUMBER__|${PR_NUMBER}|g" \
+            -e "s|__PREVIEW_TWITTER_BOT_HANDLE__|${TWITTER_BOT_HANDLE}|g" \
             -e "s|__PREVIEW_D1_ID__|${D1_ID}|g" \
             wrangler.jsonc
 
