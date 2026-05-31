@@ -12,8 +12,14 @@ declare global {
 }
 
 beforeAll(async () => {
+  const startedAt = Date.now()
+  console.log(`workers: apply d1 migrations: starting (${env.TEST_MIGRATIONS.length} migrations)`)
   server.listen({ onUnhandledRequest: 'bypass' })
-  await applyD1Migrations(env.DB, env.TEST_MIGRATIONS)
+  try {
+    await applyD1Migrations(env.DB, env.TEST_MIGRATIONS)
+  } finally {
+    console.log(`workers: apply d1 migrations: completed in ${Date.now() - startedAt}ms`)
+  }
   return () => {
     server.close()
   }
