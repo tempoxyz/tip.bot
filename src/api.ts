@@ -741,7 +741,7 @@ export const api = new Hono<{
                 : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
               const text =
                 'recipients' in result
-                  ? `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} ${data.payload.groupId ? `<!subteam^${data.payload.groupId}${data.payload.groupLabel ? `|@${data.payload.groupLabel}` : ''}> ` : ''}${result.recipients.length} accounts ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${[
+                  ? `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} ${data.payload.groupId ? `<!subteam^${data.payload.groupId}${data.payload.groupLabel ? `|@${data.payload.groupLabel}` : ''}> ` : ''}${Chat.formatProviderUserMentionSummary(result.recipients.map((recipient) => recipient.recipientProviderUserId))} ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${[
                       ...result.recipients.map(
                         (recipient) => `• <@${recipient.recipientProviderUserId}>`,
                       ),
