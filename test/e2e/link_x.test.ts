@@ -70,6 +70,14 @@ test('visitor connects X account with proof tweet', async ({ app, page }) => {
     }
     expect(json.challengeId ?? json.json?.challengeId).toBe(challengeId)
     expect(json.proof ?? json.json?.proof).toBe(proof)
+    if (!(json.tweetUrl ?? json.json?.tweetUrl)) {
+      await route.fulfill({
+        body: JSON.stringify({ code: 'pending', ok: false }),
+        contentType: 'application/json',
+        status: 200,
+      })
+      return
+    }
     expect(json.tweetUrl ?? json.json?.tweetUrl).toBe('https://x.com/tipbotgg/status/123')
     await route.fulfill({
       body: JSON.stringify({ handle: 'tipbotgg', ok: true }),
@@ -84,16 +92,15 @@ test('visitor connects X account with proof tweet', async ({ app, page }) => {
   await expect(page.getByRole('heading', { name: 'Connect X to Tipbot' })).toBeVisible()
   await page.getByRole('button', { name: 'Connect wallet' }).click()
   await expect(page.getByText(tweetText)).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Post connection tweet' })).toHaveAttribute(
-    'href',
-    intentUrl.toString(),
-  )
+  await expect(page.getByText('Tipbot prepared this tweet for you.')).toBeVisible()
+  await expect.poll(() => page.evaluate("window.sessionStorage.getItem('openedUrl')")).toBe(null)
+  await page.getByRole('button', { name: 'Post connection tweet' }).click()
   await expect
     .poll(() => page.evaluate("window.sessionStorage.getItem('openedUrl')"))
     .toBe(intentUrl.toString())
 
-  await page.getByLabel('Fallback: paste your tweet URL').fill('https://x.com/tipbotgg/status/123')
-  await page.getByRole('button', { name: 'Verify' }).click()
+  await page.getByRole('button', { name: 'Manual verification' }).click()
+  await page.getByLabel('Paste your tweet URL').fill('https://x.com/tipbotgg/status/123')
 
   await expect(page.getByText('You can now receive and send tips on X.')).toBeVisible()
 })

@@ -72,12 +72,7 @@ export interface FileRouteTypes {
     | '/install/slack'
     | '/link/x'
   fileRoutesByTo: FileRoutesByTo
-  to:
-    | '/'
-    | '/confirm/$token'
-    | '/connect/$token'
-    | '/install/slack'
-    | '/link/x'
+  to: '/' | '/confirm/$token' | '/connect/$token' | '/install/slack' | '/link/x'
   id:
     | '__root__'
     | '/'

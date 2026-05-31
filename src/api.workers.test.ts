@@ -4,8 +4,8 @@ import { env } from 'cloudflare:workers'
 import { testClient } from 'hono/testing'
 import { HttpResponse, http as mswHttp } from 'msw'
 import { Address, Secp256k1 } from 'ox'
-import { http, toHex } from 'viem'
-import { Account } from 'viem/tempo'
+import { createClient, http, parseUnits, toHex } from 'viem'
+import { Account, Actions } from 'viem/tempo'
 import { beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api } from '#/api.ts'
 import * as Chat from '#/chat.ts'
@@ -108,6 +108,158 @@ describe('/api/chat/twitter', () => {
     expect(posts[0]?.authorization).toContain('oauth_signature=')
     expect(posts[0]?.authorization).not.toContain('Bearer')
   })
+
+  test('real v2 Twitter webhook payload sends a tip for connected X accounts', async () => {
+    const senderProviderUserId = twitterProviderUserId()
+    const recipientProviderUserId = twitterProviderUserId()
+    const tweetId = `tweet-${Nanoid.generate()}`
+    const posts: Array<{ authorization: string | null; body: unknown }> = []
+    const connected = await connectTwitterTipAccounts({
+      recipientProviderUserId,
+      senderProviderUserId,
+    })
+    if (!connected.recipientAccount || !connected.recipientMember)
+      throw new Error('Expected connected Twitter recipient.')
+    server.use(
+      mswHttp.get('https://api.twitter.com/2/users/by/username/alice', () =>
+        HttpResponse.json({ data: { id: recipientProviderUserId, username: 'alice' } }),
+      ),
+      mswHttp.post('https://api.twitter.com/2/tweets', async ({ request }) => {
+        posts.push({
+          authorization: request.headers.get('authorization'),
+          body: await request.json(),
+        })
+        return HttpResponse.json({ data: { id: `reply-${Nanoid.generate()}`, text: 'ok' } })
+      }),
+    )
+
+    const response = await postTwitterWebhook({
+      data: {
+        author_id: senderProviderUserId,
+        conversation_id: `conversation-${Nanoid.generate()}`,
+        id: tweetId,
+        text: '@tipbotgg @alice $0.001 for coffee',
+      },
+      includes: { users: [{ id: senderProviderUserId, username: 'bob' }] },
+    })
+    const tip = await db
+      .selectFrom('tip')
+      .selectAll()
+      .where('idempotency_key', '=', `twitter:${tweetId}`)
+      .executeTakeFirstOrThrow()
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: true })
+    expect(tip).toMatchObject({
+      amount: 1000,
+      confirmed_at: expect.any(String),
+      failed_at: null,
+      memo: 'coffee',
+      recipient_id: connected.recipientAccount.id,
+      recipient_member_id: connected.recipientMember.id,
+      sender_id: connected.senderAccount.id,
+      sender_member_id: connected.senderMember.id,
+      token_address: Address.checksum(Tempo.addressLookup.pathUsd),
+      workspace_id: connected.workspace.id,
+    })
+    expect(posts).toHaveLength(1)
+    expect(posts[0]?.authorization).toContain('oauth_signature=')
+    expect(posts[0]?.body).toMatchObject({
+      reply: { in_reply_to_tweet_id: tweetId },
+      text: expect.stringContaining('@alice got $0.001 from @bob for coffee.'),
+    })
+  }, 20_000) // 20 seconds
+
+  test('pending Twitter tip is claimed only after matching X recipient links', async () => {
+    const senderProviderUserId = twitterProviderUserId()
+    const recipientProviderUserId = twitterProviderUserId()
+    const wrongProviderUserId = twitterProviderUserId()
+    const tweetId = `tweet-${Nanoid.generate()}`
+    const connected = await connectTwitterTipAccounts({ senderProviderUserId })
+    server.use(
+      mswHttp.get('https://api.twitter.com/2/users/by/username/alice', () =>
+        HttpResponse.json({ data: { id: recipientProviderUserId, username: 'alice' } }),
+      ),
+      mswHttp.post('https://api.twitter.com/2/tweets', () =>
+        HttpResponse.json({ data: { id: `reply-${Nanoid.generate()}`, text: 'ok' } }),
+      ),
+    )
+
+    const response = await postTwitterWebhook({
+      authorHandle: 'bob',
+      authorId: senderProviderUserId,
+      id: tweetId,
+      text: '@tipbotgg @alice $0.001 for coffee',
+    })
+    const pending = await db
+      .selectFrom('pending_tip')
+      .selectAll()
+      .where('idempotency_key', '=', `twitter:${tweetId}`)
+      .executeTakeFirstOrThrow()
+
+    expect(response.status).toBe(200)
+    expect(pending).toMatchObject({
+      amount: 1000,
+      memo: 'coffee',
+      provider_id: 'x',
+      recipient_provider_user_id: recipientProviderUserId,
+      sender_member_id: connected.senderMember.id,
+      status: 'pending',
+    })
+
+    await linkTwitterAccount({
+      handle: 'mallory',
+      providerUserId: wrongProviderUserId,
+      root: Account.fromSecp256k1(Secp256k1.randomPrivateKey()),
+      workspaceId: connected.workspace.id,
+    })
+
+    await expect(
+      db
+        .selectFrom('pending_tip')
+        .select(['status', 'tip_id'])
+        .where('id', '=', pending.id)
+        .executeTakeFirstOrThrow(),
+    ).resolves.toEqual({ status: 'pending', tip_id: null })
+    await expect(
+      db
+        .selectFrom('tip')
+        .selectAll()
+        .where('idempotency_key', '=', `pending:${pending.id}`)
+        .execute(),
+    ).resolves.toEqual([])
+
+    const recipientRoot = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    await linkTwitterAccount({
+      handle: 'alice',
+      memberId: pending.recipient_member_id,
+      providerUserId: recipientProviderUserId,
+      root: recipientRoot,
+      workspaceId: connected.workspace.id,
+    })
+
+    const result = await Tip.claimPendingTip(env, { pendingTipId: pending.id })
+    const updated = await db
+      .selectFrom('pending_tip')
+      .selectAll()
+      .where('id', '=', pending.id)
+      .executeTakeFirstOrThrow()
+    const tip = await db
+      .selectFrom('tip')
+      .selectAll()
+      .where('idempotency_key', '=', `pending:${pending.id}`)
+      .executeTakeFirstOrThrow()
+
+    expect(result).toMatchObject({ ok: true, status: 'sent' })
+    expect(updated).toMatchObject({ status: 'sent', tip_id: tip.id })
+    expect(tip).toMatchObject({
+      amount: 1000,
+      confirmed_at: expect.any(String),
+      memo: 'coffee',
+      sender_id: connected.senderAccount.id,
+    })
+    expect(tip.recipient_id).not.toBe(connected.senderAccount.id)
+  }, 20_000) // 20 seconds
 
   test('ignores Twitter connect chatter', async () => {
     const fetchSpy = vi.fn()
@@ -1560,12 +1712,7 @@ async function expectSlackViewsPublishCall(fetchSpy: {
   } as { user_id: string; view: Record<string, unknown> }
 }
 
-async function postTwitterWebhook(tweet: {
-  authorHandle: string
-  authorId: string
-  id: string
-  text: string
-}) {
+async function postTwitterWebhook(tweet: unknown) {
   return await api.fetch(
     new Request('https://tip.bot/api/chat/twitter', {
       body: JSON.stringify(tweet),
@@ -1575,6 +1722,142 @@ async function postTwitterWebhook(tweet: {
     env,
     executionCtx,
   )
+}
+
+async function connectTwitterTipAccounts(input: {
+  recipientProviderUserId?: string
+  senderProviderUserId: string
+}) {
+  const workspace = await ensureTwitterTestWorkspace()
+  const senderRoot = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+  const recipientRoot = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+  const senderAccount = await findOrCreateAccount(senderRoot.address)
+  const recipientAccount = await findOrCreateAccount(recipientRoot.address)
+  const accessKey = AccessKey.generate()
+  const accessKeyExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
+  await Actions.token.mintSync(
+    createClient({
+      chain: Tempo.getChain(Tempo.chainLookup.localnet),
+      transport: http(env.RPC_URL_TESTNET),
+    }),
+    {
+      account: Account.fromSecp256k1(env.FEE_PAYER_PRIVATE_KEY_TESTNET),
+      amount: parseUnits('1', 6),
+      to: senderRoot.address,
+      token: Tempo.addressLookup.pathUsd,
+    },
+  )
+  const senderMember = await insertMember({
+    account_id: senderAccount.id,
+    login: '@bob',
+    provider_user_id: input.senderProviderUserId,
+    workspace_id: workspace.id,
+  })
+  const accessKeyRow = await factory.access_key.insert({
+    account_id: senderAccount.id,
+    address: accessKey.address,
+    authorization: JSON.stringify(
+      await AccountLink.signKeyAuthorization(senderRoot, {
+        accessKeyAddress: accessKey.address,
+        chainId: workspace.chain_id,
+        expiresAt: accessKeyExpiresAt,
+        tokenAddress: Tempo.addressLookup.pathUsd,
+      }),
+    ),
+    chain_id: workspace.chain_id,
+    ciphertext: await AccessKey.encrypt(env, accessKey.privateKey),
+    expires_at: accessKeyExpiresAt,
+    token_address: Tempo.addressLookup.pathUsd,
+  })
+  if (!input.recipientProviderUserId)
+    return { accessKey: accessKeyRow, senderAccount, senderMember, workspace }
+  const recipientMember = await insertMember({
+    account_id: recipientAccount.id,
+    login: '@alice',
+    provider_user_id: input.recipientProviderUserId,
+    workspace_id: workspace.id,
+  })
+  return {
+    accessKey: accessKeyRow,
+    recipientAccount,
+    recipientMember,
+    senderAccount,
+    senderMember,
+    workspace,
+  }
+}
+
+async function ensureTwitterTestWorkspace() {
+  const existing = await db
+    .selectFrom('workspace')
+    .selectAll()
+    .where('provider', '=', 'slack')
+    .where('provider_id', '=', 'x')
+    .executeTakeFirst()
+  if (existing) {
+    await db
+      .updateTable('workspace')
+      .set({
+        chain_id: Tempo.chainLookup.localnet,
+        default_token_address: Tempo.addressLookup.pathUsd,
+        updated_at: new Date().toISOString(),
+      })
+      .where('id', '=', existing.id)
+      .execute()
+    return await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('id', '=', existing.id)
+      .executeTakeFirstOrThrow()
+  }
+  return await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    default_token_address: Tempo.addressLookup.pathUsd,
+    name: 'X',
+    provider: 'slack',
+    provider_id: 'x',
+  })
+}
+
+async function linkTwitterAccount(input: {
+  handle: string
+  memberId?: string
+  providerUserId: string
+  root: ReturnType<typeof Account.fromSecp256k1>
+  workspaceId: string
+}) {
+  const account = await findOrCreateAccount(input.root.address)
+  if (!input.memberId) {
+    await insertMember({
+      account_id: account.id,
+      login: `@${input.handle}`,
+      provider_user_id: input.providerUserId,
+      workspace_id: input.workspaceId,
+    })
+    return account
+  }
+  const member = await db
+    .selectFrom('member')
+    .select(['provider_identity_id'])
+    .where('id', '=', input.memberId)
+    .where('provider_user_id', '=', input.providerUserId)
+    .executeTakeFirstOrThrow()
+  await db
+    .updateTable('provider_identity')
+    .set({
+      account_id: account.id,
+      display_name: `@${input.handle}`,
+      provider_global_user_id: input.providerUserId,
+      updated_at: new Date().toISOString(),
+    })
+    .where('id', '=', member.provider_identity_id)
+    .execute()
+  await db
+    .updateTable('member')
+    .set({ login: `@${input.handle}`, updated_at: new Date().toISOString() })
+    .where('id', '=', input.memberId)
+    .execute()
+  return account
 }
 
 async function hmacBase64(key: string, message: string) {
@@ -1646,6 +1929,10 @@ function slackFetchBodyStringJson(body: BodyInit | null | undefined): Record<str
   if (typeof body !== 'string') return {}
   if (body.trim().startsWith('{')) return JSON.parse(body) as Record<string, unknown>
   return Object.fromEntries(new URLSearchParams(body).entries())
+}
+
+function twitterProviderUserId() {
+  return `1${Date.now()}${Math.floor(Math.random() * 1_000_000)}`
 }
 
 async function signKeyAuthorization(

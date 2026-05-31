@@ -82,3 +82,4 @@ If a test fails, run it in isolation and gradually expand out to more tests as y
 - `.env` is used instead of `.dev.vars`
 - Use `.github/TODO.md` for general TODOs not attached to specific files/lines
 - Make sure comments don't get dropped from `pnpm-workspace.yaml` when making edits or fixing `pnpm audit`
+- Use conventional commit style for commit messages, like "feat: add new thing" and "chore: did something"
