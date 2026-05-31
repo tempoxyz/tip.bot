@@ -59,6 +59,8 @@ export default defineConfig({
       })()
     : {},
   plugins: lazyPlugins(async () => {
+    if (isTest) return []
+
     const autoImport = await import('unplugin-auto-import/vite')
     const devtools = await import('@tanstack/devtools-vite')
     const icons = await import('unplugin-icons/vite')
