@@ -62,13 +62,15 @@ function LinkPanel() {
       const challengeResponse = await rpc.api.link.twitter.challenge.$post({
         json: { address },
       })
-      const challengeJson = (await challengeResponse.json()) as ChallengeResponse
-      if (!challengeJson.ok)
+      if (challengeResponse.status !== 200) {
+        const challengeJson = await challengeResponse.json()
         throw new Error(
           'message' in challengeJson
             ? challengeJson.message
             : 'Could not start Twitter connection.',
         )
+      }
+      const challengeJson = await challengeResponse.json()
       const provider = (await connector.getProvider()) as {
         request: (parameters: { method: string; params: unknown[] }) => Promise<unknown>
       }
@@ -104,11 +106,13 @@ function LinkPanel() {
           keyAuthorization: keyAuthorization.keyAuthorization,
         },
       })
-      const proofJson = (await proofResponse.json()) as ProofResponse
-      if (!proofJson.ok)
+      if (proofResponse.status !== 200) {
+        const proofJson = await proofResponse.json()
         throw new Error(
           'message' in proofJson ? proofJson.message : 'Could not prepare Twitter proof.',
         )
+      }
+      const proofJson = await proofResponse.json()
       setChallenge({
         challengeId: challengeJson.challengeId,
         intentUrl: proofJson.intentUrl,
@@ -135,7 +139,8 @@ function LinkPanel() {
           ...(tweetUrl.trim() ? { tweetUrl: tweetUrl.trim() } : {}),
         },
       })
-      const json = (await response.json()) as VerifyResponse
+      if (response.status !== 200) throw new Error('Could not verify the proof tweet yet.')
+      const json = await response.json()
       if (json.ok) {
         setStatus('connected')
         return
@@ -241,22 +246,3 @@ type Challenge = {
   proof: string
   tweetText: string
 }
-
-type ChallengeResponse =
-  | {
-      accessKeyExpiry: string
-      accessKeyLimit: string
-      accessKeyLimitPeriodSeconds: number
-      accessKeyPublicKey: `0x${string}`
-      chainId: number
-      challengeId: string
-      ok: true
-      tokenAddress: string
-    }
-  | { message?: string; ok: false }
-
-type ProofResponse =
-  | { intentUrl: string; ok: true; proof: string; tweetText: string }
-  | { message?: string; ok: false }
-
-type VerifyResponse = { handle?: string; ok: true } | { code: string; message?: string; ok: false }
