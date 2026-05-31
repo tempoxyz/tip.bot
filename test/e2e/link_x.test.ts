@@ -21,8 +21,13 @@ test('visitor connects X account with proof tweet', async ({ app, page }) => {
   )
   await page.route('**/api/link/twitter/challenge', async (route) => {
     expect(route.request().method()).toBe('POST')
-    const json = route.request().postDataJSON() as { address?: string; json?: { address?: string } }
+    const json = route.request().postDataJSON() as {
+      address?: string
+      json?: { address?: string; username?: string }
+      username?: string
+    }
     expect(json.address ?? json.json?.address).toBe(root.address)
+    expect(json.username ?? json.json?.username).toBe('tipbotgg')
     await route.fulfill({
       body: JSON.stringify({
         accessKeyExpiry: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
@@ -31,8 +36,11 @@ test('visitor connects X account with proof tweet', async ({ app, page }) => {
         accessKeyPublicKey: accessKey.publicKey,
         chainId: Tempo.chainLookup.mainnet,
         challengeId,
+        avatarUrl: 'https://example.com/avatar.jpg',
+        name: 'Tipbot',
         ok: true,
         tokenAddress: Tempo.addressLookup.pathUsd,
+        username: 'tipbotgg',
       }),
       contentType: 'application/json',
       status: 200,
@@ -90,9 +98,29 @@ test('visitor connects X account with proof tweet', async ({ app, page }) => {
   await page.waitForLoadState('networkidle')
 
   await expect(page.getByRole('heading', { name: 'Connect X to Tipbot' })).toBeVisible()
+  await expect(page.getByText('Step 1/3')).toBeVisible()
+  await expect(page.getByLabel('X username')).toBeHidden()
   await page.getByRole('button', { name: 'Connect wallet' }).click()
+  await expect(page.getByText('Step 2/3')).toBeVisible()
+  await expect(page.getByLabel('X username')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Disconnect wallet' })).toBeVisible()
+  await page.getByRole('button', { name: 'Disconnect wallet' }).click()
+  await expect(page.getByText('Step 1/3')).toBeVisible()
+  await expect(page.getByLabel('X username')).toBeHidden()
+  await page.getByRole('button', { name: 'Connect wallet' }).click()
+  await expect(page.getByText('Step 2/3')).toBeVisible()
+  await expect(page.getByLabel('X username')).toBeVisible()
+  await page.getByLabel('X username').fill('@tipbotgg')
+  await page.getByRole('button', { name: 'Sign connection' }).click()
+  await expect(page.getByText('Step 3/3')).toBeVisible()
   await expect(page.getByText(tweetText)).toBeVisible()
-  await expect(page.getByText('Tipbot prepared this tweet for you.')).toBeVisible()
+  await expect(page.getByRole('img', { name: 'Tipbot avatar' })).toBeVisible()
+  await expect(
+    page.getByRole('img', { name: 'Tipbot avatar' }).locator('..').getByText('Tipbot', {
+      exact: true,
+    }),
+  ).toBeVisible()
+  await expect(page.getByText('Tipbot prepared this tweet for @tipbotgg.')).toBeVisible()
   await expect.poll(() => page.evaluate("window.sessionStorage.getItem('openedUrl')")).toBe(null)
   await page.getByRole('button', { name: 'Post connection tweet' }).click()
   await expect
@@ -124,8 +152,13 @@ test('visitor connects X account after automatic proof tweet polling', async ({ 
   )
   await page.route('**/api/link/twitter/challenge', async (route) => {
     expect(route.request().method()).toBe('POST')
-    const json = route.request().postDataJSON() as { address?: string; json?: { address?: string } }
+    const json = route.request().postDataJSON() as {
+      address?: string
+      json?: { address?: string; username?: string }
+      username?: string
+    }
     expect(json.address ?? json.json?.address).toBe(root.address)
+    expect(json.username ?? json.json?.username).toBe('tipbotgg')
     await route.fulfill({
       body: JSON.stringify({
         accessKeyExpiry: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
@@ -134,8 +167,11 @@ test('visitor connects X account after automatic proof tweet polling', async ({ 
         accessKeyPublicKey: accessKey.publicKey,
         chainId: Tempo.chainLookup.mainnet,
         challengeId,
+        avatarUrl: 'https://example.com/avatar.jpg',
+        name: 'Tipbot',
         ok: true,
         tokenAddress: Tempo.addressLookup.pathUsd,
+        username: 'tipbotgg',
       }),
       contentType: 'application/json',
       status: 200,
@@ -189,6 +225,9 @@ test('visitor connects X account after automatic proof tweet polling', async ({ 
   await page.goto(app.url({ to: '/link/x' }))
   await page.waitForLoadState('networkidle')
   await page.getByRole('button', { name: 'Connect wallet' }).click()
+  await expect(page.getByLabel('X username')).toBeVisible()
+  await page.getByLabel('X username').fill('tipbotgg')
+  await page.getByRole('button', { name: 'Sign connection' }).click()
   await expect(page.getByText(tweetText)).toBeVisible()
   await page.getByRole('button', { name: 'Post connection tweet' }).click()
 

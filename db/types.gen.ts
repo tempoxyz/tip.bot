@@ -120,6 +120,8 @@ type provider_link_challenge = {
   access_key_public_key: string
   account_id: string | null
   created_at: k.Generated<string>
+  expected_provider_handle: string | null
+  expected_provider_user_id: string | null
   expires_at: string
   id: string
   proof_hash: string | null

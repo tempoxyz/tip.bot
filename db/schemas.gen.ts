@@ -102,6 +102,8 @@ export const provider_link_challenge = z.object({
   access_key_public_key: z.string(),
   account_id: z.string().nullable(),
   created_at: z.string(),
+  expected_provider_handle: z.string().nullable(),
+  expected_provider_user_id: z.string().nullable(),
   expires_at: z.string(),
   id: z.string(),
   proof_hash: z.string().nullable(),

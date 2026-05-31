@@ -336,6 +336,11 @@ export const api = new Hono<{
       'json',
       z.object({
         address: z.string().min(1),
+        username: z
+          .string()
+          .min(1)
+          .max(16)
+          .regex(/^@?[A-Za-z0-9_]{1,15}$/),
       }),
     ),
     async (c) => {

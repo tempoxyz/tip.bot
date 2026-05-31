@@ -286,13 +286,16 @@ describe('/api/chat/twitter', () => {
 describe('/api/link/twitter', () => {
   test('completes Twitter proof flow and stores account link', async () => {
     const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    mockTwitterUser({ id: 'twitter-user-1', username: 'alice' })
     const challengeResponse = await client.api.link.twitter.challenge.$post({
-      json: { address: root.address },
+      json: { address: root.address, username: 'alice' },
     })
 
     expect(challengeResponse.status).toBe(200)
     if (challengeResponse.status !== 200) throw new Error('Expected Twitter challenge success.')
     const challenge = await challengeResponse.json()
+    expect(challenge.name).toBe('alice')
+    expect(challenge.username).toBe('alice')
     const keyAuthorization = await AccountLink.signKeyAuthorization(root, {
       accessKeyAddress: challenge.accessKeyAddress,
       chainId: challenge.chainId,
@@ -374,8 +377,9 @@ describe('/api/link/twitter', () => {
       provider_user_id: `U${Nanoid.generate()}`,
       workspace_id: workspace.id,
     })
+    mockTwitterUser({ id: 'twitter-user-2', username: 'bob' })
     const challengeResponse = await client.api.link.twitter.challenge.$post({
-      json: { address: root.address },
+      json: { address: root.address, username: 'bob' },
     })
 
     expect(challengeResponse.status).toBe(200)
@@ -416,6 +420,60 @@ describe('/api/link/twitter', () => {
 
     expect(verifyResponse.status).toBe(200)
     await expect(verifyResponse.json()).resolves.toEqual({ handle: '@bob', ok: true })
+  })
+
+  test('rejects proof tweet posted by a different X account', async () => {
+    const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    mockTwitterUser({ id: 'twitter-user-expected', username: 'alice' })
+    const challengeResponse = await client.api.link.twitter.challenge.$post({
+      json: { address: root.address, username: 'alice' },
+    })
+
+    expect(challengeResponse.status).toBe(200)
+    if (challengeResponse.status !== 200) throw new Error('Expected Twitter challenge success.')
+    const challenge = await challengeResponse.json()
+    const keyAuthorization = await AccountLink.signKeyAuthorization(root, {
+      accessKeyAddress: challenge.accessKeyAddress,
+      chainId: challenge.chainId,
+      expiresAt: challenge.accessKeyExpiry,
+      tokenAddress: challenge.tokenAddress,
+    })
+    const proofResponse = await client.api.link.twitter.proof.$post({
+      json: {
+        address: root.address,
+        challengeId: challenge.challengeId,
+        keyAuthorization,
+      },
+    })
+
+    expect(proofResponse.status).toBe(200)
+    if (proofResponse.status !== 200) throw new Error('Expected Twitter proof success.')
+    const proof = await proofResponse.json()
+    server.use(
+      mswHttp.get('https://api.twitter.com/2/tweets/99999', () =>
+        HttpResponse.json({
+          data: { author_id: 'twitter-user-attacker', id: '99999', text: proof.tweetText },
+          includes: { users: [{ id: 'twitter-user-attacker', username: 'mallory' }] },
+        }),
+      ),
+    )
+    const verifyResponse = await client.api.link.twitter.verify.$post({
+      json: {
+        challengeId: challenge.challengeId,
+        proof: proof.proof,
+        tweetUrl: 'https://x.com/mallory/status/99999',
+      },
+    })
+
+    expect(verifyResponse.status).toBe(200)
+    await expect(verifyResponse.json()).resolves.toEqual({ code: 'invalid_author', ok: false })
+    await expect(
+      db
+        .selectFrom('provider_identity')
+        .select('id')
+        .where('provider_user_id', '=', 'twitter-user-attacker')
+        .execute(),
+    ).resolves.toEqual([])
   })
 
   test('verified Twitter relink replaces wallet previous X identity', async () => {
@@ -1941,8 +1999,9 @@ async function completeTwitterProofLink(input: {
   root: ReturnType<typeof Account.fromSecp256k1>
   tweetId: string
 }) {
+  mockTwitterUser({ id: input.providerUserId, username: input.handle })
   const challengeResponse = await client.api.link.twitter.challenge.$post({
-    json: { address: input.root.address },
+    json: { address: input.root.address, username: input.handle },
   })
   expect(challengeResponse.status).toBe(200)
   if (challengeResponse.status !== 200) throw new Error('Expected Twitter challenge success.')
@@ -1982,6 +2041,21 @@ async function completeTwitterProofLink(input: {
   expect(verifyResponse.status).toBe(200)
   await expect(verifyResponse.json()).resolves.toEqual({ handle: `@${input.handle}`, ok: true })
   return { challenge, keyAuthorization, proof }
+}
+
+function mockTwitterUser(input: { id: string; username: string }) {
+  server.use(
+    mswHttp.get(`https://api.twitter.com/2/users/by/username/${input.username}`, () =>
+      HttpResponse.json({
+        data: {
+          id: input.id,
+          name: input.username,
+          profile_image_url: `https://example.com/${input.username}.jpg`,
+          username: input.username,
+        },
+      }),
+    ),
+  )
 }
 
 async function hmacBase64(key: string, message: string) {

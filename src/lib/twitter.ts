@@ -12,12 +12,14 @@ import { z } from 'zod'
 export const twitterProviderId = 'x'
 const twitterStorageProvider = 'slack'
 
-export async function createLinkChallenge(env: Env, input: { address: string }) {
+export async function createLinkChallenge(env: Env, input: { address: string; username: string }) {
   const db = DB.create(env.DB)
   const now = new Date()
   const accessKey = AccessKey.generate()
   const id = Nanoid.generate()
   const walletAddress = Address.checksum(input.address)
+  const twitterAccount = await getUserByUsername(env, input.username)
+  if (!twitterAccount) throw new Error('Could not find that X account.')
   await db
     .insertInto('provider_link_challenge')
     .values({
@@ -32,6 +34,8 @@ export async function createLinkChallenge(env: Env, input: { address: string }) 
       created_at: now.toISOString(),
       expires_at: new Date(now.getTime() + 10 * 60 * 1000).toISOString(), // 10 minutes
       id,
+      expected_provider_handle: `@${twitterAccount.username}`,
+      expected_provider_user_id: twitterAccount.id,
       proof_hash: null,
       provider: 'twitter',
       provider_handle: null,
@@ -48,8 +52,11 @@ export async function createLinkChallenge(env: Env, input: { address: string }) 
     accessKeyLimit: AccountLink.reusableAccessKeyLimitText,
     accessKeyLimitPeriodSeconds: AccountLink.reusableAccessKeyPeriodSeconds,
     accessKeyPublicKey: accessKey.publicKey as `0x${string}`,
+    avatarUrl: twitterAccount.profile_image_url,
     chainId: Tempo.chainLookup.mainnet,
     challengeId: id,
+    name: twitterAccount.name,
+    username: twitterAccount.username,
     tokenAddress: Address.checksum(Tempo.addressLookup.pathUsd),
   }
 }
@@ -70,6 +77,8 @@ export async function createProof(
     .where('provider', '=', 'twitter')
     .executeTakeFirst()
   if (!challenge || challenge.used_at || challenge.expires_at <= new Date().toISOString())
+    throw new Error('This Twitter connection proof is invalid or expired.')
+  if (!challenge.expected_provider_user_id || !challenge.expected_provider_handle)
     throw new Error('This Twitter connection proof is invalid or expired.')
 
   const verified = await AccountLink.verifyKeyAuthorization({
@@ -126,15 +135,19 @@ export async function verifyLinkChallenge(
     return { code: 'invalid_challenge' as const, ok: false as const }
   if (!challenge.access_key_authorization || !challenge.proof_hash)
     return { code: 'proof_not_ready' as const, ok: false as const }
+  if (!challenge.expected_provider_user_id)
+    return { code: 'invalid_challenge' as const, ok: false as const }
   if ((await AccountLink.hashToken(env, input.proof)) !== challenge.proof_hash)
     return { code: 'invalid_proof' as const, ok: false as const }
 
   const tweet = input.tweetUrl
     ? await getTweetByUrl(env, input.tweetUrl)
-    : await findProofTweet(env, input.proof)
+    : await findProofTweet(env, input.proof, challenge.expected_provider_user_id)
   if (!tweet) return { code: 'pending' as const, ok: false as const }
   if (!tweet.text.includes(input.proof))
     return { code: 'invalid_tweet' as const, ok: false as const }
+  if (tweet.authorId !== challenge.expected_provider_user_id)
+    return { code: 'invalid_author' as const, ok: false as const }
   return await completeLinkChallenge(env, challenge, tweet)
 }
 
@@ -264,6 +277,13 @@ export function parseWebhookTweets(body: unknown): TwitterTweetInput[] {
     z.object({
       tweet_create_events: z.array(
         z.object({
+          display_text_range: z.tuple([z.number(), z.number()]).optional(),
+          extended_tweet: z
+            .object({
+              display_text_range: z.tuple([z.number(), z.number()]).optional(),
+              full_text: z.string(),
+            })
+            .optional(),
           id_str: z.string(),
           in_reply_to_status_id_str: z.string().nullable().optional(),
           in_reply_to_user_id_str: z.string().nullable().optional(),
@@ -281,7 +301,10 @@ export function parseWebhookTweets(body: unknown): TwitterTweetInput[] {
       conversationId: tweet.in_reply_to_status_id_str ?? tweet.id_str,
       id: tweet.id_str,
       replyToAuthorId: tweet.in_reply_to_user_id_str ?? undefined,
-      text: tweet.text,
+      text: getTwitterDisplayText(
+        tweet.extended_tweet?.full_text ?? tweet.text,
+        tweet.extended_tweet?.display_text_range ?? tweet.display_text_range,
+      ),
     }))
 
   const v2 = z.safeParse(
@@ -480,7 +503,7 @@ async function getTweetByUrl(env: Env, tweetUrl: string) {
   return await getTweet(env, tweetId)
 }
 
-async function findProofTweet(env: Env, proof: string) {
+async function findProofTweet(env: Env, proof: string, authorId: string) {
   const url = new URL('/2/tweets/search/recent', env.TWITTER_API_URL)
   url.searchParams.set('query', `"${proof}" @${env.TWITTER_BOT_HANDLE.replace(/^@+/, '')}`)
   url.searchParams.set('tweet.fields', 'author_id,created_at')
@@ -497,7 +520,7 @@ async function findProofTweet(env: Env, proof: string) {
     }),
     await twitterFetch(env, url).then((response) => response.json()),
   )
-  const tweet = json.data?.find((item) => item.text.includes(proof))
+  const tweet = json.data?.find((item) => item.text.includes(proof) && item.author_id === authorId)
   if (!tweet) return null
   return {
     authorHandle: json.includes?.users?.find((user) => user.id === tweet.author_id)?.username,
@@ -532,12 +555,21 @@ async function getTweet(env: Env, tweetId: string) {
 
 async function getUserByUsername(env: Env, username: string) {
   const url = new URL(`/2/users/by/username/${username.replace(/^@+/, '')}`, env.TWITTER_API_URL)
-  url.searchParams.set('user.fields', 'name,username')
+  url.searchParams.set('user.fields', 'name,profile_image_url,username')
   const json = z.parse(
-    z.object({ data: z.object({ id: z.string(), username: z.string() }).optional() }),
+    z.object({
+      data: z
+        .object({
+          id: z.string(),
+          name: z.string().optional(),
+          profile_image_url: z.string().optional(),
+          username: z.string(),
+        })
+        .optional(),
+    }),
     await twitterFetch(env, url).then((response) => response.json()),
   )
-  return json.data ?? null
+  return json.data ? { ...json.data, name: json.data.name ?? json.data.username } : null
 }
 
 async function postReply(env: Env, replyToTweetId: string, text: string) {
@@ -725,6 +757,11 @@ function formatTwitterAmount(input: {
 function formatHandle(value: string | undefined) {
   if (!value) return '@account'
   return `@${value.replace(/^@+/, '')}`
+}
+
+function getTwitterDisplayText(text: string, range: [number, number] | undefined) {
+  if (!range) return text
+  return [...text].slice(range[0], range[1]).join('').trim()
 }
 
 async function hmacBase64(algorithm: 'SHA-1' | 'SHA-256', key: string, message: string) {

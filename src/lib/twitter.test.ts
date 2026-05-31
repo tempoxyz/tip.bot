@@ -48,6 +48,34 @@ test('parses Account Activity tweet_create_events payload', () => {
   ])
 })
 
+test('parses Account Activity reply display text without reply-prefix mentions', () => {
+  const text = '@tipbotgg @awkweb @_jxom @tipbotgg @awkweb for being a legend'
+
+  expect(
+    parseWebhookTweets({
+      tweet_create_events: [
+        {
+          display_text_range: [25, text.length],
+          id_str: 'tweet-3',
+          in_reply_to_status_id_str: 'parent-tweet',
+          in_reply_to_user_id_str: 'bot-user',
+          text,
+          user: { id_str: '100', screen_name: 'bob' },
+        },
+      ],
+    }),
+  ).toEqual([
+    {
+      authorHandle: 'bob',
+      authorId: '100',
+      conversationId: 'parent-tweet',
+      id: 'tweet-3',
+      replyToAuthorId: 'bot-user',
+      text: '@tipbotgg @awkweb for being a legend',
+    },
+  ])
+})
+
 test('parses v2 tweet payload with includes', () => {
   expect(
     parseWebhookTweets({
