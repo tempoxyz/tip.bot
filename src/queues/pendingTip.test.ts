@@ -1,9 +1,16 @@
 import * as Chat from '#/chat.ts'
 import * as Tip from '#/lib/tip.ts'
 import { processPendingTipMessage } from '#/queues/pendingTip.ts'
-import { createMessageBatch } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 import { beforeEach, expect, test, vi } from 'vitest'
+
+vi.mock('cloudflare:workers', () => ({
+  env: {
+    DB: 'test-db',
+    HOST: 'tip.bot',
+    SLACK_API_URL: 'https://slack.example/api',
+  },
+}))
 
 beforeEach(() => {
   vi.restoreAllMocks()
@@ -18,21 +25,11 @@ test('claims pending tip and updates queued Slack message', async () => {
     status: 'expired',
   } as Tip.PendingTipClaimResult
   const claimSpy = vi.spyOn(Tip, 'claimPendingTip').mockResolvedValue(result)
-  const initializeSpy = vi.spyOn(Chat.getChat(), 'initialize').mockResolvedValue(undefined)
+  const initializeSpy = vi.fn().mockResolvedValue(undefined)
+  vi.spyOn(Chat, 'getChat').mockReturnValue({ initialize: initializeSpy } as never)
   const updateSpy = vi.spyOn(Chat, 'updateSlackPendingTipMessage').mockResolvedValue(undefined)
-  const batch = createMessageBatch<processPendingTipMessage.Body>(
-    processPendingTipMessage.queueName,
-    [
-      {
-        attempts: 1,
-        body: { pendingTipId: 'pending_1' },
-        id: crypto.randomUUID(),
-        timestamp: new Date(),
-      },
-    ],
-  )
 
-  await processPendingTipMessage(batch.messages[0]!)
+  await processPendingTipMessage(message({ pendingTipId: 'pending_1' }))
 
   expect(claimSpy).toHaveBeenCalledWith(env, { pendingTipId: 'pending_1' })
   expect(initializeSpy).toHaveBeenCalledOnce()
@@ -42,19 +39,12 @@ test('claims pending tip and updates queued Slack message', async () => {
 test('skips queued Slack message update when pending tip no longer exists', async () => {
   vi.spyOn(Tip, 'claimPendingTip').mockResolvedValue(null)
   const updateSpy = vi.spyOn(Chat, 'updateSlackPendingTipMessage').mockResolvedValue(undefined)
-  const batch = createMessageBatch<processPendingTipMessage.Body>(
-    processPendingTipMessage.queueName,
-    [
-      {
-        attempts: 1,
-        body: { pendingTipId: 'missing_pending_tip' },
-        id: crypto.randomUUID(),
-        timestamp: new Date(),
-      },
-    ],
-  )
 
-  await processPendingTipMessage(batch.messages[0]!)
+  await processPendingTipMessage(message({ pendingTipId: 'missing_pending_tip' }))
 
   expect(updateSpy).not.toHaveBeenCalled()
 })
+
+function message(body: processPendingTipMessage.Body) {
+  return { body } as Message<processPendingTipMessage.Body>
+}
