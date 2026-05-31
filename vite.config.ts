@@ -215,7 +215,7 @@ export default defineConfig({
           ]
         }),
         test: {
-          fileParallelism: true,
+          fileParallelism: false,
           include: ['src/**/*.workers.test.ts'],
           name: 'workers',
           globalSetup: ['test/workers.global.setup.ts'],
