@@ -73,16 +73,8 @@ jobs:
         run: pnpm test --project unit --run
 
   test-workers:
-    name: Test Workers (${{ matrix.name }})
+    name: Test Workers
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Chat
-            path: src/chat.workers.test.ts
-          - name: API
-            path: src/api.workers.test.ts
     steps:
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
@@ -112,7 +104,7 @@ jobs:
           docker save "${image}" -o /tmp/tempo-image.tar
 
       - name: Test workers
-        run: pnpm test --project workers --run ${{ matrix.path }}
+        run: pnpm test --project workers --run
         env:
           FEE_PAYER_PRIVATE_KEY_MAINNET: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
           FEE_PAYER_PRIVATE_KEY_TESTNET: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
