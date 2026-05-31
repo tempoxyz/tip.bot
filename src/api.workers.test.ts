@@ -62,7 +62,7 @@ describe('/api/chat/twitter', () => {
   test('responds to Twitter CRC challenge', async () => {
     const response = await api.fetch(
       new Request('https://tip.bot/api/chat/twitter?crc_token=twitter-crc'),
-      twitterEnv(),
+      env,
       executionCtx,
     )
 
@@ -159,9 +159,9 @@ describe('/api/link/twitter', () => {
     if (proofResponse.status !== 200) throw new Error('Expected Twitter proof success.')
     const proof = await proofResponse.json()
     server.use(
-      mswHttp.get('https://api.twitter.com/2/tweets/tweet-verify', () =>
+      mswHttp.get('https://api.twitter.com/2/tweets/12345', () =>
         HttpResponse.json({
-          data: { author_id: 'twitter-user-1', id: 'tweet-verify', text: proof.tweetText },
+          data: { author_id: 'twitter-user-1', id: '12345', text: proof.tweetText },
           includes: { users: [{ id: 'twitter-user-1', username: 'alice' }] },
         }),
       ),
@@ -170,7 +170,7 @@ describe('/api/link/twitter', () => {
       json: {
         challengeId: challenge.challengeId,
         proof: proof.proof,
-        tweetUrl: 'https://x.com/alice/status/tweet-verify',
+        tweetUrl: 'https://x.com/alice/status/12345',
       },
     })
 
@@ -1519,22 +1519,9 @@ async function postTwitterWebhook(tweet: {
       headers: { 'content-type': 'application/json' },
       method: 'POST',
     }),
-    twitterEnv(),
+    env,
     executionCtx,
   )
-}
-
-function twitterEnv() {
-  return {
-    ...env,
-    TWITTER_ACCESS_TOKEN: 'twitter-access-token',
-    TWITTER_ACCESS_TOKEN_SECRET: 'twitter-access-token-secret',
-    TWITTER_API_URL: 'https://api.twitter.com',
-    TWITTER_BEARER_TOKEN: 'twitter-bearer-token',
-    TWITTER_BOT_HANDLE: 'tipbotgg',
-    TWITTER_CONSUMER_KEY: 'twitter-consumer-key',
-    TWITTER_CONSUMER_SECRET: 'twitter-consumer-secret',
-  } satisfies Env
 }
 
 async function hmacBase64(key: string, message: string) {

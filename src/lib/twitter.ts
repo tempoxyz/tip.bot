@@ -664,13 +664,6 @@ async function createTwitterIdentity(
       real_name: null,
       updated_at: now,
     })
-    .onConflict((oc) =>
-      oc.columns(['provider', 'provider_workspace_id', 'provider_user_id']).doUpdateSet({
-        account_id: accountId,
-        display_name: tweet.authorHandle ? `@${tweet.authorHandle}` : null,
-        updated_at: now,
-      }),
-    )
     .execute()
   return await db
     .selectFrom('provider_identity')
