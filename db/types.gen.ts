@@ -10,6 +10,8 @@ export interface DB {
   provider_identity: provider_identity
   reaction_tip: reaction_tip
   reaction_tip_thread: reaction_tip_thread
+  scoped_credit: scoped_credit
+  scoped_credit_event: scoped_credit_event
   tip: tip
   tip_batch: tip_batch
   workspace: workspace
@@ -105,6 +107,48 @@ type reaction_tip_thread = {
   workspace_id: string
 }
 
+type scoped_credit = {
+  amount: number
+  created_at: k.Generated<string>
+  expires_at: string
+  failed_at: string | null
+  failure_reason: string | null
+  id: string
+  idempotency_key: string
+  merchant_address: string
+  merchant_id: string
+  merchant_name: string
+  mpp_receipt_id: string | null
+  provider_channel_id: string
+  provider_thread_id: string | null
+  recipient_member_id: string
+  recipient_provider_user_id: string
+  sender_member_id: string
+  sender_provider_user_id: string
+  status: 'pending' | 'issued' | 'spent' | 'canceled' | 'expired' | 'failed'
+  tempo_transaction_hash: string | null
+  token_address: string
+  updated_at: k.Generated<string>
+  workspace_id: string
+}
+
+type scoped_credit_event = {
+  created_at: k.Generated<string>
+  details_json: string | null
+  event_type:
+    | 'created'
+    | 'sender_confirmed'
+    | 'issued'
+    | 'recipient_notified'
+    | 'spend_started'
+    | 'paid'
+    | 'canceled'
+    | 'expired'
+    | 'failed'
+  id: string
+  scoped_credit_id: string
+}
+
 type tip = {
   access_key_id: string | null
   amount: number
@@ -173,6 +217,8 @@ export declare namespace DB {
   type provider_identity = k.Selectable<DB['provider_identity']>
   type reaction_tip = k.Selectable<DB['reaction_tip']>
   type reaction_tip_thread = k.Selectable<DB['reaction_tip_thread']>
+  type scoped_credit = k.Selectable<DB['scoped_credit']>
+  type scoped_credit_event = k.Selectable<DB['scoped_credit_event']>
   type tip = k.Selectable<DB['tip']>
   type tip_batch = k.Selectable<DB['tip_batch']>
   type workspace = k.Selectable<DB['workspace']>
@@ -185,6 +231,8 @@ export declare namespace DB {
     type provider_identity = k.Insertable<DB['provider_identity']>
     type reaction_tip = k.Insertable<DB['reaction_tip']>
     type reaction_tip_thread = k.Insertable<DB['reaction_tip_thread']>
+    type scoped_credit = k.Insertable<DB['scoped_credit']>
+    type scoped_credit_event = k.Insertable<DB['scoped_credit_event']>
     type tip = k.Insertable<DB['tip']>
     type tip_batch = k.Insertable<DB['tip_batch']>
     type workspace = k.Insertable<DB['workspace']>
@@ -198,6 +246,8 @@ export declare namespace DB {
     type provider_identity = k.Selectable<DB['provider_identity']>
     type reaction_tip = k.Selectable<DB['reaction_tip']>
     type reaction_tip_thread = k.Selectable<DB['reaction_tip_thread']>
+    type scoped_credit = k.Selectable<DB['scoped_credit']>
+    type scoped_credit_event = k.Selectable<DB['scoped_credit_event']>
     type tip = k.Selectable<DB['tip']>
     type tip_batch = k.Selectable<DB['tip_batch']>
     type workspace = k.Selectable<DB['workspace']>
@@ -211,6 +261,8 @@ export declare namespace DB {
     type provider_identity = k.Updateable<DB['provider_identity']>
     type reaction_tip = k.Updateable<DB['reaction_tip']>
     type reaction_tip_thread = k.Updateable<DB['reaction_tip_thread']>
+    type scoped_credit = k.Updateable<DB['scoped_credit']>
+    type scoped_credit_event = k.Updateable<DB['scoped_credit_event']>
     type tip = k.Updateable<DB['tip']>
     type tip_batch = k.Updateable<DB['tip_batch']>
     type workspace = k.Updateable<DB['workspace']>

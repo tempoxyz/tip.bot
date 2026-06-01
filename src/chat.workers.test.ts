@@ -3,6 +3,7 @@ import * as AccessKey from '#/lib/accessKey.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as Chat from '#/chat.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
+import * as ScopedCredit from '#/lib/scopedCredit.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
 import { WebClient } from '@slack/web-api'
@@ -67,6 +68,55 @@ beforeEach(async () => {
     provider_id: providerId,
   })
 })
+
+test('/tip credit creates and spends merchant-scoped credit', async () => {
+  const response = await postSlashCommand(
+    `credit <@${Constants.slack.memberUserId}> 2 prospectbutcher`,
+  )
+  const pending = await db
+    .selectFrom('scoped_credit')
+    .selectAll()
+    .where('sender_provider_user_id', '=', Constants.slack.adminUserId)
+    .where('recipient_provider_user_id', '=', Constants.slack.memberUserId)
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  await expectSlackMessage('that can only be spent at Prospect Butcher Co.')
+  expect(pending).toMatchObject({
+    amount: 2_000_000,
+    merchant_id: 'prospectbutcher',
+    status: 'pending',
+  })
+
+  const issued = await ScopedCredit.confirmScopedCredit(db, {
+    actorProviderUserId: Constants.slack.adminUserId,
+    id: pending.id,
+  })
+  if (!issued.ok) throw new Error(issued.message)
+  const spent = await ScopedCredit.spendScopedCredit(db, {
+    actorProviderUserId: Constants.slack.memberUserId,
+    id: pending.id,
+  })
+  if (!spent.ok) throw new Error(spent.message)
+  const events = await db
+    .selectFrom('scoped_credit_event')
+    .select('event_type')
+    .where('scoped_credit_id', '=', pending.id)
+    .orderBy('created_at', 'asc')
+    .execute()
+
+  expect(issued.credit.tempo_transaction_hash).toMatch(/^fake_tempo_tx_/)
+  expect(spent.credit.mpp_receipt_id).toMatch(/^fake_mpp_receipt_/)
+  expect(spent.credit.status).toBe('spent')
+  expect(events.map((event) => event.event_type)).toEqual([
+    'created',
+    'sender_confirmed',
+    'issued',
+    'recipient_notified',
+    'spend_started',
+    'paid',
+  ])
+}, 20_000) // 20 seconds
 
 describe('/tip @account', () => {
   test('sends tip', async () => {

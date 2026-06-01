@@ -6,6 +6,7 @@ import { getSlackBotDisplayName, getSlackCommand } from '#/lib/app.ts'
 import * as Emoji from '#/lib/emoji.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
+import * as ScopedCredit from '#/lib/scopedCredit.ts'
 import * as Slack from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
@@ -322,6 +323,18 @@ export function getSlack() {
 }
 
 const actions = {
+  async cancel_credit(event) {
+    const id = z.safeParse(z.string().min(1), event.value)
+    if (!id.success) return
+
+    await event.adapter.deleteMessage(event.threadId, event.messageId)
+    const result = await ScopedCredit.cancelScopedCredit(DB.create(env.DB), {
+      actorProviderUserId: event.user.userId,
+      id: id.data,
+    })
+    if (!result.ok && event.thread)
+      await event.thread.postEphemeral(event.user, result.message, { fallbackToDM: false })
+  },
   async config_edit(event) {
     const raw = z.parse(
       z.object({
@@ -421,6 +434,51 @@ const actions = {
   async confirm_cancel(event) {
     await event.adapter.deleteMessage(event.threadId, event.messageId)
   },
+  async confirm_credit(event) {
+    const id = z.safeParse(z.string().min(1), event.value)
+    if (!id.success) return
+
+    await event.adapter.deleteMessage(event.threadId, event.messageId)
+    const result = await ScopedCredit.confirmScopedCredit(DB.create(env.DB), {
+      actorProviderUserId: event.user.userId,
+      id: id.data,
+    })
+    if (!result.ok) {
+      if (event.thread)
+        await event.thread.postEphemeral(event.user, result.message, { fallbackToDM: false })
+      return
+    }
+
+    const scopedEvent = scopedCreditTipEvent(result.credit, event.user)
+    await postPrivateReply(
+      scopedEvent,
+      event.user,
+      `Credit issued. ${scopedEvent.channel.mentionUser(result.credit.recipient_provider_user_id)} can now spend ${ScopedCredit.formatScopedCreditAmount(result.credit.amount)} at ${result.credit.merchant_name}.`,
+    )
+    await postPrivateReply(
+      scopedEvent,
+      { userId: result.credit.recipient_provider_user_id } as chat.Author,
+      {
+        card: chat.Card({
+          children: [
+            chat.CardText(
+              `${scopedEvent.channel.mentionUser(result.credit.sender_provider_user_id)} sent you ${ScopedCredit.formatScopedCreditAmount(result.credit.amount)} for ${result.credit.merchant_name}.`,
+            ),
+            chat.Actions([
+              chat.Button({
+                id: 'spend_credit',
+                label: 'Spend credit',
+                style: 'primary',
+                value: result.credit.id,
+              }),
+            ]),
+            chat.CardText('For this MVP, spending creates a fake MPP receipt.', { style: 'muted' }),
+          ],
+        }),
+        fallbackText: `${scopedEvent.channel.mentionUser(result.credit.sender_provider_user_id)} sent you ${ScopedCredit.formatScopedCreditAmount(result.credit.amount)} for ${result.credit.merchant_name}.`,
+      },
+    )
+  },
   async confirm_tip(event) {
     const token = z.safeParse(z.string().min(1), event.value)
     if (!token.success) return
@@ -497,6 +555,27 @@ const actions = {
       await state.disconnect()
     })()
     await postTipResult(tipEvent, ctx, result, { ...pending, threadTs: pending.providerThreadId })
+  },
+  async spend_credit(event) {
+    const id = z.safeParse(z.string().min(1), event.value)
+    if (!id.success) return
+
+    const result = await ScopedCredit.spendScopedCredit(DB.create(env.DB), {
+      actorProviderUserId: event.user.userId,
+      id: id.data,
+    })
+    if (!result.ok) {
+      if (event.thread)
+        await event.thread.postEphemeral(event.user, result.message, { fallbackToDM: false })
+      return
+    }
+
+    await event.adapter.deleteMessage(event.threadId, event.messageId)
+    await postPrivateReply(
+      scopedCreditTipEvent(result.credit, event.user),
+      event.user,
+      `Paid ${ScopedCredit.formatScopedCreditAmount(result.credit.amount)} to ${result.credit.merchant_name}. MPP receipt: \`${result.credit.mpp_receipt_id}\``,
+    )
   },
 } as const satisfies Record<
   (typeof actionNames)[number],
@@ -696,6 +775,41 @@ const handlers = {
   async connect(event, ctx) {
     await postConnectLink(event, ctx)
   },
+  async credit(event, ctx) {
+    const result = await ScopedCredit.createPendingScopedCredit(ctx.db, {
+      idempotencyKey: `credit:${ctx.provider.id}:${'triggerId' in event && event.triggerId ? event.triggerId : Nanoid.generate()}`,
+      provider: ctx.provider.type,
+      providerChannelId: event.channel.id,
+      providerId: ctx.provider.id,
+      providerThreadId: ctx.threadTs,
+      senderProviderUserId: event.user.userId,
+      text: ctx.text,
+    })
+    if (!result.ok) {
+      await postPrivateReply(event, event.user, result.message)
+      return
+    }
+
+    await postPrivateReply(event, event.user, {
+      card: chat.Card({
+        children: [
+          chat.CardText(
+            `Send ${event.channel.mentionUser(result.recipientProviderUserId)} ${ScopedCredit.formatScopedCreditAmount(result.credit.amount)} that can only be spent at ${result.credit.merchant_name}?`,
+          ),
+          chat.Actions([
+            chat.Button({
+              id: 'confirm_credit',
+              label: 'Confirm credit',
+              style: 'primary',
+              value: result.credit.id,
+            }),
+            chat.Button({ id: 'cancel_credit', label: 'Cancel', value: result.credit.id }),
+          ]),
+        ],
+      }),
+      fallbackText: `Send ${event.channel.mentionUser(result.recipientProviderUserId)} ${ScopedCredit.formatScopedCreditAmount(result.credit.amount)} that can only be spent at ${result.credit.merchant_name}?`,
+    })
+  },
   async disconnect(event, ctx) {
     const workspace = await ctx.db
       .selectFrom('workspace')
@@ -776,6 +890,10 @@ const handlers = {
       [`${getSlackCommand(env.HOST)} balance`, 'Show wallet balance'],
       [`${getSlackCommand(env.HOST)} config`, 'Manage workspace configuration'],
       [`${getSlackCommand(env.HOST)} connect`, 'Connect to Tipbot'],
+      [
+        `${getSlackCommand(env.HOST)} credit @account 2 prospectbutcher`,
+        'Send merchant-only credit',
+      ],
       [`${getSlackCommand(env.HOST)} disconnect`, 'Disconnect from Tipbot'],
       [`${getSlackCommand(env.HOST)} help`, 'Show help message'],
       [`${getSlackCommand(env.HOST)} leaderboard`, 'Show top tippers and recipients'],
@@ -1419,6 +1537,7 @@ const commandNames = [
   'balance',
   'config',
   'connect',
+  'credit',
   'disconnect',
   'help',
   'leaderboard',
@@ -1427,7 +1546,15 @@ const commandNames = [
 ] as const
 const commandPattern = new RegExp(`^(${commandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
 const slackConnectExternalCommandNames = ['connect', 'disconnect', 'help', 'status'] as const
-const actionNames = ['config_edit', 'connect_cancel', 'confirm_cancel', 'confirm_tip'] as const
+const actionNames = [
+  'cancel_credit',
+  'config_edit',
+  'connect_cancel',
+  'confirm_cancel',
+  'confirm_credit',
+  'confirm_tip',
+  'spend_credit',
+] as const
 const modalSubmitNames = ['config_edit'] as const
 const tokenOptions = [
   { address: Tempo.addressLookup.pathUsd, label: 'PathUSD', value: 'pathUSD' },
@@ -3277,6 +3404,17 @@ async function postPrivateReply(
     ? getChat().channel(`slack:${Slack.getChannelId(event.channel.id)}:${threadTs}`)
     : event.channel
   await channel.postEphemeral(user, message, { fallbackToDM: false })
+}
+
+function scopedCreditTipEvent(
+  credit: DB_gen.Selectable.scoped_credit,
+  user: chat.Author,
+): TipEvent {
+  return {
+    channel: getChat().channel(credit.provider_channel_id),
+    threadTs: credit.provider_thread_id ?? undefined,
+    user,
+  }
 }
 
 async function postSlackTipPreview(

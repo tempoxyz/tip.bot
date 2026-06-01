@@ -92,6 +92,49 @@ export const reaction_tip_thread = z.object({
   workspace_id: z.string(),
 })
 
+export const scoped_credit = z.object({
+  amount: z.number(),
+  created_at: z.string(),
+  expires_at: z.string(),
+  failed_at: z.string().nullable(),
+  failure_reason: z.string().nullable(),
+  id: z.string(),
+  idempotency_key: z.string(),
+  merchant_address: z.string(),
+  merchant_id: z.string(),
+  merchant_name: z.string(),
+  mpp_receipt_id: z.string().nullable(),
+  provider_channel_id: z.string(),
+  provider_thread_id: z.string().nullable(),
+  recipient_member_id: z.string(),
+  recipient_provider_user_id: z.string(),
+  sender_member_id: z.string(),
+  sender_provider_user_id: z.string(),
+  status: z.enum(['pending', 'issued', 'spent', 'canceled', 'expired', 'failed']),
+  tempo_transaction_hash: z.string().nullable(),
+  token_address: z.string(),
+  updated_at: z.string(),
+  workspace_id: z.string(),
+})
+
+export const scoped_credit_event = z.object({
+  created_at: z.string(),
+  details_json: z.string().nullable(),
+  event_type: z.enum([
+    'created',
+    'sender_confirmed',
+    'issued',
+    'recipient_notified',
+    'spend_started',
+    'paid',
+    'canceled',
+    'expired',
+    'failed',
+  ]),
+  id: z.string(),
+  scoped_credit_id: z.string(),
+})
+
 export const tip = z.object({
   access_key_id: z.string().nullable(),
   amount: z.number(),
@@ -167,6 +210,8 @@ export const db = {
   provider_identity: provider_identity,
   reaction_tip: reaction_tip,
   reaction_tip_thread: reaction_tip_thread,
+  scoped_credit: scoped_credit,
+  scoped_credit_event: scoped_credit_event,
   tip: tip,
   tip_batch: tip_batch,
   workspace: workspace,
