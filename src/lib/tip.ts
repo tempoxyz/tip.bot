@@ -1570,8 +1570,22 @@ async function createConfirmationRequired(
           ).toISOString(),
         }
       : {}),
-    ...(input.recipients ? { recipients: input.recipients } : {}),
-    ...(input.skippedRecipients?.length ? { skippedRecipients: input.skippedRecipients } : {}),
+    ...(input.recipients
+      ? {
+          recipients: input.recipients.map((recipient) => ({
+            ...recipient,
+            recipientProviderLabel: recipient.recipientProviderLabel?.replace(/^@+/, ''),
+          })),
+        }
+      : {}),
+    ...(input.skippedRecipients?.length
+      ? {
+          skippedRecipients: input.skippedRecipients.map((recipient) => ({
+            ...recipient,
+            recipientProviderLabel: recipient.recipientProviderLabel?.replace(/^@+/, ''),
+          })),
+        }
+      : {}),
     ...(input.usergroupId ? { groupId: input.usergroupId } : {}),
     ...(input.usergroupLabel ? { groupLabel: input.usergroupLabel } : {}),
     amount,
@@ -1585,7 +1599,7 @@ async function createConfirmationRequired(
     providerChannelId: input.providerChannelId,
     providerId: input.providerId,
     providerThreadId: input.providerThreadId,
-    recipientProviderLabel: input.recipientProviderLabel,
+    recipientProviderLabel: input.recipientProviderLabel?.replace(/^@+/, ''),
     recipientProviderUserId: input.recipientProviderUserId,
     recipientProviderWorkspaceId: input.recipientProviderWorkspaceId,
     senderProviderUserId: input.senderProviderUserId,

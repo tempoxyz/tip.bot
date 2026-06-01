@@ -10,6 +10,7 @@ import { Address } from 'ox'
 import { z } from 'zod'
 
 export const twitterProviderId = 'x'
+const twitterDefaultTokenAddress = Address.checksum(Tempo.addressLookup.usdcE)
 const twitterStorageProvider = 'slack'
 
 export async function createLinkChallenge(env: Env, input: { address: string; username: string }) {
@@ -20,6 +21,8 @@ export async function createLinkChallenge(env: Env, input: { address: string; us
   const walletAddress = Address.checksum(input.address)
   const twitterAccount = await getUserByUsername(env, input.username)
   if (!twitterAccount) throw new Error('Could not find that X account.')
+  const workspace = await ensureTwitterWorkspace(db, now.toISOString())
+  const tokenAddress = getTwitterDefaultTokenAddress(workspace)
   await db
     .insertInto('provider_link_challenge')
     .values({
@@ -53,11 +56,11 @@ export async function createLinkChallenge(env: Env, input: { address: string; us
     accessKeyLimitPeriodSeconds: AccountLink.reusableAccessKeyPeriodSeconds,
     accessKeyPublicKey: accessKey.publicKey as `0x${string}`,
     avatarUrl: twitterAccount.profile_image_url,
-    chainId: Tempo.chainLookup.mainnet,
+    chainId: workspace.chain_id,
     challengeId: id,
     name: twitterAccount.name,
     username: twitterAccount.username,
-    tokenAddress: Address.checksum(Tempo.addressLookup.pathUsd),
+    tokenAddress,
   }
 }
 
@@ -80,15 +83,16 @@ export async function createProof(
     throw new Error('This Twitter connection proof is invalid or expired.')
   if (!challenge.expected_provider_user_id || !challenge.expected_provider_handle)
     throw new Error('This Twitter connection proof is invalid or expired.')
+  const workspace = await ensureTwitterWorkspace(db, new Date().toISOString())
 
   const verified = await AccountLink.verifyKeyAuthorization({
     accessKeyAddress: challenge.access_key_address,
-    chainId: Tempo.chainLookup.mainnet,
+    chainId: workspace.chain_id,
     env,
     expiresAt: challenge.access_key_expires_at,
     keyAuthorization: input.keyAuthorization,
     rootAddress: input.address,
-    tokenAddress: Tempo.addressLookup.pathUsd,
+    tokenAddress: getTwitterDefaultTokenAddress(workspace),
   })
   if (!Address.isEqual(verified.rootAddress, challenge.wallet_address as Address.Address))
     throw new Error('Wallet does not match this Twitter connection proof.')
@@ -162,6 +166,8 @@ export async function handleTweet(env: Env, input: TwitterTweetInput) {
     return
   }
 
+  if (await verifyLinkChallengeTweet(env, input)) return
+
   const parsed = await parseTwitterTip(env, input)
   if (!parsed) {
     console.log('Twitter webhook ignored unparsable tweet', { tweetId: input.id })
@@ -186,7 +192,7 @@ export async function handleTweet(env: Env, input: TwitterTweetInput) {
     providerChannelId: input.conversationId ?? input.id,
     providerId: twitterProviderId,
     providerThreadId: input.id,
-    recipientProviderLabel: parsed.recipientHandle ? `@${parsed.recipientHandle}` : undefined,
+    recipientProviderLabel: parsed.recipientHandle,
     recipientProviderUserId: parsed.recipientUserId,
     senderProviderUserId: input.authorId,
     source: 'mention',
@@ -426,6 +432,33 @@ type TwitterTweetInput = {
   text: string
 }
 
+async function verifyLinkChallengeTweet(env: Env, tweet: TwitterTweetInput) {
+  for (const match of tweet.text.matchAll(
+    /(?:^|[^0-9A-Za-z_])(tb1_[0-9a-z]{24})(?=$|[^0-9A-Za-z_])/g,
+  )) {
+    const proof = match[1]
+    if (!proof) continue
+    const challenge = await DB.create(env.DB)
+      .selectFrom('provider_link_challenge')
+      .selectAll()
+      .where('provider', '=', 'twitter')
+      .where('proof_hash', '=', await AccountLink.hashToken(env, proof))
+      .where('expected_provider_user_id', '=', tweet.authorId)
+      .where('used_at', 'is', null)
+      .executeTakeFirst()
+    if (!challenge || !challenge.access_key_authorization) continue
+    if (challenge.expires_at <= new Date().toISOString()) continue
+
+    await completeLinkChallenge(env, challenge, tweet)
+    console.log('Twitter webhook verified link challenge', {
+      challengeId: challenge.id,
+      tweetId: tweet.id,
+    })
+    return true
+  }
+  return false
+}
+
 async function completeLinkChallenge(
   env: Env,
   challenge: Database.Selectable.provider_link_challenge,
@@ -449,6 +482,7 @@ async function completeLinkChallenge(
 
   const account = existingAccount ?? (await createAccount(db, walletAddress, now))
   const workspace = await ensureTwitterWorkspace(db, now)
+  const tokenAddress = getTwitterDefaultTokenAddress(workspace)
   const identity = existingIdentity ?? (await createTwitterIdentity(db, account.id, tweet, now))
   await db
     .updateTable('provider_identity')
@@ -479,13 +513,19 @@ async function completeLinkChallenge(
   await db
     .deleteFrom('access_key')
     .where('account_id', '=', account.id)
-    .where('chain_id', '=', Tempo.chainLookup.mainnet)
+    .where('chain_id', '=', workspace.chain_id)
+    .where('token_address', '=', tokenAddress)
+    .execute()
+  await db
+    .deleteFrom('access_key')
+    .where('account_id', '=', account.id)
+    .where('chain_id', '=', workspace.chain_id)
     .where('token_address', '=', Address.checksum(Tempo.addressLookup.pathUsd))
     .execute()
   await db
     .deleteFrom('access_key')
     .where('account_id', '=', account.id)
-    .where('chain_id', '=', Tempo.chainLookup.mainnet)
+    .where('chain_id', '=', workspace.chain_id)
     .where('token_address', 'is', null)
     .execute()
   await db
@@ -495,13 +535,13 @@ async function completeLinkChallenge(
       address: challenge.access_key_address,
       authorization: challenge.access_key_authorization!,
       authorization_used_at: null,
-      chain_id: Tempo.chainLookup.mainnet,
+      chain_id: workspace.chain_id,
       ciphertext: challenge.access_key_ciphertext,
       created_at: now,
       expires_at: challenge.access_key_expires_at,
       id: Nanoid.generate(),
       revoked_at: null,
-      token_address: Address.checksum(Tempo.addressLookup.pathUsd),
+      token_address: tokenAddress,
       updated_at: now,
     })
     .execute()
@@ -560,10 +600,12 @@ async function parseTwitterTip(env: Env, input: TwitterTweetInput) {
     `<@${recipient.id}${recipient.username ? `|@${recipient.username}` : ''}> ${remaining}`,
   )
   if (!parsed) return null
-  const tokenAddress = parsed.token
-    ? Tempo.getTokenAddress(Tempo.chainLookup.mainnet, parsed.token)
-    : null
-  if (parsed.token && !tokenAddress) return null
+  let tokenAddress = null
+  if (parsed.token) {
+    const workspace = await ensureTwitterWorkspace(DB.create(env.DB), new Date().toISOString())
+    tokenAddress = Tempo.getTokenAddress(workspace.chain_id, parsed.token)
+    if (!tokenAddress) return null
+  }
   if (Tip.isTransferMemoTooLong(parsed.memo)) return null
   return {
     amount: parsed.amount,
@@ -572,6 +614,21 @@ async function parseTwitterTip(env: Env, input: TwitterTweetInput) {
     recipientUserId: recipient.id,
     tokenAddress,
   }
+}
+
+function getTwitterDefaultTokenAddress(workspace: {
+  chain_id: number
+  default_token_address: string | null
+}) {
+  const fallback = getTwitterDefaultTokenAddressForChain(workspace.chain_id)
+  const tokenAddress = Address.checksum(workspace.default_token_address ?? fallback)
+  if (Tempo.isAllowedToken(workspace.chain_id, tokenAddress)) return tokenAddress
+  return fallback
+}
+
+function getTwitterDefaultTokenAddressForChain(chainId: number) {
+  if (chainId === Tempo.chainLookup.mainnet) return twitterDefaultTokenAddress
+  return Address.checksum(Tempo.addressLookup.pathUsd)
 }
 
 async function getTweetByUrl(env: Env, tweetUrl: string) {
@@ -732,7 +789,7 @@ async function ensureTwitterWorkspace(db: DB.Type, now: string) {
       chain_id: Tempo.chainLookup.mainnet,
       created_at: now,
       default_amount: 1000,
-      default_token_address: Address.checksum(Tempo.addressLookup.pathUsd),
+      default_token_address: twitterDefaultTokenAddress,
       id,
       installed_at: now,
       name: 'X',

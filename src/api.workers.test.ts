@@ -348,6 +348,10 @@ describe('/api/chat/twitter', () => {
 
 describe('/api/link/twitter', () => {
   test('completes Twitter proof flow and stores account link', async () => {
+    await ensureTwitterTestWorkspace({
+      chainId: Tempo.chainLookup.mainnet,
+      tokenAddress: Tempo.addressLookup.usdcE,
+    })
     const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
     mockTwitterUser({ id: 'twitter-user-1', username: 'alice' })
     const challengeResponse = await client.api.link.twitter.challenge.$post({
@@ -357,7 +361,9 @@ describe('/api/link/twitter', () => {
     expect(challengeResponse.status).toBe(200)
     if (challengeResponse.status !== 200) throw new Error('Expected Twitter challenge success.')
     const challenge = await challengeResponse.json()
+    expect(challenge.chainId).toBe(Tempo.chainLookup.mainnet)
     expect(challenge.name).toBe('alice')
+    expect(challenge.tokenAddress).toBe(Address.checksum(Tempo.addressLookup.usdcE))
     expect(challenge.username).toBe('alice')
     const keyAuthorization = await AccountLink.signKeyAuthorization(root, {
       accessKeyAddress: challenge.accessKeyAddress,
@@ -427,7 +433,75 @@ describe('/api/link/twitter', () => {
     expect(accessKey).toMatchObject({
       address: challenge.accessKeyAddress,
       authorization: JSON.stringify(keyAuthorization),
-      token_address: Address.checksum(Tempo.addressLookup.pathUsd),
+      token_address: Address.checksum(Tempo.addressLookup.usdcE),
+    })
+  })
+
+  test('uses X workspace network and default token for authorization', async () => {
+    await ensureTwitterTestWorkspace({
+      chainId: Tempo.chainLookup.localnet,
+      tokenAddress: Tempo.addressLookup.pathUsd,
+    })
+    const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    mockTwitterUser({ id: 'twitter-localnet-user', username: 'alice' })
+    const challengeResponse = await client.api.link.twitter.challenge.$post({
+      json: { address: root.address, username: 'alice' },
+    })
+
+    expect(challengeResponse.status).toBe(200)
+    if (challengeResponse.status !== 200) throw new Error('Expected Twitter challenge success.')
+    await expect(challengeResponse.json()).resolves.toMatchObject({
+      chainId: Tempo.chainLookup.localnet,
+      tokenAddress: Address.checksum(Tempo.addressLookup.pathUsd),
+    })
+  })
+
+  test('completes Twitter proof flow from webhook tweet', async () => {
+    const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    mockTwitterUser({ id: 'twitter-webhook-user', username: 'alice' })
+    const challengeResponse = await client.api.link.twitter.challenge.$post({
+      json: { address: root.address, username: 'alice' },
+    })
+
+    expect(challengeResponse.status).toBe(200)
+    if (challengeResponse.status !== 200) throw new Error('Expected Twitter challenge success.')
+    const challenge = await challengeResponse.json()
+    const keyAuthorization = await AccountLink.signKeyAuthorization(root, {
+      accessKeyAddress: challenge.accessKeyAddress,
+      chainId: challenge.chainId,
+      expiresAt: challenge.accessKeyExpiry,
+      tokenAddress: challenge.tokenAddress,
+    })
+    const proofResponse = await client.api.link.twitter.proof.$post({
+      json: {
+        address: root.address,
+        challengeId: challenge.challengeId,
+        keyAuthorization,
+      },
+    })
+
+    expect(proofResponse.status).toBe(200)
+    if (proofResponse.status !== 200) throw new Error('Expected Twitter proof success.')
+    const proof = await proofResponse.json()
+    const response = await postTwitterWebhook({
+      authorHandle: 'alice',
+      authorId: 'twitter-webhook-user',
+      id: 'webhook-proof-tweet',
+      text: proof.tweetText,
+    })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ ok: true })
+    await expect(
+      db
+        .selectFrom('provider_link_challenge')
+        .select(['provider_handle', 'provider_user_id', 'tweet_id', 'used_at'])
+        .where('id', '=', challenge.challengeId)
+        .executeTakeFirstOrThrow(),
+    ).resolves.toMatchObject({
+      provider_handle: '@alice',
+      provider_user_id: 'twitter-webhook-user',
+      tweet_id: 'webhook-proof-tweet',
     })
   })
 
@@ -1991,7 +2065,12 @@ async function connectTwitterTipAccounts(input: {
   }
 }
 
-async function ensureTwitterTestWorkspace() {
+async function ensureTwitterTestWorkspace(input?: {
+  chainId?: number
+  tokenAddress?: string | null
+}) {
+  const chainId = input?.chainId ?? Tempo.chainLookup.localnet
+  const tokenAddress = input?.tokenAddress ?? Tempo.addressLookup.pathUsd
   const existing = await db
     .selectFrom('workspace')
     .selectAll()
@@ -2002,8 +2081,8 @@ async function ensureTwitterTestWorkspace() {
     await db
       .updateTable('workspace')
       .set({
-        chain_id: Tempo.chainLookup.localnet,
-        default_token_address: Tempo.addressLookup.pathUsd,
+        chain_id: chainId,
+        default_token_address: tokenAddress,
         updated_at: new Date().toISOString(),
       })
       .where('id', '=', existing.id)
@@ -2015,8 +2094,8 @@ async function ensureTwitterTestWorkspace() {
       .executeTakeFirstOrThrow()
   }
   return await factory.workspace.insert({
-    chain_id: Tempo.chainLookup.localnet,
-    default_token_address: Tempo.addressLookup.pathUsd,
+    chain_id: chainId,
+    default_token_address: tokenAddress,
     name: 'X',
     provider: 'slack',
     provider_id: 'x',

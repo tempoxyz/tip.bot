@@ -286,6 +286,11 @@ function LinkPanel() {
                       Manual verification
                     </button>
                   </div>
+                  {status === 'checking' ? (
+                    <p className="text-sm text-gray8" role="status">
+                      Checking for your proof tweet automatically. This can take a few seconds.
+                    </p>
+                  ) : null}
                   {showManualVerification ? (
                     <div className="space-y-3">
                       <label className="text-base font-bold text-gray10" htmlFor="tweet-url">
@@ -300,7 +305,7 @@ function LinkPanel() {
                       />
                       <button
                         className="inline-flex h-12 items-center justify-center rounded-lg border border-gray5 bg-bg1 px-6 text-lg font-bold text-gray10 transition-colors outline-none hover:bg-gray1 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-blue9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
-                        disabled={status === 'checking' && !tweetUrl.trim()}
+                        disabled={!tweetUrl.trim() || verifyMutation.isPending}
                         onClick={() => {
                           signMutation.reset()
                           verifyMutation.reset()
@@ -308,7 +313,7 @@ function LinkPanel() {
                         }}
                         type="button"
                       >
-                        {status === 'checking' && !tweetUrl.trim() ? 'Checking' : 'Verify'}
+                        {verifyMutation.isPending ? 'Checking' : 'Verify'}
                       </button>
                     </div>
                   ) : null}
