@@ -74,8 +74,8 @@ function LinkPanel() {
       ? showTweetFallback
         ? 'Prepare proof tweet'
         : 'Connect X'
-      : showTweetFallback
-        ? 'Connect wallet'
+      : walletAddress
+        ? 'Create access key'
         : 'Connect wallet'
   const connectWalletMutation = useMutation({
     mutationFn: async () => {
@@ -610,7 +610,9 @@ function LinkPanel() {
                       type="button"
                     >
                       {status === 'connecting'
-                        ? 'Connecting'
+                        ? walletAddress
+                          ? 'Creating access key'
+                          : 'Connecting'
                         : status === 'signing'
                           ? 'Signing'
                           : status === 'oauthing'
@@ -619,9 +621,11 @@ function LinkPanel() {
                               ? showTweetFallback
                                 ? 'Prepare proof tweet'
                                 : 'Connect X'
-                              : twitterInAppBrowser
-                                ? 'Open in phone browser first'
-                                : 'Connect wallet'}
+                              : walletAddress
+                                ? 'Create access key'
+                                : twitterInAppBrowser
+                                  ? 'Open in phone browser first'
+                                  : 'Connect wallet'}
                     </button>
                     {pendingConnection ? (
                       <button
