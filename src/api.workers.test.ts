@@ -1295,7 +1295,7 @@ describe('/api/chat/telegram', () => {
       mswHttp.post('https://api.telegram.org/bot000000:test/getMe', () =>
         HttpResponse.json({
           ok: true,
-          result: { first_name: 'Tipbot', id: 1, is_bot: true, username: 'tipbot' },
+          result: { first_name: 'Tipbot', id: 1, is_bot: true, username: 'ggtipbot' },
         }),
       ),
       mswHttp.post('https://api.telegram.org/bot000000:test/getWebhookInfo', () =>
@@ -1329,12 +1329,12 @@ describe('/api/chat/telegram', () => {
             chat: { id: -100123, title: 'Tempo', type: 'supergroup' },
             date: Math.floor(Date.now() / 1000),
             entities: [
-              { length: 7, offset: 0, type: 'mention' },
-              { length: 6, offset: 8, type: 'mention' },
+              { length: 9, offset: 0, type: 'mention' },
+              { length: 6, offset: 10, type: 'mention' },
             ],
             from: { first_name: 'Bob', id: 100, is_bot: false, username: 'bob' },
             message_id: 1,
-            text: '@tipbot @alice 5 for coffee',
+            text: '@ggtipbot @alice 5 for coffee',
           },
           update_id: 1,
         }),

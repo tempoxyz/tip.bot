@@ -51,7 +51,11 @@ export function getChat() {
   })
   bot.onNewMention(async (thread, message) => {
     if (thread.adapter === getTelegram()) {
-      await handleTelegramMention(thread, message)
+      await handleTelegramMessageRaw(
+        thread.channel,
+        message.author,
+        z.parse(Telegram.messageSchema, message.raw),
+      )
       return
     }
     if (thread.adapter !== getSlack()) throw new Error('Provider not implemented yet.')
@@ -572,81 +576,6 @@ const actions = {
   (typeof actionNames)[number],
   (event: chat.ActionEvent) => Promise<void>
 >
-
-async function handleTelegramMention(thread: chat.Thread, message: chat.Message) {
-  const raw = z.parse(Telegram.messageSchema, message.raw)
-  await handleTelegramMessageRaw(thread.channel, message.author, raw)
-}
-
-export async function handleTelegramUpdate(update: unknown) {
-  const raw = Telegram.parseUpdate(update)
-  if (!raw.from) return
-  await handleTelegramMessageRaw(
-    getChat().channel(Telegram.channelId(raw)),
-    {
-      fullName: Telegram.userLabel(raw.from),
-      isBot: raw.from.is_bot,
-      isMe: false,
-      userId: String(raw.from.id),
-      userName: Telegram.userLabel(raw.from),
-    },
-    raw,
-  )
-}
-
-async function handleTelegramMessageRaw(
-  channel: chat.Channel,
-  author: chat.Author,
-  raw: Telegram.Message,
-) {
-  if (!raw.from || raw.from.is_bot) return
-  if (!Telegram.isGroupMessage(raw)) return
-
-  const db = DB.create(env.DB)
-  const workspace = await Telegram.ensureWorkspace(db, raw)
-  await Telegram.ensureMessageMembers(db, workspace, raw)
-  const parsed = await Telegram.parseMention(db, workspace, raw, {
-    botUsername: env.TELEGRAM_BOT_USERNAME,
-    commandPattern,
-  })
-  const threadTs = Telegram.threadTs(raw)
-  const event = {
-    channel,
-    threadTs,
-    user: author,
-  } satisfies TipEvent
-  const ctx = {
-    allowUninstalledWorkspaceCreate: true,
-    db,
-    provider: { id: String(raw.chat.id), type: 'telegram' },
-    text: parsed.text,
-    threadTs,
-  } satisfies HandlerContext
-
-  if (parsed.unresolvedMention) {
-    await channel.post(
-      `Payment not sent. I don’t know ${parsed.unresolvedMention} yet. Ask them to message this group or start Tipbot, then try again.`,
-    )
-    return
-  }
-  if (parsed.command === 'config') {
-    await channel.post(Telegram.configText(workspace))
-    return
-  }
-  if (parsed.command && parsed.command !== 'default') {
-    const command = z.parse(z.enum(commandNames), parsed.command)
-    await handlers[command](event, ctx)
-    return
-  }
-  await handlers.default(event, {
-    ...ctx,
-    defaultTip: {
-      idempotencyKey: `telegram:${raw.chat.id}:${raw.message_id}`,
-      mention: true,
-      threadTs,
-    },
-  })
-}
 
 const modalSubmits = {
   async config_edit(event) {
@@ -4987,4 +4916,74 @@ function configToken(workspace: DB_gen.Selectable.workspace) {
 function workspaceTokenOptions(chainId?: number) {
   if (chainId === undefined) return tokenOptions
   return tokenOptions.filter((option) => Tempo.isAllowedToken(chainId, option.address))
+}
+
+export async function handleTelegramUpdate(update: unknown) {
+  const raw = Telegram.parseUpdate(update)
+  if (!raw.from) return
+  await handleTelegramMessageRaw(
+    getChat().channel(Telegram.channelId(raw)),
+    {
+      fullName: Telegram.userLabel(raw.from),
+      isBot: raw.from.is_bot,
+      isMe: false,
+      userId: String(raw.from.id),
+      userName: Telegram.userLabel(raw.from),
+    },
+    raw,
+  )
+}
+
+async function handleTelegramMessageRaw(
+  channel: chat.Channel,
+  author: chat.Author,
+  raw: Telegram.Message,
+) {
+  if (!raw.from || raw.from.is_bot) return
+  if (!Telegram.isGroupMessage(raw)) return
+
+  const db = DB.create(env.DB)
+  const workspace = await Telegram.ensureWorkspace(db, raw)
+  await Telegram.ensureMessageMembers(db, workspace, raw)
+  const parsed = await Telegram.parseMention(db, workspace, raw, {
+    botUsername: env.TELEGRAM_BOT_USERNAME,
+    commandPattern,
+  })
+  const threadTs = Telegram.threadTs(raw)
+  const event = {
+    channel,
+    threadTs,
+    user: author,
+  } satisfies TipEvent
+  const ctx = {
+    allowUninstalledWorkspaceCreate: true,
+    db,
+    provider: { id: String(raw.chat.id), type: 'telegram' },
+    text: parsed.text,
+    threadTs,
+  } satisfies HandlerContext
+
+  if (parsed.unresolvedMention) {
+    await channel.post(
+      `Payment not sent. I don’t know ${parsed.unresolvedMention} yet. Ask them to message this group or start Tipbot, then try again.`,
+    )
+    return
+  }
+  if (parsed.command === 'config') {
+    await channel.post(Telegram.configText(workspace))
+    return
+  }
+  if (parsed.command && parsed.command !== 'default') {
+    const command = z.parse(z.enum(commandNames), parsed.command)
+    await handlers[command](event, ctx)
+    return
+  }
+  await handlers.default(event, {
+    ...ctx,
+    defaultTip: {
+      idempotencyKey: `telegram:${raw.chat.id}:${raw.message_id}`,
+      mention: true,
+      threadTs,
+    },
+  })
 }

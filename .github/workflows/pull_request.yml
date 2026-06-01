@@ -33,6 +33,7 @@ jobs:
     with:
       pr_number: ${{ github.event.pull_request.number }}
       sha: ${{ github.event.pull_request.head.sha }}
+      telegram_bot_username: ${{ vars.TELEGRAM_BOT_USERNAME || 'ggtipbot' }}
       twitter_bot_handle: ${{ vars.TWITTER_BOT_HANDLE || 'tipbotgg' }}
     secrets:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -43,5 +44,7 @@ jobs:
       SLACK_CONFIG_ACCESS_TOKEN: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
       SLACK_CONFIG_REFRESH_TOKEN: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
       SLACK_GH_TOKEN: ${{ secrets.SLACK_GH_TOKEN }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_WEBHOOK_SECRET_TOKEN: ${{ secrets.TELEGRAM_WEBHOOK_SECRET_TOKEN }}
       TWITTER_OAUTH_CLIENT_ID: ${{ secrets.TWITTER_OAUTH_CLIENT_ID }}
       TWITTER_OAUTH_CLIENT_SECRET: ${{ secrets.TWITTER_OAUTH_CLIENT_SECRET }}
