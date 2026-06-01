@@ -389,6 +389,92 @@ export const api = new Hono<{
       }
     },
   )
+
+  .post(
+    '/api/link/twitter/oauth/challenge',
+    hono.validator(
+      'json',
+      z.object({
+        address: z.string().min(1),
+      }),
+    ),
+    async (c) => {
+      try {
+        return c.json({
+          ...(await Twitter.createOAuthLinkChallenge(c.env, c.req.valid('json'))),
+          ok: true as const,
+        })
+      } catch (error) {
+        return c.json(
+          {
+            code: 'twitter_oauth_challenge_failed' as const,
+            message: error instanceof Error ? error.message : 'Could not start Twitter OAuth.',
+            ok: false as const,
+          },
+          400,
+        )
+      }
+    },
+  )
+  .post(
+    '/api/link/twitter/oauth/start',
+    hono.validator(
+      'json',
+      z.object({
+        address: z.string().min(1),
+        challengeId: z.string().min(1),
+        keyAuthorization: z.unknown(),
+      }),
+    ),
+    async (c) => {
+      try {
+        return c.json({
+          ...(await Twitter.createOAuthAuthorizationUrl(c.env, {
+            ...c.req.valid('json'),
+            redirectUri: new URL('/api/link/twitter/oauth/callback', c.req.url).toString(),
+          })),
+          ok: true as const,
+        })
+      } catch (error) {
+        return c.json(
+          {
+            code: 'twitter_oauth_start_failed' as const,
+            message: error instanceof Error ? error.message : 'Could not start Twitter OAuth.',
+            ok: false as const,
+          },
+          400,
+        )
+      }
+    },
+  )
+  .get(
+    '/api/link/twitter/oauth/callback',
+    hono.validator(
+      'query',
+      z.union([
+        z.object({ error: z.string().min(1) }).catchall(z.unknown()),
+        z.object({ code: z.string().min(1), state: z.string().min(1) }).catchall(z.unknown()),
+      ]),
+    ),
+    async (c) => {
+      const redirectUrl = new URL('/link/x', c.req.url)
+      try {
+        const query = c.req.valid('query')
+        if ('error' in query) throw new Error(`Twitter OAuth failed: ${String(query.error)}`)
+        await Twitter.completeOAuthLinkChallenge(c.env, {
+          code: query.code,
+          redirectUri: new URL('/api/link/twitter/oauth/callback', c.req.url).toString(),
+          state: query.state,
+        })
+        redirectUrl.searchParams.set('status', 'connected')
+        return c.redirect(redirectUrl.toString())
+      } catch (error) {
+        console.error('Twitter OAuth callback failed:', error)
+        redirectUrl.searchParams.set('error', 'oauth_failed')
+        return c.redirect(redirectUrl.toString())
+      }
+    },
+  )
   .post(
     '/api/link/twitter/verify',
     hono.validator(

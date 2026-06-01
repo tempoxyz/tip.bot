@@ -33,6 +33,8 @@ const schema = z.object({
   TWITTER_BOT_HANDLE: z.string(),
   TWITTER_CONSUMER_KEY: z.string(),
   TWITTER_CONSUMER_SECRET: z.string(),
+  TWITTER_OAUTH_CLIENT_ID: z.string(),
+  TWITTER_OAUTH_CLIENT_SECRET: z.string(),
 })
 
 type Input = z.infer<typeof schema>
@@ -58,6 +60,8 @@ export const Env = {
       TWITTER_BOT_HANDLE: 'tipbotgg',
       TWITTER_CONSUMER_KEY: 'twitter-consumer-key',
       TWITTER_CONSUMER_SECRET: 'twitter-consumer-secret',
+      TWITTER_OAUTH_CLIENT_ID: 'twitter-oauth-client-id',
+      TWITTER_OAUTH_CLIENT_SECRET: 'twitter-oauth-client-secret',
       ...overrides,
     } satisfies Input
   },

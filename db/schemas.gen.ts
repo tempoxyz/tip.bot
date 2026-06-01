@@ -116,6 +116,17 @@ export const provider_link_challenge = z.object({
   wallet_address: z.string(),
 })
 
+export const provider_link_oauth_state = z.object({
+  challenge_id: z.string(),
+  code_verifier_ciphertext: z.string(),
+  created_at: z.string(),
+  expires_at: z.string(),
+  id: z.string(),
+  state_hash: z.string(),
+  updated_at: z.string(),
+  used_at: z.string().nullable(),
+})
+
 export const reaction_tip = z.object({
   channel_id: z.string(),
   created_at: z.string(),
@@ -245,6 +256,7 @@ export const db = {
   pending_tip: pending_tip,
   provider_identity: provider_identity,
   provider_link_challenge: provider_link_challenge,
+  provider_link_oauth_state: provider_link_oauth_state,
   reaction_tip: reaction_tip,
   reaction_tip_config: reaction_tip_config,
   reaction_tip_thread: reaction_tip_thread,

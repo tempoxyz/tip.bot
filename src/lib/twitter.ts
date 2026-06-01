@@ -6,7 +6,7 @@ import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
 import * as DB from '#db/client.ts'
 import type { DB as Database } from '#db/types.gen.ts'
-import { Address } from 'ox'
+import { Address, Hex } from 'ox'
 import { z } from 'zod'
 
 export const twitterProviderId = 'x'
@@ -62,6 +62,211 @@ export async function createLinkChallenge(env: Env, input: { address: string; us
     username: twitterAccount.username,
     tokenAddress,
   }
+}
+
+export async function createOAuthLinkChallenge(env: Env, input: { address: string }) {
+  const db = DB.create(env.DB)
+  const now = new Date()
+  const accessKey = AccessKey.generate()
+  const id = Nanoid.generate()
+  const walletAddress = Address.checksum(input.address)
+  const workspace = await ensureTwitterWorkspace(db, now.toISOString())
+  const tokenAddress = getTwitterDefaultTokenAddress(workspace)
+  await db
+    .insertInto('provider_link_challenge')
+    .values({
+      access_key_address: accessKey.address,
+      access_key_authorization: null,
+      access_key_ciphertext: await AccessKey.encrypt(env, accessKey.privateKey),
+      access_key_expires_at: new Date(
+        now.getTime() + AccountLink.reusableAccessKeyTtlMs,
+      ).toISOString(),
+      access_key_public_key: accessKey.publicKey,
+      account_id: null,
+      created_at: now.toISOString(),
+      expires_at: new Date(now.getTime() + 10 * 60 * 1000).toISOString(), // 10 minutes
+      expected_provider_handle: null,
+      expected_provider_user_id: null,
+      id,
+      proof_hash: null,
+      provider: 'twitter',
+      provider_handle: null,
+      provider_user_id: null,
+      tweet_id: null,
+      updated_at: now.toISOString(),
+      used_at: null,
+      wallet_address: walletAddress,
+    })
+    .execute()
+  return {
+    accessKeyAddress: accessKey.address,
+    accessKeyExpiry: new Date(now.getTime() + AccountLink.reusableAccessKeyTtlMs).toISOString(),
+    accessKeyLimit: AccountLink.reusableAccessKeyLimitText,
+    accessKeyLimitPeriodSeconds: AccountLink.reusableAccessKeyPeriodSeconds,
+    accessKeyPublicKey: accessKey.publicKey as `0x${string}`,
+    chainId: workspace.chain_id,
+    challengeId: id,
+    tokenAddress,
+  }
+}
+
+export async function createOAuthAuthorizationUrl(
+  env: Env,
+  input: {
+    address: string
+    challengeId: string
+    keyAuthorization: unknown
+    redirectUri: string
+  },
+) {
+  if (!env.TWITTER_OAUTH_CLIENT_ID || !env.TWITTER_OAUTH_CLIENT_SECRET)
+    throw new Error('Twitter OAuth is not configured.')
+
+  const db = DB.create(env.DB)
+  const challenge = await db
+    .selectFrom('provider_link_challenge')
+    .selectAll()
+    .where('id', '=', input.challengeId)
+    .where('provider', '=', 'twitter')
+    .executeTakeFirst()
+  if (!challenge || challenge.used_at || challenge.expires_at <= new Date().toISOString())
+    throw new Error('This Twitter OAuth connection is invalid or expired.')
+
+  const workspace = await ensureTwitterWorkspace(db, new Date().toISOString())
+  const verified = await AccountLink.verifyKeyAuthorization({
+    accessKeyAddress: challenge.access_key_address,
+    chainId: workspace.chain_id,
+    env,
+    expiresAt: challenge.access_key_expires_at,
+    keyAuthorization: input.keyAuthorization,
+    rootAddress: input.address,
+    tokenAddress: getTwitterDefaultTokenAddress(workspace),
+  })
+  if (!Address.isEqual(verified.rootAddress, challenge.wallet_address as Address.Address))
+    throw new Error('Wallet does not match this Twitter OAuth connection.')
+
+  const state = randomBase64Url(32)
+  const codeVerifier = randomBase64Url(32)
+  const now = new Date()
+  await db
+    .updateTable('provider_link_challenge')
+    .set({ access_key_authorization: verified.serialized, updated_at: now.toISOString() })
+    .where('id', '=', challenge.id)
+    .execute()
+  await db
+    .insertInto('provider_link_oauth_state')
+    .values({
+      challenge_id: challenge.id,
+      code_verifier_ciphertext: await encryptText(env, codeVerifier),
+      created_at: now.toISOString(),
+      expires_at: new Date(now.getTime() + 10 * 60 * 1000).toISOString(), // 10 minutes
+      id: Nanoid.generate(),
+      state_hash: await AccountLink.hashToken(env, state),
+      updated_at: now.toISOString(),
+      used_at: null,
+    })
+    .execute()
+
+  const url = new URL('/i/oauth2/authorize', 'https://twitter.com')
+  url.searchParams.set('response_type', 'code')
+  url.searchParams.set('client_id', env.TWITTER_OAUTH_CLIENT_ID)
+  url.searchParams.set('redirect_uri', input.redirectUri)
+  url.searchParams.set('scope', 'users.read')
+  url.searchParams.set('state', state)
+  url.searchParams.set('code_challenge', await createCodeChallenge(codeVerifier))
+  url.searchParams.set('code_challenge_method', 'S256')
+  return { authorizationUrl: url.toString() }
+}
+
+export async function completeOAuthLinkChallenge(
+  env: Env,
+  input: { code: string; redirectUri: string; state: string },
+) {
+  if (!env.TWITTER_OAUTH_CLIENT_ID || !env.TWITTER_OAUTH_CLIENT_SECRET)
+    throw new Error('Twitter OAuth is not configured.')
+
+  const db = DB.create(env.DB)
+  const now = new Date().toISOString()
+  const oauthState = await db
+    .selectFrom('provider_link_oauth_state')
+    .innerJoin(
+      'provider_link_challenge',
+      'provider_link_challenge.id',
+      'provider_link_oauth_state.challenge_id',
+    )
+    .selectAll('provider_link_oauth_state')
+    .select([
+      'provider_link_challenge.access_key_authorization',
+      'provider_link_challenge.expires_at as challenge_expires_at',
+      'provider_link_challenge.id as challenge_id',
+      'provider_link_challenge.used_at as challenge_used_at',
+    ])
+    .where(
+      'provider_link_oauth_state.state_hash',
+      '=',
+      await AccountLink.hashToken(env, input.state),
+    )
+    .executeTakeFirst()
+  if (!oauthState || oauthState.used_at || oauthState.expires_at <= now)
+    throw new Error('Twitter OAuth state is invalid or expired.')
+  if (
+    oauthState.challenge_used_at ||
+    oauthState.challenge_expires_at <= now ||
+    !oauthState.access_key_authorization
+  )
+    throw new Error('Twitter OAuth connection is invalid or expired.')
+
+  await db
+    .updateTable('provider_link_oauth_state')
+    .set({ updated_at: now, used_at: now })
+    .where('id', '=', oauthState.id)
+    .where('used_at', 'is', null)
+    .execute()
+
+  const codeVerifier = await decryptText(env, oauthState.code_verifier_ciphertext)
+  const tokenResponse = await fetch(new URL('/2/oauth2/token', env.TWITTER_API_URL), {
+    body: new URLSearchParams({
+      code: input.code,
+      code_verifier: codeVerifier,
+      grant_type: 'authorization_code',
+      redirect_uri: input.redirectUri,
+    }),
+    headers: {
+      authorization: `Basic ${btoa(`${oauthEncode(env.TWITTER_OAUTH_CLIENT_ID)}:${oauthEncode(env.TWITTER_OAUTH_CLIENT_SECRET)}`)}`,
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    method: 'POST',
+  })
+  if (!tokenResponse.ok)
+    throw new Error(`Twitter OAuth token exchange failed: ${tokenResponse.status}`)
+  const tokenJson = z.parse(
+    z.object({ access_token: z.string().min(1), token_type: z.string().optional() }),
+    await tokenResponse.json(),
+  )
+  const meUrl = new URL('/2/users/me', env.TWITTER_API_URL)
+  meUrl.searchParams.set('user.fields', 'name,profile_image_url,username')
+  const meResponse = await fetch(meUrl, {
+    headers: { authorization: `Bearer ${tokenJson.access_token}` },
+  })
+  if (!meResponse.ok) throw new Error(`Twitter OAuth user lookup failed: ${meResponse.status}`)
+  const me = z.parse(
+    z.object({
+      data: z.object({ id: z.string(), name: z.string().optional(), username: z.string() }),
+    }),
+    await meResponse.json(),
+  )
+  const challenge = await db
+    .selectFrom('provider_link_challenge')
+    .selectAll()
+    .where('id', '=', oauthState.challenge_id)
+    .where('provider', '=', 'twitter')
+    .executeTakeFirstOrThrow()
+  return await completeLinkChallenge(env, challenge, {
+    authorHandle: me.data.username,
+    authorId: me.data.id,
+    id: `oauth:${oauthState.id}`,
+    text: '',
+  })
 }
 
 export async function createProof(
@@ -896,6 +1101,48 @@ function formatHandle(value: string | undefined) {
 function getTwitterDisplayText(text: string, range: [number, number] | undefined) {
   if (!range) return text
   return Array.from(text).slice(range[0], range[1]).join('').trim()
+}
+
+async function encryptText(env: Pick<Env, 'SECRET_KEY'>, text: string) {
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const encrypted = await crypto.subtle.encrypt(
+    { iv, name: 'AES-GCM' },
+    await getAesKey(env, ['encrypt']),
+    new TextEncoder().encode(text),
+  )
+  return `${Hex.fromBytes(iv)}.${Hex.fromBytes(new Uint8Array(encrypted))}`
+}
+
+async function decryptText(env: Pick<Env, 'SECRET_KEY'>, ciphertext: string) {
+  const [iv, encrypted] = ciphertext.split('.')
+  if (!iv || !encrypted) throw new Error('Twitter OAuth state is invalid.')
+  const decrypted = await crypto.subtle.decrypt(
+    { iv: new Uint8Array(Hex.toBytes(iv as Hex.Hex)), name: 'AES-GCM' },
+    await getAesKey(env, ['decrypt']),
+    new Uint8Array(Hex.toBytes(encrypted as Hex.Hex)),
+  )
+  return new TextDecoder().decode(decrypted)
+}
+
+async function getAesKey(env: Pick<Env, 'SECRET_KEY'>, usages: ('decrypt' | 'encrypt')[]) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(env.SECRET_KEY))
+  return await crypto.subtle.importKey('raw', digest, { name: 'AES-GCM' }, false, usages)
+}
+
+async function createCodeChallenge(codeVerifier: string) {
+  return base64Url(
+    new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(codeVerifier))),
+  )
+}
+
+function randomBase64Url(byteLength: number) {
+  return base64Url(crypto.getRandomValues(new Uint8Array(byteLength)))
+}
+
+function base64Url(bytes: Uint8Array) {
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
 }
 
 async function hmacBase64(algorithm: 'SHA-1' | 'SHA-256', key: string, message: string) {

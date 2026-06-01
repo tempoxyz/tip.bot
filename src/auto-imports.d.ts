@@ -15,5 +15,6 @@ declare global {
   const IconLucideSend: typeof import('~icons/lucide/send.jsx').default
   const IconLucideSettings2: typeof import('~icons/lucide/settings2.jsx').default
   const IconLucideSmilePlus: typeof import('~icons/lucide/smile-plus.jsx').default
+  const IconLucideX: typeof import('~icons/lucide/x.jsx').default
   const IconSimpleIconsSlack: typeof import('~icons/simple-icons/slack.jsx').default
 }

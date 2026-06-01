@@ -505,6 +505,183 @@ describe('/api/link/twitter', () => {
     })
   })
 
+  test('completes Twitter OAuth flow and stores account link', async () => {
+    const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
+    const challengeResponse = await client.api.link.twitter.oauth.challenge.$post({
+      json: { address: root.address },
+    })
+
+    expect(challengeResponse.status).toBe(200)
+    if (challengeResponse.status !== 200)
+      throw new Error('Expected Twitter OAuth challenge success.')
+    const challenge = await challengeResponse.json()
+    const keyAuthorization = await AccountLink.signKeyAuthorization(root, {
+      accessKeyAddress: challenge.accessKeyAddress,
+      chainId: challenge.chainId,
+      expiresAt: challenge.accessKeyExpiry,
+      tokenAddress: challenge.tokenAddress,
+    })
+    const startResponse = await api.fetch(
+      new Request('https://tip.bot/api/link/twitter/oauth/start', {
+        body: JSON.stringify({
+          address: root.address,
+          challengeId: challenge.challengeId,
+          keyAuthorization,
+        }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+      env,
+      executionCtx,
+    )
+
+    expect(startResponse.status).toBe(200)
+    const start = (await startResponse.json()) as { authorizationUrl: string; ok: true }
+    const authorizationUrl = new URL(start.authorizationUrl)
+    expect(authorizationUrl.origin).toBe('https://twitter.com')
+    expect(authorizationUrl.pathname).toBe('/i/oauth2/authorize')
+    expect(authorizationUrl.searchParams.get('client_id')).toBe(env.TWITTER_OAUTH_CLIENT_ID)
+    expect(authorizationUrl.searchParams.get('scope')).toBe('users.read')
+    expect(authorizationUrl.searchParams.get('code_challenge_method')).toBe('S256')
+    expect(authorizationUrl.searchParams.get('state')).toEqual(expect.any(String))
+
+    if (!env.TWITTER_OAUTH_CLIENT_ID || !env.TWITTER_OAUTH_CLIENT_SECRET)
+      throw new Error('Expected Twitter OAuth credentials.')
+    const expectedOAuthAuthorization = `Basic ${btoa(
+      `${encodeURIComponent(env.TWITTER_OAUTH_CLIENT_ID)}:${encodeURIComponent(
+        env.TWITTER_OAUTH_CLIENT_SECRET,
+      )}`,
+    )}`
+    server.use(
+      mswHttp.post('https://api.twitter.com/2/oauth2/token', async ({ request }) => {
+        expect(request.headers.get('authorization')).toBe(expectedOAuthAuthorization)
+        const body = new URLSearchParams(await request.text())
+        expect(body.get('code')).toBe('oauth-code')
+        expect(body.get('code_verifier')).toEqual(expect.any(String))
+        expect(body.get('grant_type')).toBe('authorization_code')
+        expect(body.get('redirect_uri')).toBe('https://tip.bot/api/link/twitter/oauth/callback')
+        return HttpResponse.json({ access_token: 'oauth-access-token', token_type: 'bearer' })
+      }),
+      mswHttp.get('https://api.twitter.com/2/users/me', ({ request }) => {
+        expect(request.headers.get('authorization')).toBe('Bearer oauth-access-token')
+        return HttpResponse.json({
+          data: { id: 'twitter-oauth-user', name: 'Alice', username: 'alice' },
+        })
+      }),
+    )
+    const callbackResponse = await api.fetch(
+      new Request(
+        `https://tip.bot/api/link/twitter/oauth/callback?code=oauth-code&state=${authorizationUrl.searchParams.get('state')}`,
+      ),
+      env,
+      executionCtx,
+    )
+
+    expect(callbackResponse.status).toBe(302)
+    expect(callbackResponse.headers.get('location')).toBe('https://tip.bot/link/x?status=connected')
+    const account = await db
+      .selectFrom('account')
+      .selectAll()
+      .where('address', '=', root.address)
+      .executeTakeFirstOrThrow()
+    const identity = await db
+      .selectFrom('provider_identity')
+      .selectAll()
+      .where('account_id', '=', account.id)
+      .where('provider_user_id', '=', 'twitter-oauth-user')
+      .executeTakeFirstOrThrow()
+    const challengeRow = await db
+      .selectFrom('provider_link_challenge')
+      .select(['provider_handle', 'provider_user_id', 'tweet_id', 'used_at'])
+      .where('id', '=', challenge.challengeId)
+      .executeTakeFirstOrThrow()
+    const oauthState = await db
+      .selectFrom('provider_link_oauth_state')
+      .select(['used_at'])
+      .where('challenge_id', '=', challenge.challengeId)
+      .executeTakeFirstOrThrow()
+
+    expect(identity).toMatchObject({
+      display_name: '@alice',
+      provider: 'slack',
+      provider_user_id: 'twitter-oauth-user',
+      provider_workspace_id: 'x',
+    })
+    expect(challengeRow).toMatchObject({
+      provider_handle: '@alice',
+      provider_user_id: 'twitter-oauth-user',
+    })
+    expect(challengeRow.tweet_id).toMatch(/^oauth:/)
+    expect(challengeRow.used_at).toEqual(expect.any(String))
+    expect(oauthState.used_at).toEqual(expect.any(String))
+  })
+
+  test('rejects invalid Twitter OAuth state', async () => {
+    const callbackResponse = await api.fetch(
+      new Request('https://tip.bot/api/link/twitter/oauth/callback?code=oauth-code&state=invalid'),
+      env,
+      executionCtx,
+    )
+
+    expect(callbackResponse.status).toBe(302)
+    expect(callbackResponse.headers.get('location')).toBe(
+      'https://tip.bot/link/x?error=oauth_failed',
+    )
+  })
+
+  test('rejects reused Twitter OAuth state', async () => {
+    const setup = await startTwitterOAuthLink(Account.fromSecp256k1(Secp256k1.randomPrivateKey()))
+    mockTwitterOAuthExchange({ providerUserId: 'twitter-oauth-reuse', username: 'alice' })
+
+    const firstResponse = await api.fetch(
+      new Request(
+        `https://tip.bot/api/link/twitter/oauth/callback?code=oauth-code&state=${setup.state}`,
+      ),
+      env,
+      executionCtx,
+    )
+    const secondResponse = await api.fetch(
+      new Request(
+        `https://tip.bot/api/link/twitter/oauth/callback?code=oauth-code&state=${setup.state}`,
+      ),
+      env,
+      executionCtx,
+    )
+
+    expect(firstResponse.status).toBe(302)
+    expect(firstResponse.headers.get('location')).toBe('https://tip.bot/link/x?status=connected')
+    expect(secondResponse.status).toBe(302)
+    expect(secondResponse.headers.get('location')).toBe('https://tip.bot/link/x?error=oauth_failed')
+  })
+
+  test('redirects Twitter OAuth token exchange failure to error state', async () => {
+    const setup = await startTwitterOAuthLink(Account.fromSecp256k1(Secp256k1.randomPrivateKey()))
+    server.use(
+      mswHttp.post('https://api.twitter.com/2/oauth2/token', () =>
+        HttpResponse.json({ error: 'invalid_grant' }, { status: 400 }),
+      ),
+    )
+    const callbackResponse = await api.fetch(
+      new Request(
+        `https://tip.bot/api/link/twitter/oauth/callback?code=oauth-code&state=${setup.state}`,
+      ),
+      env,
+      executionCtx,
+    )
+
+    expect(callbackResponse.status).toBe(302)
+    expect(callbackResponse.headers.get('location')).toBe(
+      'https://tip.bot/link/x?error=oauth_failed',
+    )
+    await expect(
+      db
+        .selectFrom('provider_link_challenge')
+        .select(['used_at'])
+        .where('id', '=', setup.challenge.challengeId)
+        .executeTakeFirstOrThrow(),
+    ).resolves.toEqual({ used_at: null })
+  })
+
   test('links wallet that already has Slack identities', async () => {
     const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
     const account = await factory.account.insert({ address: root.address })
@@ -2299,6 +2476,56 @@ async function completeTwitterProofLink(input: {
   expect(verifyResponse.status).toBe(200)
   await expect(verifyResponse.json()).resolves.toEqual({ handle: `@${input.handle}`, ok: true })
   return { challenge, keyAuthorization, proof }
+}
+
+async function startTwitterOAuthLink(root: ReturnType<typeof Account.fromSecp256k1>) {
+  const challengeResponse = await client.api.link.twitter.oauth.challenge.$post({
+    json: { address: root.address },
+  })
+  expect(challengeResponse.status).toBe(200)
+  if (challengeResponse.status !== 200) throw new Error('Expected Twitter OAuth challenge success.')
+  const challenge = await challengeResponse.json()
+  const keyAuthorization = await AccountLink.signKeyAuthorization(root, {
+    accessKeyAddress: challenge.accessKeyAddress,
+    chainId: challenge.chainId,
+    expiresAt: challenge.accessKeyExpiry,
+    tokenAddress: challenge.tokenAddress,
+  })
+  const startResponse = await api.fetch(
+    new Request('https://tip.bot/api/link/twitter/oauth/start', {
+      body: JSON.stringify({
+        address: root.address,
+        challengeId: challenge.challengeId,
+        keyAuthorization,
+      }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    }),
+    env,
+    executionCtx,
+  )
+  expect(startResponse.status).toBe(200)
+  const start = (await startResponse.json()) as { authorizationUrl: string; ok: true }
+  const authorizationUrl = new URL(start.authorizationUrl)
+  return {
+    authorizationUrl,
+    challenge,
+    keyAuthorization,
+    state: authorizationUrl.searchParams.get('state'),
+  }
+}
+
+function mockTwitterOAuthExchange(input: { providerUserId: string; username: string }) {
+  server.use(
+    mswHttp.post('https://api.twitter.com/2/oauth2/token', () =>
+      HttpResponse.json({ access_token: 'oauth-access-token', token_type: 'bearer' }),
+    ),
+    mswHttp.get('https://api.twitter.com/2/users/me', () =>
+      HttpResponse.json({
+        data: { id: input.providerUserId, name: input.username, username: input.username },
+      }),
+    ),
+  )
 }
 
 function mockTwitterUser(input: { id: string; username: string }) {

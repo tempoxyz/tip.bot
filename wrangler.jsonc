@@ -63,6 +63,8 @@
       "TWITTER_BEARER_TOKEN",
       "TWITTER_CONSUMER_KEY",
       "TWITTER_CONSUMER_SECRET",
+      "TWITTER_OAUTH_CLIENT_ID",
+      "TWITTER_OAUTH_CLIENT_SECRET",
     ],
   },
   "vars": {
@@ -131,6 +133,8 @@
           "SLACK_CLIENT_ID",
           "SLACK_CLIENT_SECRET",
           "SLACK_SIGNING_SECRET",
+          "TWITTER_OAUTH_CLIENT_ID",
+          "TWITTER_OAUTH_CLIENT_SECRET",
         ],
       },
       "vars": {
@@ -206,6 +210,8 @@
           "TWITTER_BEARER_TOKEN",
           "TWITTER_CONSUMER_KEY",
           "TWITTER_CONSUMER_SECRET",
+          "TWITTER_OAUTH_CLIENT_ID",
+          "TWITTER_OAUTH_CLIENT_SECRET",
         ],
       },
       "vars": {

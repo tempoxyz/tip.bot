@@ -3,6 +3,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import * as React from 'react'
 import { parseUnits } from 'viem'
 import { useConnect, useConnection, useConnectors, useDisconnect } from 'wagmi'
+import * as z from 'zod/mini'
 import { WalletProviders } from '#/components/WalletProviders.tsx'
 import { tipbotImagePath } from '#/lib/app.ts'
 import { getErrorMessage } from '#/lib/error.ts'
@@ -11,6 +12,10 @@ import { rpc } from '#/lib/rpc.ts'
 export const Route = createFileRoute('/link/x')({
   component: Component,
   head: () => ({ meta: [{ title: 'Connect X - Tipbot' }] }),
+  validateSearch: z.object({
+    error: z.optional(z.literal('oauth_failed')),
+    status: z.optional(z.literal('connected')),
+  }),
 })
 
 function Component() {
@@ -26,12 +31,14 @@ function LinkPanel() {
   const connection = useConnection()
   const connectors = useConnectors()
   const disconnectWallet = useDisconnect()
+  const search = Route.useSearch()
   const [challenge, setChallenge] = React.useState<Challenge | null>(null)
   const [connectedWalletAddress, setConnectedWalletAddress] = React.useState<string | null>(null)
   const [status, setStatus] = React.useState<
-    'idle' | 'connecting' | 'signing' | 'tweeting' | 'checking' | 'connected'
-  >('idle')
+    'idle' | 'connecting' | 'signing' | 'oauthing' | 'tweeting' | 'checking' | 'connected'
+  >(search.status === 'connected' ? 'connected' : 'idle')
   const [showManualVerification, setShowManualVerification] = React.useState(false)
+  const [showTweetFallback, setShowTweetFallback] = React.useState(false)
   const [tweetUrl, setTweetUrl] = React.useState('')
   const [xUsername, setXUsername] = React.useState('')
   const walletAddress =
@@ -42,12 +49,16 @@ function LinkPanel() {
   const stepDescription = challenge
     ? 'Post the prepared verification tweet from this X account. Tipbot will finish the connection automatically.'
     : walletAddress
-      ? 'Enter the X username to connect, then approve a limited access key in Tempo Wallet.'
+      ? showTweetFallback
+        ? 'Enter the X username to connect, then approve a limited access key in Tempo Wallet.'
+        : 'Approve a limited access key, then sign in with X to verify your account privately.'
       : 'Connect the Tempo Wallet you want to use for X tips.'
   const stepTitle = challenge
     ? 'Post verification tweet'
     : walletAddress
-      ? 'Enter X username and sign'
+      ? showTweetFallback
+        ? 'Verify with proof tweet'
+        : 'Connect X'
       : 'Connect wallet'
   const connectWalletMutation = useMutation({
     mutationFn: async () => {
@@ -67,13 +78,44 @@ function LinkPanel() {
       setStatus('idle')
     },
   })
+  const oauthMutation = useMutation({
+    mutationFn: async () => {
+      if (!walletAddress) throw new Error('Connect your wallet first.')
+      const challengeResponse = await rpc.api.link.twitter.oauth.challenge.$post({
+        json: { address: walletAddress },
+      })
+      if (challengeResponse.status !== 200) {
+        const challengeJson = await challengeResponse.json()
+        throw new Error(
+          'message' in challengeJson
+            ? challengeJson.message
+            : 'Could not start Twitter connection.',
+        )
+      }
+      const challengeJson = await challengeResponse.json()
+      const keyAuthorization = await authorizeAccessKey(challengeJson)
+      const startResponse = await rpc.api.link.twitter.oauth.start.$post({
+        json: {
+          address: keyAuthorization.rootAddress,
+          challengeId: challengeJson.challengeId,
+          keyAuthorization: keyAuthorization.keyAuthorization,
+        },
+      })
+      if (startResponse.status !== 200) {
+        const startJson = await startResponse.json()
+        throw new Error('message' in startJson ? startJson.message : 'Could not connect Twitter.')
+      }
+      const startJson = await startResponse.json()
+      window.location.assign(startJson.authorizationUrl)
+    },
+    onError: () => setStatus('idle'),
+    onMutate: () => setStatus('oauthing'),
+  })
   const signMutation = useMutation({
     mutationFn: async () => {
       const username = xUsername.trim().replace(/^@+/, '')
       if (!username) throw new Error('Enter your X username first.')
       if (!walletAddress) throw new Error('Connect your wallet first.')
-      const connector = connection.connector ?? connectors[0]
-      if (!connector) throw new Error('Tempo Wallet is unavailable.')
       const challengeResponse = await rpc.api.link.twitter.challenge.$post({
         json: { address: walletAddress, username },
       })
@@ -86,34 +128,7 @@ function LinkPanel() {
         )
       }
       const challengeJson = await challengeResponse.json()
-      const provider = (await connector.getProvider()) as {
-        request: (parameters: { method: string; params: unknown[] }) => Promise<unknown>
-      }
-      const keyAuthorization = (await provider.request({
-        method: 'wallet_authorizeAccessKey',
-        params: [
-          {
-            chainId: BigInt(challengeJson.chainId),
-            expiry: Math.floor(new Date(challengeJson.accessKeyExpiry).getTime() / 1000),
-            keyType: 'secp256k1' as const,
-            limits: [
-              {
-                limit: parseUnits(challengeJson.accessKeyLimit, 6),
-                period: challengeJson.accessKeyLimitPeriodSeconds,
-                token: challengeJson.tokenAddress,
-              },
-            ],
-            publicKey: challengeJson.accessKeyPublicKey,
-            scopes: [
-              { address: challengeJson.tokenAddress, selector: 'transfer(address,uint256)' },
-              {
-                address: challengeJson.tokenAddress,
-                selector: 'transferWithMemo(address,uint256,bytes32)',
-              },
-            ],
-          },
-        ],
-      })) as { keyAuthorization: unknown; rootAddress: string }
+      const keyAuthorization = await authorizeAccessKey(challengeJson)
       const proofResponse = await rpc.api.link.twitter.proof.$post({
         json: {
           address: keyAuthorization.rootAddress,
@@ -158,11 +173,15 @@ function LinkPanel() {
     ? getErrorMessage(connectWalletMutation.error, 'Could not connect wallet.')
     : disconnectWallet.error
       ? getErrorMessage(disconnectWallet.error, 'Could not disconnect wallet.')
-      : signMutation.error
-        ? getErrorMessage(signMutation.error, 'Could not connect Twitter.')
-        : verifyMutation.error
-          ? getErrorMessage(verifyMutation.error, 'Could not verify the proof tweet.')
-          : null
+      : oauthMutation.error
+        ? getErrorMessage(oauthMutation.error, 'Could not connect Twitter.')
+        : signMutation.error
+          ? getErrorMessage(signMutation.error, 'Could not connect Twitter.')
+          : verifyMutation.error
+            ? getErrorMessage(verifyMutation.error, 'Could not verify the proof tweet.')
+            : search.error === 'oauth_failed'
+              ? 'Could not connect Twitter. Try again or use proof tweet verification.'
+              : null
 
   useQuery({
     enabled: Boolean(challenge && status === 'checking'),
@@ -180,6 +199,39 @@ function LinkPanel() {
     refetchInterval: 5 * 1000, // 5 seconds
     retry: false,
   })
+
+  async function authorizeAccessKey(challengeJson: AccessKeyChallenge) {
+    const connector = connection.connector ?? connectors[0]
+    if (!connector) throw new Error('Tempo Wallet is unavailable.')
+    const provider = (await connector.getProvider()) as {
+      request: (parameters: { method: string; params: unknown[] }) => Promise<unknown>
+    }
+    return (await provider.request({
+      method: 'wallet_authorizeAccessKey',
+      params: [
+        {
+          chainId: BigInt(challengeJson.chainId),
+          expiry: Math.floor(new Date(challengeJson.accessKeyExpiry).getTime() / 1000),
+          keyType: 'secp256k1' as const,
+          limits: [
+            {
+              limit: parseUnits(challengeJson.accessKeyLimit, 6),
+              period: challengeJson.accessKeyLimitPeriodSeconds,
+              token: challengeJson.tokenAddress,
+            },
+          ],
+          publicKey: challengeJson.accessKeyPublicKey,
+          scopes: [
+            { address: challengeJson.tokenAddress, selector: 'transfer(address,uint256)' },
+            {
+              address: challengeJson.tokenAddress,
+              selector: 'transferWithMemo(address,uint256,bytes32)',
+            },
+          ],
+        },
+      ],
+    })) as { keyAuthorization: unknown; rootAddress: string }
+  }
 
   async function verifyTweet() {
     if (!challenge) throw new Error('Could not verify the proof tweet yet.')
@@ -322,52 +374,78 @@ function LinkPanel() {
                 <div className="space-y-6 border-b border-gray5 py-6">
                   {walletAddress ? (
                     <div className="space-y-3">
-                      <div className="flex flex-col gap-3 rounded-xl border border-gray5 bg-bg1 p-4 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="space-y-1">
-                          <p className="text-sm font-bold text-gray10">Wallet connected</p>
-                          <p className="font-mono text-sm text-gray8">
-                            {formatAddress(walletAddress)}
+                      {showTweetFallback ? (
+                        <>
+                          <label className="text-base font-bold text-gray10" htmlFor="x-username">
+                            X username
+                          </label>
+                          <div className="relative">
+                            <span
+                              aria-hidden="true"
+                              className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-gray8"
+                            >
+                              @
+                            </span>
+                            <input
+                              autoComplete="username"
+                              className="h-12 w-full rounded-lg border border-gray5 bg-bg1 ps-7 pe-3 text-gray10 outline-none focus-visible:border-blue9 focus-visible:ring-2 focus-visible:ring-blue5 focus-visible:outline-none"
+                              id="x-username"
+                              onChange={(event) => setXUsername(event.currentTarget.value)}
+                              placeholder="yourhandle"
+                              value={xUsername}
+                            />
+                          </div>
+                          <p className="text-sm text-gray8">
+                            The proof tweet must come from this X account.
                           </p>
-                        </div>
-                        <button
-                          className="inline-flex h-10 items-center justify-center rounded-lg border border-gray5 bg-bg2 px-4 text-sm font-bold text-gray10 transition-colors outline-none hover:bg-gray3 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-blue9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
-                          disabled={disconnectWallet.isPending || status === 'signing'}
-                          onClick={() => {
-                            disconnectWallet.reset()
-                            disconnectWallet.disconnect(undefined, {
-                              onSuccess: () => {
-                                setConnectedWalletAddress(null)
-                                setXUsername('')
-                              },
-                            })
-                          }}
-                          type="button"
-                        >
-                          {disconnectWallet.isPending ? 'Disconnecting' : 'Disconnect wallet'}
-                        </button>
-                      </div>
-                      <label className="text-base font-bold text-gray10" htmlFor="x-username">
-                        X username
-                      </label>
-                      <div className="relative">
-                        <span
-                          aria-hidden="true"
-                          className="pointer-events-none absolute start-3 top-1/2 -translate-y-1/2 text-gray8"
-                        >
-                          @
-                        </span>
-                        <input
-                          autoComplete="username"
-                          className="h-12 w-full rounded-lg border border-gray5 bg-bg1 ps-7 pe-3 text-gray10 outline-none focus-visible:border-blue9 focus-visible:ring-2 focus-visible:ring-blue5 focus-visible:outline-none"
-                          id="x-username"
-                          onChange={(event) => setXUsername(event.currentTarget.value)}
-                          placeholder="yourhandle"
-                          value={xUsername}
-                        />
-                      </div>
-                      <p className="text-sm text-gray8">
-                        The proof tweet must come from this X account.
-                      </p>
+                        </>
+                      ) : (
+                        <>
+                          <h3 className="text-lg font-bold text-gray10">
+                            With X OAuth, Tipbot can:
+                          </h3>
+                          <div className="flex gap-4">
+                            <IconLucideCheck
+                              aria-hidden="true"
+                              className="mt-1 size-5 shrink-0 text-green9"
+                            />
+                            <div className="space-y-1">
+                              <p className="text-lg font-bold text-gray10">Read your X profile</p>
+                              <p className="text-base text-gray9">
+                                Tipbot uses your X id, username, and display name to link the right
+                                account.
+                              </p>
+                            </div>
+                          </div>
+                          <h3 className="text-lg font-bold text-gray10">
+                            With X OAuth, Tipbot cannot:
+                          </h3>
+                          <div className="flex gap-4">
+                            <IconLucideX
+                              aria-hidden="true"
+                              className="mt-1 size-5 shrink-0 text-red9"
+                            />
+                            <div className="space-y-1">
+                              <p className="text-lg font-bold text-gray10">Post tweets for you</p>
+                              <p className="text-base text-gray9">
+                                Tipbot only requests profile access for account verification.
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex gap-4">
+                            <IconLucideX
+                              aria-hidden="true"
+                              className="mt-1 size-5 shrink-0 text-red9"
+                            />
+                            <div className="space-y-1">
+                              <p className="text-lg font-bold text-gray10">Read your DMs</p>
+                              <p className="text-base text-gray9">
+                                Direct message access is not requested or stored.
+                              </p>
+                            </div>
+                          </div>
+                        </>
+                      )}
                     </div>
                   ) : null}
                   {!walletAddress ? (
@@ -401,49 +479,56 @@ function LinkPanel() {
                           </p>
                         </div>
                       </div>
-                      <div className="flex gap-4">
-                        <IconLucideCheck
-                          aria-hidden="true"
-                          className="mt-1 size-5 shrink-0 text-green9"
-                        />
-                        <div className="space-y-1">
-                          <p className="text-lg font-bold text-gray10">Verify your X account</p>
-                          <p className="text-base text-gray9">
-                            You’ll post a short connection tweet so Tipbot can link the right
-                            account.
-                          </p>
-                        </div>
-                      </div>
                     </>
                   ) : null}
                 </div>
               )}
               <div className="space-y-4 pt-6">
                 {!challenge ? (
-                  <button
-                    className="inline-flex h-12 items-center justify-center rounded-lg bg-green8 px-6 text-lg font-bold text-white transition-colors outline-none hover:bg-green7 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
-                    disabled={
-                      status === 'connecting' ||
-                      status === 'signing' ||
-                      Boolean(walletAddress && !xUsername.trim())
-                    }
-                    onClick={() => {
-                      connectWalletMutation.reset()
-                      signMutation.reset()
-                      verifyMutation.reset()
-                      if (walletAddress) signMutation.mutate()
-                      else connectWalletMutation.mutate()
-                    }}
-                    type="button"
-                  >
-                    {status === 'connecting'
-                      ? 'Connecting'
-                      : status === 'signing'
-                        ? 'Signing'
-                        : walletAddress
-                          ? 'Sign connection'
-                          : 'Connect wallet'}
-                  </button>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                    <button
+                      className="inline-flex h-12 items-center justify-center rounded-lg bg-green8 px-6 text-lg font-bold text-white transition-colors outline-none hover:bg-green7 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                      disabled={
+                        status === 'connecting' ||
+                        status === 'signing' ||
+                        status === 'oauthing' ||
+                        Boolean(walletAddress && showTweetFallback && !xUsername.trim())
+                      }
+                      onClick={() => {
+                        connectWalletMutation.reset()
+                        oauthMutation.reset()
+                        signMutation.reset()
+                        verifyMutation.reset()
+                        if (!walletAddress) connectWalletMutation.mutate()
+                        else if (showTweetFallback) signMutation.mutate()
+                        else oauthMutation.mutate()
+                      }}
+                      type="button"
+                    >
+                      {status === 'connecting'
+                        ? 'Connecting'
+                        : status === 'signing'
+                          ? 'Signing'
+                          : status === 'oauthing'
+                            ? 'Connecting X'
+                            : walletAddress
+                              ? showTweetFallback
+                                ? 'Prepare proof tweet'
+                                : 'Connect X'
+                              : 'Connect wallet'}
+                    </button>
+                    {walletAddress ? (
+                      <button
+                        className="inline-flex h-12 items-center justify-center rounded-lg border border-transparent px-6 text-lg font-bold text-gray8 transition-colors outline-none hover:bg-gray3 hover:text-gray10 focus-visible:ring-2 focus-visible:ring-gray8 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                        onClick={() => setShowTweetFallback((value) => !value)}
+                        type="button"
+                      >
+                        {showTweetFallback
+                          ? 'Use X OAuth instead'
+                          : 'Verify with proof tweet instead'}
+                      </button>
+                    ) : null}
+                  </div>
                 ) : null}
                 {error ? (
                   <p className="text-sm font-medium text-red9" role="alert">
@@ -452,11 +537,49 @@ function LinkPanel() {
                 ) : null}
               </div>
             </div>
+            {walletAddress ? (
+              <div className="flex flex-col gap-3 rounded-xl border border-gray5 bg-bg2 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm font-bold text-gray10">Wallet connected</p>
+                  <p className="font-mono text-sm text-gray8">{formatAddress(walletAddress)}</p>
+                </div>
+                <button
+                  className="inline-flex h-10 items-center justify-center rounded-lg border border-gray5 bg-bg2 px-4 text-sm font-bold text-gray10 transition-colors outline-none hover:bg-gray3 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-blue9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                  disabled={
+                    disconnectWallet.isPending || status === 'signing' || status === 'oauthing'
+                  }
+                  onClick={() => {
+                    disconnectWallet.reset()
+                    disconnectWallet.disconnect(undefined, {
+                      onSuccess: () => {
+                        setConnectedWalletAddress(null)
+                        setShowTweetFallback(false)
+                        setXUsername('')
+                      },
+                    })
+                  }}
+                  type="button"
+                >
+                  {disconnectWallet.isPending ? 'Disconnecting' : 'Disconnect wallet'}
+                </button>
+              </div>
+            ) : null}
           </div>
         )}
       </section>
     </main>
   )
+}
+
+type AccessKeyChallenge = {
+  accessKeyAddress: string
+  accessKeyExpiry: string
+  accessKeyLimit: string
+  accessKeyLimitPeriodSeconds: number
+  accessKeyPublicKey: `0x${string}`
+  chainId: number
+  challengeId: string
+  tokenAddress: `0x${string}`
 }
 
 type Challenge = {

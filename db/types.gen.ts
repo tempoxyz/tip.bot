@@ -10,6 +10,7 @@ export interface DB {
   pending_tip: pending_tip
   provider_identity: provider_identity
   provider_link_challenge: provider_link_challenge
+  provider_link_oauth_state: provider_link_oauth_state
   reaction_tip: reaction_tip
   reaction_tip_config: reaction_tip_config
   reaction_tip_thread: reaction_tip_thread
@@ -134,6 +135,17 @@ type provider_link_challenge = {
   wallet_address: string
 }
 
+type provider_link_oauth_state = {
+  challenge_id: string
+  code_verifier_ciphertext: string
+  created_at: string
+  expires_at: string
+  id: string
+  state_hash: string
+  updated_at: string
+  used_at: string | null
+}
+
 type reaction_tip = {
   channel_id: string
   created_at: k.Generated<string>
@@ -256,6 +268,7 @@ export declare namespace DB {
   type pending_tip = k.Selectable<DB['pending_tip']>
   type provider_identity = k.Selectable<DB['provider_identity']>
   type provider_link_challenge = k.Selectable<DB['provider_link_challenge']>
+  type provider_link_oauth_state = k.Selectable<DB['provider_link_oauth_state']>
   type reaction_tip = k.Selectable<DB['reaction_tip']>
   type reaction_tip_config = k.Selectable<DB['reaction_tip_config']>
   type reaction_tip_thread = k.Selectable<DB['reaction_tip_thread']>
@@ -273,6 +286,7 @@ export declare namespace DB {
     type pending_tip = k.Insertable<DB['pending_tip']>
     type provider_identity = k.Insertable<DB['provider_identity']>
     type provider_link_challenge = k.Insertable<DB['provider_link_challenge']>
+    type provider_link_oauth_state = k.Insertable<DB['provider_link_oauth_state']>
     type reaction_tip = k.Insertable<DB['reaction_tip']>
     type reaction_tip_config = k.Insertable<DB['reaction_tip_config']>
     type reaction_tip_thread = k.Insertable<DB['reaction_tip_thread']>
@@ -291,6 +305,7 @@ export declare namespace DB {
     type pending_tip = k.Selectable<DB['pending_tip']>
     type provider_identity = k.Selectable<DB['provider_identity']>
     type provider_link_challenge = k.Selectable<DB['provider_link_challenge']>
+    type provider_link_oauth_state = k.Selectable<DB['provider_link_oauth_state']>
     type reaction_tip = k.Selectable<DB['reaction_tip']>
     type reaction_tip_config = k.Selectable<DB['reaction_tip_config']>
     type reaction_tip_thread = k.Selectable<DB['reaction_tip_thread']>
@@ -309,6 +324,7 @@ export declare namespace DB {
     type pending_tip = k.Updateable<DB['pending_tip']>
     type provider_identity = k.Updateable<DB['provider_identity']>
     type provider_link_challenge = k.Updateable<DB['provider_link_challenge']>
+    type provider_link_oauth_state = k.Updateable<DB['provider_link_oauth_state']>
     type reaction_tip = k.Updateable<DB['reaction_tip']>
     type reaction_tip_config = k.Updateable<DB['reaction_tip_config']>
     type reaction_tip_thread = k.Updateable<DB['reaction_tip_thread']>
