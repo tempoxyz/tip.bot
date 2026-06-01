@@ -106,6 +106,7 @@ export const scoped_credit = z.object({
   mpp_receipt_id: z.string().nullable(),
   provider_channel_id: z.string(),
   provider_thread_id: z.string().nullable(),
+  receipt_memo: z.string(),
   recipient_member_id: z.string(),
   recipient_provider_user_id: z.string(),
   sender_member_id: z.string(),

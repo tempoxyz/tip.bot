@@ -574,7 +574,7 @@ const actions = {
     await postPrivateReply(
       scopedCreditTipEvent(result.credit, event.user),
       event.user,
-      `Paid ${ScopedCredit.formatScopedCreditAmount(result.credit.amount)} to ${result.credit.merchant_name}. MPP receipt: \`${result.credit.mpp_receipt_id}\``,
+      `Paid ${ScopedCredit.formatScopedCreditAmount(result.credit.amount)} to ${result.credit.merchant_name}.\n${result.credit.receipt_memo}\nMPP receipt: \`${result.credit.mpp_receipt_id}\``,
     )
   },
 } as const satisfies Record<

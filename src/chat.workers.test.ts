@@ -85,6 +85,7 @@ test('/tip credit creates and spends merchant-scoped credit', async () => {
   expect(pending).toMatchObject({
     amount: 2_000_000,
     merchant_id: 'prospectbutcher',
+    receipt_memo: `Scoped credit for <@${Constants.slack.memberUserId}> from <@${Constants.slack.adminUserId}>; spendable only at Prospect Butcher Co.`,
     status: 'pending',
   })
 
@@ -107,6 +108,9 @@ test('/tip credit creates and spends merchant-scoped credit', async () => {
 
   expect(issued.credit.tempo_transaction_hash).toMatch(/^fake_tempo_tx_/)
   expect(spent.credit.mpp_receipt_id).toMatch(/^fake_mpp_receipt_/)
+  expect(spent.credit.receipt_memo).toBe(
+    `Scoped credit for <@${Constants.slack.memberUserId}> from <@${Constants.slack.adminUserId}>; spendable only at Prospect Butcher Co.`,
+  )
   expect(spent.credit.status).toBe('spent')
   expect(events.map((event) => event.event_type)).toEqual([
     'created',

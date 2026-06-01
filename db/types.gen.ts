@@ -121,6 +121,7 @@ type scoped_credit = {
   mpp_receipt_id: string | null
   provider_channel_id: string
   provider_thread_id: string | null
+  receipt_memo: k.Generated<string>
   recipient_member_id: string
   recipient_provider_user_id: string
   sender_member_id: string

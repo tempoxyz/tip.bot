@@ -9,6 +9,7 @@ CREATE TABLE "scoped_credit" (
   "recipient_member_id" TEXT NOT NULL REFERENCES "member" ("id") ON DELETE CASCADE,
   "sender_provider_user_id" TEXT NOT NULL,
   "recipient_provider_user_id" TEXT NOT NULL,
+  "receipt_memo" TEXT NOT NULL DEFAULT 'Scoped credit',
   "merchant_id" TEXT NOT NULL,
   "merchant_name" TEXT NOT NULL,
   "merchant_address" TEXT NOT NULL,

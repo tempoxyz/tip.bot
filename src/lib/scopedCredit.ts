@@ -66,6 +66,15 @@ export function formatScopedCreditAmount(amount: number) {
   return formatCurrencyAmount(formatAmount(amount), 'USD')
 }
 
+export function buildScopedCreditReceiptMemo(input: {
+  merchantName: string
+  recipientProviderUserId: string
+  senderProviderUserId: string
+}) {
+  const merchantName = input.merchantName.replace(/\.+$/, '')
+  return `Scoped credit for <@${input.recipientProviderUserId}> from <@${input.senderProviderUserId}>; spendable only at ${merchantName}.`
+}
+
 export async function createPendingScopedCredit(
   db: DB.Type,
   input: {
@@ -144,6 +153,11 @@ export async function createPendingScopedCredit(
       provider_thread_id: input.providerThreadId ?? null,
       recipient_member_id: recipient.id,
       recipient_provider_user_id: recipient.provider_user_id,
+      receipt_memo: buildScopedCreditReceiptMemo({
+        merchantName: merchant.name,
+        recipientProviderUserId: recipient.provider_user_id,
+        senderProviderUserId: sender.provider_user_id,
+      }),
       sender_member_id: sender.id,
       sender_provider_user_id: sender.provider_user_id,
       status: 'pending',
@@ -299,7 +313,10 @@ export async function spendScopedCredit(
     })
     .where('id', '=', credit.id)
     .execute()
-  await insertScopedCreditEvent(db, credit.id, 'paid', { mppReceiptId })
+  await insertScopedCreditEvent(db, credit.id, 'paid', {
+    mppReceiptId,
+    receiptMemo: credit.receipt_memo,
+  })
   return {
     credit: await db
       .selectFrom('scoped_credit')
