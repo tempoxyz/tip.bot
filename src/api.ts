@@ -856,7 +856,15 @@ export const api = new Hono<{
   })
   .post('/api/chat/twitter', async (c) => {
     try {
-      await Twitter.handleWebhook(c.env, await c.req.json())
+      const body = await c.req.text()
+      if (
+        !(await Twitter.verifyWebhookSignature(c.env, {
+          body,
+          signature: c.req.header('x-twitter-webhooks-signature'),
+        }))
+      )
+        return c.json({ code: 'invalid_signature' as const, ok: false as const }, 401)
+      await Twitter.handleWebhook(c.env, JSON.parse(body))
       return c.json({ ok: true as const })
     } catch (error) {
       console.error('Twitter webhook failed:', error)

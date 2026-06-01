@@ -72,6 +72,21 @@ describe('/api/chat/twitter', () => {
     })
   })
 
+  test('rejects Twitter webhook without valid signature', async () => {
+    const response = await api.fetch(
+      new Request('https://tip.bot/api/chat/twitter', {
+        body: JSON.stringify({ id: 'tweet-unsigned', text: '@tipbotgg @alice' }),
+        headers: { 'content-type': 'application/json' },
+        method: 'POST',
+      }),
+      env,
+      executionCtx,
+    )
+
+    expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({ code: 'invalid_signature', ok: false })
+  })
+
   test('valid tip from unconnected Twitter sender replies with connect link', async () => {
     const posts: Array<{ authorization: string | null; body: unknown }> = []
     server.use(
@@ -166,7 +181,55 @@ describe('/api/chat/twitter', () => {
     expect(posts[0]?.authorization).toContain('oauth_signature=')
     expect(posts[0]?.body).toMatchObject({
       reply: { in_reply_to_tweet_id: tweetId },
-      text: expect.stringContaining('@alice got $0.001 from @bob for coffee.'),
+      text: expect.stringContaining('@alice got $0.001 from @bob for coffee'),
+    })
+  }, 20_000) // 20 seconds
+
+  test('Account Activity reply display text sends tip without reply-prefix recipients', async () => {
+    const senderProviderUserId = twitterProviderUserId()
+    const recipientProviderUserId = twitterProviderUserId()
+    const tweetId = `tweet-${Nanoid.generate()}`
+    const text = '@tipbotgg @bob @alice @tipbotgg @alice for reply test'
+    const connected = await connectTwitterTipAccounts({
+      recipientProviderUserId,
+      senderProviderUserId,
+    })
+    if (!connected.recipientAccount || !connected.recipientMember)
+      throw new Error('Expected connected Twitter recipient.')
+    server.use(
+      mswHttp.get('https://api.twitter.com/2/users/by/username/alice', () =>
+        HttpResponse.json({ data: { id: recipientProviderUserId, username: 'alice' } }),
+      ),
+      mswHttp.post('https://api.twitter.com/2/tweets', () =>
+        HttpResponse.json({ data: { id: `reply-${Nanoid.generate()}`, text: 'ok' } }),
+      ),
+    )
+
+    const response = await postTwitterWebhook({
+      tweet_create_events: [
+        {
+          display_text_range: [22, text.length],
+          id_str: tweetId,
+          in_reply_to_status_id_str: `conversation-${Nanoid.generate()}`,
+          in_reply_to_user_id_str: 'tipbot-user',
+          text,
+          user: { id_str: senderProviderUserId, screen_name: 'bob' },
+        },
+      ],
+    })
+    const tip = await db
+      .selectFrom('tip')
+      .selectAll()
+      .where('idempotency_key', '=', `twitter:${tweetId}`)
+      .executeTakeFirstOrThrow()
+
+    expect(response.status).toBe(200)
+    expect(tip).toMatchObject({
+      amount: 1000,
+      confirmed_at: expect.any(String),
+      memo: 'reply test',
+      recipient_member_id: connected.recipientMember.id,
+      sender_member_id: connected.senderMember.id,
     })
   }, 20_000) // 20 seconds
 
@@ -1846,10 +1909,18 @@ async function expectSlackViewsPublishCall(fetchSpy: {
 }
 
 async function postTwitterWebhook(tweet: unknown) {
+  const body = JSON.stringify(tweet)
+  if (!env.TWITTER_CONSUMER_SECRET) throw new Error('Expected Twitter consumer secret.')
   return await api.fetch(
     new Request('https://tip.bot/api/chat/twitter', {
-      body: JSON.stringify(tweet),
-      headers: { 'content-type': 'application/json' },
+      body,
+      headers: {
+        'content-type': 'application/json',
+        'x-twitter-webhooks-signature': `sha256=${await hmacBase64(
+          env.TWITTER_CONSUMER_SECRET,
+          body,
+        )}`,
+      },
       method: 'POST',
     }),
     env,

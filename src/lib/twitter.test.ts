@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest'
-import { parseWebhookTweets } from '#/lib/twitter.ts'
+import * as Tempo from '#/lib/tempo.ts'
+import { formatTwitterReceiptText, parseWebhookTweets } from '#/lib/twitter.ts'
 
 test('parses simple Twitter webhook test payload', () => {
   expect(
@@ -101,4 +102,21 @@ test('parses v2 tweet payload with includes', () => {
       text: '@tipbotgg $5',
     },
   ])
+})
+
+test('formats Twitter receipt reply without sentence-ending period', () => {
+  const transactionHash = `0x${'1'.repeat(64)}`
+
+  expect(
+    formatTwitterReceiptText({
+      amount: '$1',
+      chainId: Tempo.chainLookup.testnet,
+      memo: 'coffee',
+      recipientHandle: 'alice',
+      senderHandle: '@bob',
+      transactionHash,
+    }),
+  ).toBe(
+    `@alice got $1 from @bob for coffee\nReceipt: ${Tempo.formatTxLink(Tempo.chainLookup.testnet, transactionHash)}`,
+  )
 })

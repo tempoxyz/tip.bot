@@ -153,14 +153,23 @@ export async function verifyLinkChallenge(
 
 export async function handleTweet(env: Env, input: TwitterTweetInput) {
   const botHandle = env.TWITTER_BOT_HANDLE.replace(/^@+/, '').toLowerCase()
-  if (input.authorHandle?.toLowerCase() === botHandle) return
-  if (!new RegExp(`(^|[^\\p{L}\\p{N}_])@${escapeRegex(botHandle)}\\b`, 'iu').test(input.text))
+  if (input.authorHandle?.toLowerCase() === botHandle) {
+    console.log('Twitter webhook ignored bot tweet', { tweetId: input.id })
     return
+  }
+  if (!new RegExp(`(^|[^\\p{L}\\p{N}_])@${escapeRegex(botHandle)}\\b`, 'iu').test(input.text)) {
+    console.log('Twitter webhook ignored tweet without bot mention', { tweetId: input.id })
+    return
+  }
 
   const parsed = await parseTwitterTip(env, input)
-  if (!parsed) return
+  if (!parsed) {
+    console.log('Twitter webhook ignored unparsable tweet', { tweetId: input.id })
+    return
+  }
 
   if (parsed.code === 'multiple_recipients') {
+    console.log('Twitter webhook rejected multiple recipients', { tweetId: input.id })
     await postReply(env, input.id, 'Payment not sent. Mention one recipient for now.')
     return
   }
@@ -182,6 +191,10 @@ export async function handleTweet(env: Env, input: TwitterTweetInput) {
   })
 
   if (result.ok && result.status === 'queued') {
+    console.log('Twitter webhook queued pending tip', {
+      pendingTipId: result.pendingTipId,
+      tweetId: input.id,
+    })
     await postReply(
       env,
       input.id,
@@ -194,22 +207,36 @@ export async function handleTweet(env: Env, input: TwitterTweetInput) {
     return
   }
   if (result.ok && result.status === 'sent') {
+    console.log('Twitter webhook sent tip', {
+      transactionHash: result.transactionHash,
+      tweetId: input.id,
+    })
     await postReply(
       env,
       input.id,
-      `${formatHandle(parsed.recipientHandle)} got ${formatTwitterAmount(result)} from ${formatHandle(input.authorHandle)}${result.memo ? ` for ${result.memo}` : ''}.\nReceipt: ${Tempo.formatTxLink(result.chainId, result.transactionHash)}`,
+      formatTwitterReceiptText({
+        amount: formatTwitterAmount(result),
+        chainId: result.chainId,
+        memo: result.memo,
+        recipientHandle: parsed.recipientHandle,
+        senderHandle: input.authorHandle,
+        transactionHash: result.transactionHash,
+      }),
     )
     return
   }
   if (!result.ok && result.code === 'sender_unconnected') {
+    console.log('Twitter webhook rejected unconnected sender', { tweetId: input.id })
     await postReply(env, input.id, 'Connect at tip.bot/link/x to send tips.')
     return
   }
   if (!result.ok && result.code === 'confirmation_required' && result.confirmUrl) {
+    console.log('Twitter webhook requested confirmation', { tweetId: input.id })
     await postReply(env, input.id, `One quick approval needed: ${result.confirmUrl}`)
     return
   }
   if (!result.ok && result.code === 'insufficient_funds') {
+    console.log('Twitter webhook rejected insufficient funds', { tweetId: input.id })
     await postReply(
       env,
       input.id,
@@ -218,14 +245,33 @@ export async function handleTweet(env: Env, input: TwitterTweetInput) {
     return
   }
   if (!result.ok && result.code === 'self_tip') {
+    console.log('Twitter webhook rejected self tip', { tweetId: input.id })
     await postReply(env, input.id, 'Payment not sent. You can’t tip yourself.')
     return
   }
+  console.log('Twitter webhook failed tip', {
+    code: result.ok ? result.status : result.code,
+    tweetId: input.id,
+  })
   await postReply(env, input.id, 'Payment not sent. Try again later.')
 }
 
 export async function handleWebhook(env: Env, body: unknown) {
-  for (const tweet of parseWebhookTweets(body)) await handleTweet(env, tweet)
+  const tweets = parseWebhookTweets(body)
+  console.log('Twitter webhook received', { tweetCount: tweets.length })
+  for (const tweet of tweets) await handleTweet(env, tweet)
+}
+
+export async function verifyWebhookSignature(
+  env: Env,
+  input: { body: string; signature: string | undefined },
+) {
+  if (!env.TWITTER_CONSUMER_SECRET) throw new Error('Twitter is not configured.')
+  if (!input.signature) return false
+  return (
+    input.signature ===
+    `sha256=${await hmacBase64('SHA-256', env.TWITTER_CONSUMER_SECRET, input.body)}`
+  )
 }
 
 export async function handleCrcChallenge(env: Env, crcToken: string) {
@@ -248,7 +294,14 @@ export async function updatePendingTipMessage(env: Env, result: Tip.PendingTipCl
   const recipientHandle = recipient?.display_name?.replace(/^@+/, '')
   const senderHandle = sender?.display_name?.replace(/^@+/, '')
   const text = result.ok
-    ? `${formatHandle(recipientHandle)} got ${formatTwitterAmount(result)} from ${formatHandle(senderHandle)}${result.memo ? ` for ${result.memo}` : ''}.\nReceipt: ${Tempo.formatTxLink(result.chainId, result.transactionHash)}`
+    ? formatTwitterReceiptText({
+        amount: formatTwitterAmount(result),
+        chainId: result.chainId,
+        memo: result.memo,
+        recipientHandle,
+        senderHandle,
+        transactionHash: result.transactionHash,
+      })
     : result.status === 'expired'
       ? `${formatHandle(recipientHandle)}’s tip from ${formatHandle(senderHandle)} expired before it was claimed.\nNo payment was sent.`
       : `${formatHandle(recipientHandle)}’s tip from ${formatHandle(senderHandle)} could not be sent.\nNo payment was sent.`
@@ -257,6 +310,17 @@ export async function updatePendingTipMessage(env: Env, result: Tip.PendingTipCl
     result.pendingTip.provider_thread_id ?? result.pendingTip.provider_channel_id,
     text,
   )
+}
+
+export function formatTwitterReceiptText(input: {
+  amount: string
+  chainId: number
+  memo: string | null | undefined
+  recipientHandle: string | undefined
+  senderHandle: string | undefined
+  transactionHash: string
+}) {
+  return `${formatHandle(input.recipientHandle)} got ${input.amount} from ${formatHandle(input.senderHandle)}${input.memo ? ` for ${input.memo}` : ''}\nReceipt: ${Tempo.formatTxLink(input.chainId, input.transactionHash)}`
 }
 
 export function parseWebhookTweets(body: unknown): TwitterTweetInput[] {
@@ -761,7 +825,7 @@ function formatHandle(value: string | undefined) {
 
 function getTwitterDisplayText(text: string, range: [number, number] | undefined) {
   if (!range) return text
-  return [...text].slice(range[0], range[1]).join('').trim()
+  return Array.from(text).slice(range[0], range[1]).join('').trim()
 }
 
 async function hmacBase64(algorithm: 'SHA-1' | 'SHA-256', key: string, message: string) {
