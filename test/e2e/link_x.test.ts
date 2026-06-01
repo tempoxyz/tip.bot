@@ -16,7 +16,7 @@ test('visitor connects X account with OAuth', async ({ app, page }) => {
       address?: string
       json?: { address?: string }
     }
-    expect(json.address ?? json.json?.address).toBe(root.address)
+    expect(json.address ?? json.json?.address).toBeUndefined()
     await route.fulfill({
       body: JSON.stringify({
         accessKeyExpiry: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
@@ -89,7 +89,7 @@ test('visitor connects X account with proof tweet', async ({ app, page }) => {
       json?: { address?: string; username?: string }
       username?: string
     }
-    expect(json.address ?? json.json?.address).toBe(root.address)
+    expect(json.address ?? json.json?.address).toBeUndefined()
     expect(json.username ?? json.json?.username).toBe('tipbotgg')
     await route.fulfill({
       body: JSON.stringify({
@@ -163,19 +163,13 @@ test('visitor connects X account with proof tweet', async ({ app, page }) => {
   await expect(page.getByRole('heading', { name: 'Connect X to Tipbot' })).toBeVisible()
   await expect(page.getByText('Step 1/3')).toBeVisible()
   await expect(page.getByLabel('X username')).toBeHidden()
-  await page.getByRole('button', { name: 'Connect wallet' }).click()
-  await expect(page.getByText('Step 2/3')).toBeVisible()
-  await expect(page.getByLabel('X username')).toBeHidden()
-  await expect(page.getByRole('button', { name: 'Disconnect wallet' })).toBeVisible()
-  await page.getByRole('button', { name: 'Disconnect wallet' }).click()
-  await expect(page.getByText('Step 1/3')).toBeVisible()
-  await expect(page.getByLabel('X username')).toBeHidden()
-  await page.getByRole('button', { name: 'Connect wallet' }).click()
-  await expect(page.getByText('Step 2/3')).toBeVisible()
-  await expect(page.getByLabel('X username')).toBeHidden()
   await page.getByRole('button', { name: 'Verify with proof tweet instead' }).click()
+  await expect(page.getByText('Step 1/3')).toBeVisible()
   await expect(page.getByLabel('X username')).toBeVisible()
   await page.getByLabel('X username').fill('@tipbotgg')
+  await page.getByRole('button', { name: 'Connect wallet' }).click()
+  await expect(page.getByText('Step 2/3')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Disconnect wallet' })).toBeVisible()
   await page.getByRole('button', { name: 'Prepare proof tweet' }).click()
   await expect(page.getByText('Step 3/3')).toBeVisible()
   await expect(page.getByText(tweetText)).toBeVisible()
@@ -222,7 +216,7 @@ test('visitor connects X account after automatic proof tweet polling', async ({ 
       json?: { address?: string; username?: string }
       username?: string
     }
-    expect(json.address ?? json.json?.address).toBe(root.address)
+    expect(json.address ?? json.json?.address).toBeUndefined()
     expect(json.username ?? json.json?.username).toBe('tipbotgg')
     await route.fulfill({
       body: JSON.stringify({
@@ -289,11 +283,11 @@ test('visitor connects X account after automatic proof tweet polling', async ({ 
 
   await page.goto(app.url({ to: '/link/x' }))
   await page.waitForLoadState('networkidle')
-  await page.getByRole('button', { name: 'Connect wallet' }).click()
-  await expect(page.getByLabel('X username')).toBeHidden()
   await page.getByRole('button', { name: 'Verify with proof tweet instead' }).click()
   await expect(page.getByLabel('X username')).toBeVisible()
   await page.getByLabel('X username').fill('tipbotgg')
+  await page.getByRole('button', { name: 'Connect wallet' }).click()
+  await expect(page.getByText('Step 2/3')).toBeVisible()
   await page.getByRole('button', { name: 'Prepare proof tweet' }).click()
   await expect(page.getByText(tweetText)).toBeVisible()
   await page.getByRole('button', { name: 'Post connection tweet' }).click()

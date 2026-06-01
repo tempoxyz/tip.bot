@@ -335,7 +335,7 @@ export const api = new Hono<{
     hono.validator(
       'json',
       z.object({
-        address: z.string().min(1),
+        address: z.string().min(1).optional(),
         username: z
           .string()
           .min(1)
@@ -395,7 +395,7 @@ export const api = new Hono<{
     hono.validator(
       'json',
       z.object({
-        address: z.string().min(1),
+        address: z.string().min(1).optional(),
       }),
     ),
     async (c) => {

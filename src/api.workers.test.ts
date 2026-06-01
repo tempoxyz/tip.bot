@@ -372,7 +372,7 @@ describe('/api/link/twitter', () => {
     const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
     mockTwitterUser({ id: 'twitter-user-1', username: 'alice' })
     const challengeResponse = await client.api.link.twitter.challenge.$post({
-      json: { address: root.address, username: 'alice' },
+      json: { username: 'alice' },
     })
 
     expect(challengeResponse.status).toBe(200)
@@ -525,7 +525,7 @@ describe('/api/link/twitter', () => {
   test('completes Twitter OAuth flow and stores account link', async () => {
     const root = Account.fromSecp256k1(Secp256k1.randomPrivateKey())
     const challengeResponse = await client.api.link.twitter.oauth.challenge.$post({
-      json: { address: root.address },
+      json: {},
     })
 
     expect(challengeResponse.status).toBe(200)
@@ -555,7 +555,7 @@ describe('/api/link/twitter', () => {
     expect(startResponse.status).toBe(200)
     const start = (await startResponse.json()) as { authorizationUrl: string; ok: true }
     const authorizationUrl = new URL(start.authorizationUrl)
-    expect(authorizationUrl.origin).toBe('https://twitter.com')
+    expect(authorizationUrl.origin).toBe('https://x.com')
     expect(authorizationUrl.pathname).toBe('/i/oauth2/authorize')
     expect(authorizationUrl.searchParams.get('client_id')).toBe(env.TWITTER_OAUTH_CLIENT_ID)
     expect(authorizationUrl.searchParams.get('scope')).toBe('users.read')
@@ -565,9 +565,7 @@ describe('/api/link/twitter', () => {
     if (!env.TWITTER_OAUTH_CLIENT_ID || !env.TWITTER_OAUTH_CLIENT_SECRET)
       throw new Error('Expected Twitter OAuth credentials.')
     const expectedOAuthAuthorization = `Basic ${btoa(
-      `${encodeURIComponent(env.TWITTER_OAUTH_CLIENT_ID)}:${encodeURIComponent(
-        env.TWITTER_OAUTH_CLIENT_SECRET,
-      )}`,
+      `${env.TWITTER_OAUTH_CLIENT_ID}:${env.TWITTER_OAUTH_CLIENT_SECRET}`,
     )}`
     server.use(
       mswHttp.post('https://api.twitter.com/2/oauth2/token', async ({ request }) => {
@@ -609,7 +607,7 @@ describe('/api/link/twitter', () => {
       .executeTakeFirstOrThrow()
     const challengeRow = await db
       .selectFrom('provider_link_challenge')
-      .select(['provider_handle', 'provider_user_id', 'tweet_id', 'used_at'])
+      .select(['provider_handle', 'provider_user_id', 'tweet_id', 'used_at', 'wallet_address'])
       .where('id', '=', challenge.challengeId)
       .executeTakeFirstOrThrow()
     const oauthState = await db
@@ -627,6 +625,7 @@ describe('/api/link/twitter', () => {
     expect(challengeRow).toMatchObject({
       provider_handle: '@alice',
       provider_user_id: 'twitter-oauth-user',
+      wallet_address: root.address,
     })
     expect(challengeRow.tweet_id).toMatch(/^oauth:/)
     expect(challengeRow.used_at).toEqual(expect.any(String))

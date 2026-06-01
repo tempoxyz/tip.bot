@@ -34,6 +34,7 @@ function LinkPanel() {
   const search = Route.useSearch()
   const [challenge, setChallenge] = React.useState<Challenge | null>(null)
   const [connectedWalletAddress, setConnectedWalletAddress] = React.useState<string | null>(null)
+  const [pendingConnection, setPendingConnection] = React.useState<PendingConnection | null>(null)
   const [status, setStatus] = React.useState<
     'idle' | 'connecting' | 'signing' | 'oauthing' | 'tweeting' | 'checking' | 'connected'
   >(search.status === 'connected' ? 'connected' : 'idle')
@@ -44,46 +45,37 @@ function LinkPanel() {
   const walletAddress =
     connection.status === 'connected' && connection.address
       ? connection.address
-      : connectedWalletAddress
-  const step = challenge ? 3 : walletAddress ? 2 : 1
+      : (pendingConnection?.address ?? connectedWalletAddress)
+  const step = challenge ? 3 : pendingConnection ? 2 : 1
   const stepDescription = challenge
     ? 'Post the prepared verification tweet from this X account. Tipbot will finish the connection automatically.'
-    : walletAddress
+    : pendingConnection
       ? showTweetFallback
-        ? 'Enter the X username to connect, then approve a limited access key in Tempo Wallet.'
-        : 'Approve a limited access key, then sign in with X to verify your account privately.'
-      : 'Connect the Tempo Wallet you want to use for X tips.'
+        ? 'Prepare the proof tweet for this X account.'
+        : 'Sign in with X to verify your account privately.'
+      : showTweetFallback
+        ? 'Enter the X username to connect, then approve your Tempo Wallet and a limited access key together.'
+        : 'Approve your Tempo Wallet and a limited access key together.'
   const stepTitle = challenge
     ? 'Post verification tweet'
-    : walletAddress
+    : pendingConnection
       ? showTweetFallback
-        ? 'Verify with proof tweet'
+        ? 'Prepare proof tweet'
         : 'Connect X'
-      : 'Connect wallet'
+      : showTweetFallback
+        ? 'Connect wallet'
+        : 'Connect wallet'
   const connectWalletMutation = useMutation({
     mutationFn: async () => {
-      const connector = connection.connector ?? connectors[0]
-      if (!connector) throw new Error('Tempo Wallet is unavailable.')
-      const result = await connect.mutateAsync({ connector })
-      const account = (result as { accounts?: readonly (string | { address?: string })[] })
-        .accounts?.[0]
-      const address = typeof account === 'string' ? account : account?.address
-      if (!address) throw new Error('Tempo Wallet did not return an account.')
-      return address
-    },
-    onError: () => setStatus('idle'),
-    onMutate: () => setStatus('connecting'),
-    onSuccess: (address) => {
-      setConnectedWalletAddress(address)
-      setStatus('idle')
-    },
-  })
-  const oauthMutation = useMutation({
-    mutationFn: async () => {
-      if (!walletAddress) throw new Error('Connect your wallet first.')
-      const challengeResponse = await rpc.api.link.twitter.oauth.challenge.$post({
-        json: { address: walletAddress },
-      })
+      const username = xUsername.trim().replace(/^@+/, '')
+      if (showTweetFallback && !username) throw new Error('Enter your X username first.')
+      const challengeResponse = showTweetFallback
+        ? await rpc.api.link.twitter.challenge.$post({
+            json: walletAddress ? { address: walletAddress, username } : { username },
+          })
+        : await rpc.api.link.twitter.oauth.challenge.$post({
+            json: walletAddress ? { address: walletAddress } : {},
+          })
       if (challengeResponse.status !== 200) {
         const challengeJson = await challengeResponse.json()
         throw new Error(
@@ -93,12 +85,29 @@ function LinkPanel() {
         )
       }
       const challengeJson = await challengeResponse.json()
-      const keyAuthorization = await authorizeAccessKey(challengeJson)
+      const keyAuthorization = await authorizeAccessKeyOrConnect(challengeJson)
+      return {
+        address: keyAuthorization.rootAddress,
+        challengeJson,
+        keyAuthorization: keyAuthorization.keyAuthorization,
+      }
+    },
+    onError: () => setStatus('idle'),
+    onMutate: () => setStatus('connecting'),
+    onSuccess: (value) => {
+      setConnectedWalletAddress(value.address)
+      setPendingConnection(value)
+      setStatus('idle')
+    },
+  })
+  const oauthMutation = useMutation({
+    mutationFn: async () => {
+      if (!pendingConnection) throw new Error('Connect your wallet first.')
       const startResponse = await rpc.api.link.twitter.oauth.start.$post({
         json: {
-          address: keyAuthorization.rootAddress,
-          challengeId: challengeJson.challengeId,
-          keyAuthorization: keyAuthorization.keyAuthorization,
+          address: pendingConnection.address,
+          challengeId: pendingConnection.challengeJson.challengeId,
+          keyAuthorization: pendingConnection.keyAuthorization,
         },
       })
       if (startResponse.status !== 200) {
@@ -113,27 +122,12 @@ function LinkPanel() {
   })
   const signMutation = useMutation({
     mutationFn: async () => {
-      const username = xUsername.trim().replace(/^@+/, '')
-      if (!username) throw new Error('Enter your X username first.')
-      if (!walletAddress) throw new Error('Connect your wallet first.')
-      const challengeResponse = await rpc.api.link.twitter.challenge.$post({
-        json: { address: walletAddress, username },
-      })
-      if (challengeResponse.status !== 200) {
-        const challengeJson = await challengeResponse.json()
-        throw new Error(
-          'message' in challengeJson
-            ? challengeJson.message
-            : 'Could not start Twitter connection.',
-        )
-      }
-      const challengeJson = await challengeResponse.json()
-      const keyAuthorization = await authorizeAccessKey(challengeJson)
+      if (!pendingConnection) throw new Error('Connect your wallet first.')
       const proofResponse = await rpc.api.link.twitter.proof.$post({
         json: {
-          address: keyAuthorization.rootAddress,
-          challengeId: challengeJson.challengeId,
-          keyAuthorization: keyAuthorization.keyAuthorization,
+          address: pendingConnection.address,
+          challengeId: pendingConnection.challengeJson.challengeId,
+          keyAuthorization: pendingConnection.keyAuthorization,
         },
       })
       if (proofResponse.status !== 200) {
@@ -143,14 +137,16 @@ function LinkPanel() {
         )
       }
       const proofJson = await proofResponse.json()
+      if (!pendingConnection.challengeJson.name || !pendingConnection.challengeJson.username)
+        throw new Error('Could not prepare Twitter proof.')
       return {
-        avatarUrl: challengeJson.avatarUrl,
-        challengeId: challengeJson.challengeId,
+        avatarUrl: pendingConnection.challengeJson.avatarUrl,
+        challengeId: pendingConnection.challengeJson.challengeId,
         intentUrl: proofJson.intentUrl,
-        name: challengeJson.name,
+        name: pendingConnection.challengeJson.name,
         proof: proofJson.proof,
         tweetText: proofJson.tweetText,
-        username: challengeJson.username,
+        username: pendingConnection.challengeJson.username,
       }
     },
     onError: () => setStatus('idle'),
@@ -169,10 +165,10 @@ function LinkPanel() {
       if (value === 'connected') setStatus('connected')
     },
   })
-  const error = connectWalletMutation.error
-    ? getErrorMessage(connectWalletMutation.error, 'Could not connect wallet.')
-    : disconnectWallet.error
-      ? getErrorMessage(disconnectWallet.error, 'Could not disconnect wallet.')
+  const error = disconnectWallet.error
+    ? getErrorMessage(disconnectWallet.error, 'Could not disconnect wallet.')
+    : connectWalletMutation.error
+      ? getErrorMessage(connectWalletMutation.error, 'Could not connect wallet.')
       : oauthMutation.error
         ? getErrorMessage(oauthMutation.error, 'Could not connect Twitter.')
         : signMutation.error
@@ -200,6 +196,29 @@ function LinkPanel() {
     retry: false,
   })
 
+  async function authorizeAccessKeyOrConnect(challengeJson: AccessKeyChallenge) {
+    if (walletAddress) return await authorizeAccessKey(challengeJson)
+
+    const connector = connection.connector ?? connectors[0]
+    if (!connector) throw new Error('Tempo Wallet is unavailable.')
+    const result = (await connect.mutateAsync({
+      capabilities: { authorizeAccessKey: getAuthorizeAccessKey(challengeJson) },
+      chainId: challengeJson.chainId,
+      connector,
+      withCapabilities: true,
+    } as never)) as unknown as {
+      accounts: readonly [
+        { address: string; capabilities: Record<string, unknown> },
+        ...{ address: string; capabilities: Record<string, unknown> }[],
+      ]
+    }
+    const account = result.accounts[0]
+    const keyAuthorization = account.capabilities.keyAuthorization
+    if (!keyAuthorization) throw new Error('Tempo Wallet did not authorize Tipbot.')
+    setConnectedWalletAddress(account.address)
+    return { keyAuthorization, rootAddress: account.address }
+  }
+
   async function authorizeAccessKey(challengeJson: AccessKeyChallenge) {
     const connector = connection.connector ?? connectors[0]
     if (!connector) throw new Error('Tempo Wallet is unavailable.')
@@ -208,29 +227,31 @@ function LinkPanel() {
     }
     return (await provider.request({
       method: 'wallet_authorizeAccessKey',
-      params: [
+      params: [getAuthorizeAccessKey(challengeJson)],
+    })) as { keyAuthorization: unknown; rootAddress: string }
+  }
+
+  function getAuthorizeAccessKey(challengeJson: AccessKeyChallenge) {
+    return {
+      chainId: BigInt(challengeJson.chainId),
+      expiry: Math.floor(new Date(challengeJson.accessKeyExpiry).getTime() / 1000),
+      keyType: 'secp256k1' as const,
+      limits: [
         {
-          chainId: BigInt(challengeJson.chainId),
-          expiry: Math.floor(new Date(challengeJson.accessKeyExpiry).getTime() / 1000),
-          keyType: 'secp256k1' as const,
-          limits: [
-            {
-              limit: parseUnits(challengeJson.accessKeyLimit, 6),
-              period: challengeJson.accessKeyLimitPeriodSeconds,
-              token: challengeJson.tokenAddress,
-            },
-          ],
-          publicKey: challengeJson.accessKeyPublicKey,
-          scopes: [
-            { address: challengeJson.tokenAddress, selector: 'transfer(address,uint256)' },
-            {
-              address: challengeJson.tokenAddress,
-              selector: 'transferWithMemo(address,uint256,bytes32)',
-            },
-          ],
+          limit: parseUnits(challengeJson.accessKeyLimit, 6),
+          period: challengeJson.accessKeyLimitPeriodSeconds,
+          token: challengeJson.tokenAddress,
         },
       ],
-    })) as { keyAuthorization: unknown; rootAddress: string }
+      publicKey: challengeJson.accessKeyPublicKey,
+      scopes: [
+        { address: challengeJson.tokenAddress, selector: 'transfer(address,uint256)' },
+        {
+          address: challengeJson.tokenAddress,
+          selector: 'transferWithMemo(address,uint256,bytes32)',
+        },
+      ],
+    }
   }
 
   async function verifyTweet() {
@@ -372,7 +393,7 @@ function LinkPanel() {
                 </div>
               ) : (
                 <div className="space-y-6 border-b border-gray5 py-6">
-                  {walletAddress ? (
+                  {walletAddress || showTweetFallback ? (
                     <div className="space-y-3">
                       {showTweetFallback ? (
                         <>
@@ -389,6 +410,7 @@ function LinkPanel() {
                             <input
                               autoComplete="username"
                               className="h-12 w-full rounded-lg border border-gray5 bg-bg1 ps-7 pe-3 text-gray10 outline-none focus-visible:border-blue9 focus-visible:ring-2 focus-visible:ring-blue5 focus-visible:outline-none"
+                              disabled={Boolean(pendingConnection)}
                               id="x-username"
                               onChange={(event) => setXUsername(event.currentTarget.value)}
                               placeholder="yourhandle"
@@ -492,14 +514,14 @@ function LinkPanel() {
                         status === 'connecting' ||
                         status === 'signing' ||
                         status === 'oauthing' ||
-                        Boolean(walletAddress && showTweetFallback && !xUsername.trim())
+                        Boolean(!pendingConnection && showTweetFallback && !xUsername.trim())
                       }
                       onClick={() => {
                         connectWalletMutation.reset()
                         oauthMutation.reset()
                         signMutation.reset()
                         verifyMutation.reset()
-                        if (!walletAddress) connectWalletMutation.mutate()
+                        if (!pendingConnection) connectWalletMutation.mutate()
                         else if (showTweetFallback) signMutation.mutate()
                         else oauthMutation.mutate()
                       }}
@@ -511,13 +533,17 @@ function LinkPanel() {
                           ? 'Signing'
                           : status === 'oauthing'
                             ? 'Connecting X'
-                            : walletAddress
+                            : pendingConnection
                               ? showTweetFallback
                                 ? 'Prepare proof tweet'
                                 : 'Connect X'
-                              : 'Connect wallet'}
+                              : walletAddress
+                                ? 'Create access key'
+                                : showTweetFallback
+                                  ? 'Connect wallet'
+                                  : 'Connect wallet'}
                     </button>
-                    {walletAddress ? (
+                    {!pendingConnection ? (
                       <button
                         className="inline-flex h-12 items-center justify-center rounded-lg border border-transparent px-6 text-lg font-bold text-gray8 transition-colors outline-none hover:bg-gray3 hover:text-gray10 focus-visible:ring-2 focus-visible:ring-gray8 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
                         onClick={() => setShowTweetFallback((value) => !value)}
@@ -553,6 +579,7 @@ function LinkPanel() {
                     disconnectWallet.disconnect(undefined, {
                       onSuccess: () => {
                         setConnectedWalletAddress(null)
+                        setPendingConnection(null)
                         setShowTweetFallback(false)
                         setXUsername('')
                       },
@@ -577,9 +604,18 @@ type AccessKeyChallenge = {
   accessKeyLimit: string
   accessKeyLimitPeriodSeconds: number
   accessKeyPublicKey: `0x${string}`
+  avatarUrl?: string | undefined
   chainId: number
   challengeId: string
+  name?: string | undefined
   tokenAddress: `0x${string}`
+  username?: string | undefined
+}
+
+type PendingConnection = {
+  address: string
+  challengeJson: AccessKeyChallenge
+  keyAuthorization: unknown
 }
 
 type Challenge = {

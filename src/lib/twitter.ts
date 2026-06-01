@@ -12,13 +12,17 @@ import { z } from 'zod'
 export const twitterProviderId = 'x'
 const twitterDefaultTokenAddress = Address.checksum(Tempo.addressLookup.usdcE)
 const twitterStorageProvider = 'slack'
+const unboundWalletAddress = Address.checksum('0x0000000000000000000000000000000000000000')
 
-export async function createLinkChallenge(env: Env, input: { address: string; username: string }) {
+export async function createLinkChallenge(
+  env: Env,
+  input: { address?: string | undefined; username: string },
+) {
   const db = DB.create(env.DB)
   const now = new Date()
   const accessKey = AccessKey.generate()
   const id = Nanoid.generate()
-  const walletAddress = Address.checksum(input.address)
+  const walletAddress = input.address ? Address.checksum(input.address) : unboundWalletAddress
   const twitterAccount = await getUserByUsername(env, input.username)
   if (!twitterAccount) throw new Error('Could not find that X account.')
   const workspace = await ensureTwitterWorkspace(db, now.toISOString())
@@ -64,12 +68,12 @@ export async function createLinkChallenge(env: Env, input: { address: string; us
   }
 }
 
-export async function createOAuthLinkChallenge(env: Env, input: { address: string }) {
+export async function createOAuthLinkChallenge(env: Env, input: { address?: string | undefined }) {
   const db = DB.create(env.DB)
   const now = new Date()
   const accessKey = AccessKey.generate()
   const id = Nanoid.generate()
-  const walletAddress = Address.checksum(input.address)
+  const walletAddress = input.address ? Address.checksum(input.address) : unboundWalletAddress
   const workspace = await ensureTwitterWorkspace(db, now.toISOString())
   const tokenAddress = getTwitterDefaultTokenAddress(workspace)
   await db
@@ -142,7 +146,10 @@ export async function createOAuthAuthorizationUrl(
     rootAddress: input.address,
     tokenAddress: getTwitterDefaultTokenAddress(workspace),
   })
-  if (!Address.isEqual(verified.rootAddress, challenge.wallet_address as Address.Address))
+  if (
+    challenge.wallet_address !== unboundWalletAddress &&
+    !Address.isEqual(verified.rootAddress, challenge.wallet_address as Address.Address)
+  )
     throw new Error('Wallet does not match this Twitter OAuth connection.')
 
   const state = randomBase64Url(32)
@@ -150,7 +157,11 @@ export async function createOAuthAuthorizationUrl(
   const now = new Date()
   await db
     .updateTable('provider_link_challenge')
-    .set({ access_key_authorization: verified.serialized, updated_at: now.toISOString() })
+    .set({
+      access_key_authorization: verified.serialized,
+      updated_at: now.toISOString(),
+      wallet_address: verified.rootAddress,
+    })
     .where('id', '=', challenge.id)
     .execute()
   await db
@@ -167,7 +178,7 @@ export async function createOAuthAuthorizationUrl(
     })
     .execute()
 
-  const url = new URL('/i/oauth2/authorize', 'https://twitter.com')
+  const url = new URL('/i/oauth2/authorize', 'https://x.com')
   url.searchParams.set('response_type', 'code')
   url.searchParams.set('client_id', env.TWITTER_OAUTH_CLIENT_ID)
   url.searchParams.set('redirect_uri', input.redirectUri)
@@ -232,7 +243,7 @@ export async function completeOAuthLinkChallenge(
       redirect_uri: input.redirectUri,
     }),
     headers: {
-      authorization: `Basic ${btoa(`${oauthEncode(env.TWITTER_OAUTH_CLIENT_ID)}:${oauthEncode(env.TWITTER_OAUTH_CLIENT_SECRET)}`)}`,
+      authorization: `Basic ${btoa(`${env.TWITTER_OAUTH_CLIENT_ID}:${env.TWITTER_OAUTH_CLIENT_SECRET}`)}`,
       'content-type': 'application/x-www-form-urlencoded',
     },
     method: 'POST',
@@ -299,7 +310,10 @@ export async function createProof(
     rootAddress: input.address,
     tokenAddress: getTwitterDefaultTokenAddress(workspace),
   })
-  if (!Address.isEqual(verified.rootAddress, challenge.wallet_address as Address.Address))
+  if (
+    challenge.wallet_address !== unboundWalletAddress &&
+    !Address.isEqual(verified.rootAddress, challenge.wallet_address as Address.Address)
+  )
     throw new Error('Wallet does not match this Twitter connection proof.')
 
   const proof = `tb1_${Nanoid.generate()}${Nanoid.generate()}`
@@ -309,6 +323,7 @@ export async function createProof(
       access_key_authorization: verified.serialized,
       proof_hash: await AccountLink.hashToken(env, proof),
       updated_at: new Date().toISOString(),
+      wallet_address: verified.rootAddress,
     })
     .where('id', '=', challenge.id)
     .execute()
