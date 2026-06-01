@@ -51,6 +51,14 @@ export function formatTxLink(chainId: number, transactionHash: string) {
   return `${chain.blockExplorers?.default.url ?? chain.rpcUrls.default.http[0]}/receipt/${transactionHash}`
 }
 
+export function formatReceiptPath(transactionHash: string) {
+  return `/r/${transactionHash}`
+}
+
+export function formatReceiptLink(env: Pick<Env, 'HOST'>, transactionHash: string) {
+  return `https://${env.HOST}${formatReceiptPath(transactionHash)}`
+}
+
 export function explorerLink(chainId: number, address: string) {
   const chain = getChain(chainId)
   return `${chain.blockExplorers?.default.url ?? chain.rpcUrls.default.http[0]}/address/${address}`

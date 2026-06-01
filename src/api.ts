@@ -671,7 +671,7 @@ export const api = new Hono<{
                 url.searchParams.set('message', receipt.message_ts)
                 return ` <${url}|this message>`
               })()
-              const receiptLink = `<${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`
+              const receiptLink = `<${Tempo.formatReceiptLink(c.env, result.transactionHash)}|Receipt>`
               const text = `<@${result.senderProviderUserId}> boosted${originalReceiptLink} · ${receiptLink}`
               const body = new URLSearchParams()
               body.set(
@@ -764,7 +764,7 @@ export const api = new Hono<{
                     ].join('\n')}`
                   : `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} <@${result.recipientProviderUserId}> ${amount}${result.memo ? ` for ${result.memo}` : ''}.`
               const receiptText = text.replace(/\.$/, '')
-              const receiptLink = `<${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`
+              const receiptLink = `<${Tempo.formatReceiptLink(c.env, result.transactionHash)}|Receipt>`
               const receiptMessage = (() => {
                 const lineBreakIndex = receiptText.indexOf('\n')
                 if (lineBreakIndex === -1) return `${receiptText} · ${receiptLink}`

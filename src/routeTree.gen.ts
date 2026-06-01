@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as RHashRouteImport } from './routes/r/$hash'
 import { Route as LinkXRouteImport } from './routes/link/x'
 import { Route as InstallSlackRouteImport } from './routes/install/slack'
 import { Route as ConnectTokenRouteImport } from './routes/connect/$token'
@@ -18,6 +19,11 @@ import { Route as ConfirmTokenRouteImport } from './routes/confirm/$token'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RHashRoute = RHashRouteImport.update({
+  id: '/r/$hash',
+  path: '/r/$hash',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LinkXRoute = LinkXRouteImport.update({
@@ -47,6 +53,7 @@ export interface FileRoutesByFullPath {
   '/connect/$token': typeof ConnectTokenRoute
   '/install/slack': typeof InstallSlackRoute
   '/link/x': typeof LinkXRoute
+  '/r/$hash': typeof RHashRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -54,6 +61,7 @@ export interface FileRoutesByTo {
   '/connect/$token': typeof ConnectTokenRoute
   '/install/slack': typeof InstallSlackRoute
   '/link/x': typeof LinkXRoute
+  '/r/$hash': typeof RHashRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -62,6 +70,7 @@ export interface FileRoutesById {
   '/connect/$token': typeof ConnectTokenRoute
   '/install/slack': typeof InstallSlackRoute
   '/link/x': typeof LinkXRoute
+  '/r/$hash': typeof RHashRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -71,8 +80,15 @@ export interface FileRouteTypes {
     | '/connect/$token'
     | '/install/slack'
     | '/link/x'
+    | '/r/$hash'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/confirm/$token' | '/connect/$token' | '/install/slack' | '/link/x'
+  to:
+    | '/'
+    | '/confirm/$token'
+    | '/connect/$token'
+    | '/install/slack'
+    | '/link/x'
+    | '/r/$hash'
   id:
     | '__root__'
     | '/'
@@ -80,6 +96,7 @@ export interface FileRouteTypes {
     | '/connect/$token'
     | '/install/slack'
     | '/link/x'
+    | '/r/$hash'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -88,6 +105,7 @@ export interface RootRouteChildren {
   ConnectTokenRoute: typeof ConnectTokenRoute
   InstallSlackRoute: typeof InstallSlackRoute
   LinkXRoute: typeof LinkXRoute
+  RHashRoute: typeof RHashRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -97,6 +115,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/r/$hash': {
+      id: '/r/$hash'
+      path: '/r/$hash'
+      fullPath: '/r/$hash'
+      preLoaderRoute: typeof RHashRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/link/x': {
@@ -136,6 +161,7 @@ const rootRouteChildren: RootRouteChildren = {
   ConnectTokenRoute: ConnectTokenRoute,
   InstallSlackRoute: InstallSlackRoute,
   LinkXRoute: LinkXRoute,
+  RHashRoute: RHashRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

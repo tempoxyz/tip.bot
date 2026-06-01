@@ -229,6 +229,7 @@ export async function handleTweet(env: Env, input: TwitterTweetInput) {
         chainId: result.chainId,
         memo: result.memo,
         recipientHandle: parsed.recipientHandle,
+        receiptUrl: Tempo.formatReceiptLink(env, result.transactionHash),
         senderHandle: input.authorHandle,
         transactionHash: result.transactionHash,
       }),
@@ -318,6 +319,7 @@ export async function updatePendingTipMessage(env: Env, result: Tip.PendingTipCl
         chainId: result.chainId,
         memo: result.memo,
         recipientHandle,
+        receiptUrl: Tempo.formatReceiptLink(env, result.transactionHash),
         senderHandle,
         transactionHash: result.transactionHash,
       })
@@ -336,10 +338,13 @@ export function formatTwitterReceiptText(input: {
   chainId: number
   memo: string | null | undefined
   recipientHandle: string | undefined
+  receiptUrl: string
   senderHandle: string | undefined
   transactionHash: string
 }) {
-  return `${formatHandle(input.senderHandle)} ${input.memo ? 'sent' : 'tipped'} ${formatHandle(input.recipientHandle)} ${input.amount}${input.memo ? ` for ${input.memo}` : ''}\nReceipt: ${Tempo.formatTxLink(input.chainId, input.transactionHash)}`
+  void input.chainId
+  void input.transactionHash
+  return `${formatHandle(input.senderHandle)} ${input.memo ? 'sent' : 'tipped'} ${formatHandle(input.recipientHandle)} ${input.amount}${input.memo ? ` for ${input.memo}` : ''}\nReceipt: ${input.receiptUrl}`
 }
 
 export function parseWebhookTweets(body: unknown): TwitterTweetInput[] {

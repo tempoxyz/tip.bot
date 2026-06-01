@@ -113,11 +113,12 @@ test('formats Twitter receipt reply like Slack without sentence-ending period', 
       chainId: Tempo.chainLookup.testnet,
       memo: 'coffee',
       recipientHandle: 'alice',
+      receiptUrl: Tempo.formatReceiptLink({ HOST: 'tip.bot' }, transactionHash),
       senderHandle: '@bob',
       transactionHash,
     }),
   ).toBe(
-    `@bob sent @alice $1 for coffee\nReceipt: ${Tempo.formatTxLink(Tempo.chainLookup.testnet, transactionHash)}`,
+    `@bob sent @alice $1 for coffee\nReceipt: ${Tempo.formatReceiptLink({ HOST: 'tip.bot' }, transactionHash)}`,
   )
   expect(
     formatTwitterReceiptText({
@@ -125,10 +126,11 @@ test('formats Twitter receipt reply like Slack without sentence-ending period', 
       chainId: Tempo.chainLookup.testnet,
       memo: null,
       recipientHandle: 'alice',
+      receiptUrl: Tempo.formatReceiptLink({ HOST: 'tip.bot' }, transactionHash),
       senderHandle: '@bob',
       transactionHash,
     }),
   ).toBe(
-    `@bob tipped @alice $1\nReceipt: ${Tempo.formatTxLink(Tempo.chainLookup.testnet, transactionHash)}`,
+    `@bob tipped @alice $1\nReceipt: ${Tempo.formatReceiptLink({ HOST: 'tip.bot' }, transactionHash)}`,
   )
 })

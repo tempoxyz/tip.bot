@@ -790,7 +790,7 @@ async function buildHomeView(input: {
         : ''
       const status = row.failed_at ? ' · failed' : row.confirmed_at ? '' : ' · pending'
       const receipt = row.transaction_hash
-        ? ` · <${Tempo.formatTxLink(row.chain_id, row.transaction_hash)}|receipt>`
+        ? ` · <${Tempo.formatReceiptLink(input.env, row.transaction_hash)}|receipt>`
         : ''
       const timestamp = (() => {
         // Render compact relative timestamps for the activity list.

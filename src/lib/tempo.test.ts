@@ -76,4 +76,6 @@ test('formats Tempo token symbols and transaction links', () => {
     `/address/${Tempo.addressLookup.pathUsd}`,
   )
   expect(Tempo.formatTxLink(Tempo.chainLookup.testnet, '0xabc')).toContain('/receipt/0xabc')
+  expect(Tempo.formatReceiptPath('0xabc')).toBe('/r/0xabc')
+  expect(Tempo.formatReceiptLink({ HOST: 'tip.bot' }, '0xabc')).toBe('https://tip.bot/r/0xabc')
 })

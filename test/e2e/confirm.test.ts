@@ -171,7 +171,7 @@ test('slack member confirms payment with wallet approval', async ({ app, page })
   await expect(page.getByRole('heading', { name: 'Payment sent' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'View receipt' })).toHaveAttribute(
     'href',
-    Tempo.formatTxLink(Tempo.chainLookup.localnet, `0x${'1'.repeat(64)}`),
+    Tempo.formatReceiptPath(`0x${'1'.repeat(64)}`),
   )
   await expect(page.getByText('You can close this tab and return to Slack.')).toBeVisible()
 })
@@ -281,7 +281,7 @@ test('slack member confirms one-time payment with wallet signature', async ({
   await expect(page.getByRole('heading', { name: 'Payment sent' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'View receipt' })).toHaveAttribute(
     'href',
-    Tempo.formatTxLink(Tempo.chainLookup.testnet, `0x${'2'.repeat(64)}`),
+    Tempo.formatReceiptPath(`0x${'2'.repeat(64)}`),
   )
 })
 
@@ -430,7 +430,7 @@ test('slack member confirms receipt boost with wallet signature', async ({
   await expect(page.getByRole('heading', { name: 'Payment sent' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'View receipt' })).toHaveAttribute(
     'href',
-    Tempo.formatTxLink(Tempo.chainLookup.testnet, `0x${'4'.repeat(64)}`),
+    Tempo.formatReceiptPath(`0x${'4'.repeat(64)}`),
   )
 })
 
@@ -533,7 +533,7 @@ test('slack member confirms multi-recipient one-time payment with wallet signatu
   await expect(page.getByRole('heading', { name: 'Payment sent' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'View receipt' })).toHaveAttribute(
     'href',
-    Tempo.formatTxLink(Tempo.chainLookup.testnet, `0x${'3'.repeat(64)}`),
+    Tempo.formatReceiptPath(`0x${'3'.repeat(64)}`),
   )
 })
 

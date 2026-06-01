@@ -181,9 +181,8 @@ function ConfirmPanel(props: {
             {transactionHash ? (
               <a
                 className="inline-flex text-base font-bold text-blue9 no-underline hover:underline"
-                href={Tempo.formatTxLink(data.chainId, transactionHash)}
+                href={Tempo.formatReceiptPath(transactionHash)}
                 rel="noreferrer"
-                target="_blank"
               >
                 View receipt
               </a>

@@ -2190,7 +2190,7 @@ async function handleSlackReactionTip(event: Slack.ReactionEvent, context: React
       )
         return null
       const transactionHash = JSON.stringify(message ?? {}).match(
-        /\/receipt\/(0x[0-9a-fA-F]{64})/,
+        /\/(?:receipt|r)\/(0x[0-9a-fA-F]{64})/,
       )?.[1]
       if (!transactionHash) return null
       const batch = await db
@@ -3008,7 +3008,7 @@ export async function updateReceiptBoostAggregate(
       )
         return groups
       const group = groups.find((group) => group.messageTs === messageTs)
-      const line = `• <@${row.sender_provider_user_id}> boosted · <${Tempo.formatTxLink(row.chain_id, row.transaction_hash)}|Receipt>`
+      const line = `• <@${row.sender_provider_user_id}> boosted · <${Tempo.formatReceiptLink(env, row.transaction_hash)}|Receipt>`
       if (group) {
         group.lines.push(line)
         return groups
@@ -4173,7 +4173,7 @@ async function reactionTipAggregateText(
         createdAt: row.created_at,
         messageTs: row.message_ts,
         recipientProviderUserId: row.recipient_provider_user_id,
-        text: `• :${row.reaction}: <@${row.sender_provider_user_id}> tipped ${displayAmount} · <${Tempo.formatTxLink(row.chain_id, row.transaction_hash!)}|Receipt>`,
+        text: `• :${row.reaction}: <@${row.sender_provider_user_id}> tipped ${displayAmount} · <${Tempo.formatReceiptLink(env, row.transaction_hash!)}|Receipt>`,
       }
     }),
   )
@@ -4223,7 +4223,7 @@ async function reactionTipAggregateText(
         createdAt: row.created_at,
         messageTs: reactionTip.messageTs,
         recipientProviderUserId: row.recipient_provider_user_id,
-        text: `• :${reactionTip.reaction}: <@${row.sender_provider_user_id}> tipped ${displayAmount} · <${Tempo.formatTxLink(row.chain_id, row.transaction_hash!)}|Receipt>`,
+        text: `• :${reactionTip.reaction}: <@${row.sender_provider_user_id}> tipped ${displayAmount} · <${Tempo.formatReceiptLink(env, row.transaction_hash!)}|Receipt>`,
       }
     }),
   )
@@ -4273,7 +4273,7 @@ async function postSlackReceiptMessage(
   event: TipEvent,
   ctx: HandlerContext,
   text: string,
-  chainId: number,
+  _chainId: number,
   transactionHash: string,
   user?: chat.Author,
   context?: string,
@@ -4288,7 +4288,7 @@ async function postSlackReceiptMessage(
     'blocks',
     JSON.stringify(
       (() => {
-        const receiptLink = `<${Tempo.formatTxLink(chainId, transactionHash)}|Receipt>`
+        const receiptLink = `<${Tempo.formatReceiptLink(env, transactionHash)}|Receipt>`
         return [
           {
             text: {
@@ -4424,7 +4424,7 @@ export async function updateSlackPendingTipMessage(db: DB.Type, result: Tip.Pend
       ? `Expired before <@${result.pendingTip.recipient_provider_user_id}> connected. No payment was sent`
       : 'Could not be sent. No payment was sent'
   const receiptLink = result.ok
-    ? `<${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`
+    ? `<${Tempo.formatReceiptLink(env, result.transactionHash)}|Receipt>`
     : undefined
   const blocks = [
     {
