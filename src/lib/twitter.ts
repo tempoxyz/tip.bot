@@ -12,6 +12,7 @@ import { z } from 'zod'
 export const twitterProviderId = 'x'
 const twitterDefaultTokenAddress = Address.checksum(Tempo.addressLookup.usdcE)
 const twitterStorageProvider = 'slack'
+const twitterMaxTipRecipients = 10
 const unboundWalletAddress = Address.checksum('0x0000000000000000000000000000000000000000')
 
 export async function createLinkChallenge(
@@ -418,30 +419,50 @@ export async function handleTweet(env: Env, input: TwitterTweetInput) {
     return
   }
 
-  if (parsed.code === 'multiple_recipients') {
-    console.log('Twitter webhook rejected multiple recipients', { tweetId: input.id })
+  if (parsed.code === 'too_many_recipients') {
+    console.log('Twitter webhook rejected too many recipients', { tweetId: input.id })
     await postReply(
       env,
       input.id,
-      'Payment not sent. Multi-recipient tips are not supported on X yet; mention one recipient.',
+      `Payment not sent. X tips support up to ${twitterMaxTipRecipients} recipients.`,
     )
     return
   }
 
-  const result = await Tip.handleTipRequest(env, {
+  const tipInput = {
     amount: parsed.amount,
-    idempotencyKey: `twitter:${input.id}`,
     memo: parsed.memo,
     provider: twitterStorageProvider,
     providerChannelId: input.conversationId ?? input.id,
     providerId: twitterProviderId,
     providerThreadId: input.id,
-    recipientProviderLabel: parsed.recipientHandle,
-    recipientProviderUserId: parsed.recipientUserId,
     senderProviderUserId: input.authorId,
-    source: 'mention',
+    source: 'mention' as const,
     tokenAddress: parsed.tokenAddress ?? undefined,
     workspaceProviderId: twitterProviderId,
+  } satisfies {
+    amount: number | undefined
+    memo: string | null
+    provider: typeof twitterStorageProvider
+    providerChannelId: string
+    providerId: typeof twitterProviderId
+    providerThreadId: string
+    senderProviderUserId: string
+    source: 'mention'
+    tokenAddress: string | undefined
+    workspaceProviderId: typeof twitterProviderId
+  }
+  if (parsed.recipients.length > 1) {
+    await handleTwitterBatchTip(env, input, parsed, tipInput)
+    return
+  }
+
+  const recipient = parsed.recipients[0]!
+  const result = await Tip.handleTipRequest(env, {
+    ...tipInput,
+    idempotencyKey: `twitter:${input.id}`,
+    recipientProviderLabel: recipient.recipientProviderLabel,
+    recipientProviderUserId: recipient.recipientProviderUserId,
   })
 
   if (result.ok && result.status === 'queued') {
@@ -452,7 +473,7 @@ export async function handleTweet(env: Env, input: TwitterTweetInput) {
     await postReply(
       env,
       input.id,
-      `${formatHandle(input.authorHandle)} queued ${formatHandle(parsed.recipientHandle)} ${formatTwitterAmount(result)}${result.memo ? ` for ${result.memo}` : ''}\nConnect to Tipbot to receive it: https://tip.bot/link/x`,
+      `${formatHandle(input.authorHandle)} queued ${formatHandle(recipient.recipientProviderLabel)} ${formatTwitterAmount(result)}${result.memo ? ` for ${result.memo}` : ''}\nConnect to Tipbot to receive it: https://tip.bot/link/x`,
     )
     await Tip.recordPendingTipMessage(env, {
       pendingTipId: result.pendingTipId,
@@ -472,7 +493,7 @@ export async function handleTweet(env: Env, input: TwitterTweetInput) {
         amount: formatTwitterAmount(result),
         chainId: result.chainId,
         memo: result.memo,
-        recipientHandle: parsed.recipientHandle,
+        recipientHandle: recipient.recipientProviderLabel,
         senderHandle: input.authorHandle,
         transactionHash: result.transactionHash,
       }),
@@ -517,6 +538,146 @@ export async function handleTweet(env: Env, input: TwitterTweetInput) {
     tweetId: input.id,
   })
   await postReply(env, input.id, 'Payment failed.')
+}
+
+async function handleTwitterBatchTip(
+  env: Env,
+  tweet: TwitterTweetInput,
+  parsed: Extract<Awaited<ReturnType<typeof parseTwitterTip>>, { ok: true }>,
+  tipInput: {
+    amount: number | undefined
+    memo: string | null
+    provider: typeof twitterStorageProvider
+    providerChannelId: string
+    providerId: typeof twitterProviderId
+    providerThreadId: string
+    senderProviderUserId: string
+    source: 'mention'
+    tokenAddress: string | undefined
+    workspaceProviderId: typeof twitterProviderId
+  },
+) {
+  if (parsed.recipients.some((recipient) => recipient.recipientProviderUserId === tweet.authorId)) {
+    console.log('Twitter webhook rejected self tip', { tweetId: tweet.id })
+    await postReply(env, tweet.id, 'Payment not sent. Cannot send a payment to yourself.')
+    return
+  }
+
+  const recipientPlan = await resolveTwitterTipRecipients(env, parsed.recipients)
+  const sentRecipients = [] as Tip.TipRecipientInput[]
+  const queuedRecipients = [] as Tip.TipRecipientInput[]
+  let amount = ''
+  let chainId: number | undefined
+  let memo = parsed.memo
+  let transactionHash: string | undefined
+
+  if (recipientPlan.connected.length) {
+    const result = await Tip.handleTipBatchRequest(env, {
+      ...tipInput,
+      idempotencyKey: `twitter:${tweet.id}`,
+      recipients: recipientPlan.connected,
+      skippedRecipients: recipientPlan.unconnected.map((recipient) => ({
+        reason: 'not_connected' as const,
+        recipientProviderLabel: recipient.recipientProviderLabel,
+        recipientProviderUserId: recipient.recipientProviderUserId,
+      })),
+    })
+    if (!result.ok) {
+      await handleTwitterTipFailure(env, tweet, result)
+      return
+    }
+    sentRecipients.push(...recipientPlan.connected)
+    amount = formatTwitterAmount(result)
+    chainId = result.chainId
+    memo = result.memo
+    transactionHash = result.transactionHash
+  }
+
+  for (const recipient of recipientPlan.unconnected) {
+    const result = await Tip.handleTipRequest(env, {
+      ...tipInput,
+      idempotencyKey: `twitter:${tweet.id}:${recipient.recipientProviderUserId}`,
+      recipientProviderLabel: recipient.recipientProviderLabel,
+      recipientProviderUserId: recipient.recipientProviderUserId,
+    })
+    if (!result.ok) {
+      await handleTwitterTipFailure(env, tweet, result)
+      return
+    }
+    if (result.status !== 'queued') continue
+    queuedRecipients.push(recipient)
+    amount ||= formatTwitterAmount(result)
+    memo = result.memo
+    await Tip.recordPendingTipMessage(env, {
+      pendingTipId: result.pendingTipId,
+      providerMessageTs: '',
+    })
+  }
+
+  if (!sentRecipients.length && !queuedRecipients.length) {
+    await postReply(env, tweet.id, 'Payment already sent.')
+    return
+  }
+  console.log('Twitter webhook processed multi-tip', {
+    queuedCount: queuedRecipients.length,
+    sentCount: sentRecipients.length,
+    tweetId: tweet.id,
+  })
+  await postReply(
+    env,
+    tweet.id,
+    formatTwitterBatchReceiptText({
+      amount,
+      chainId,
+      memo,
+      queuedRecipients,
+      senderHandle: tweet.authorHandle,
+      sentRecipients,
+      transactionHash,
+    }),
+  )
+}
+
+async function handleTwitterTipFailure(
+  env: Env,
+  tweet: TwitterTweetInput,
+  result: Extract<Tip.TipResult | Tip.TipBatchResult, { ok: false }>,
+) {
+  if (result.code === 'sender_unconnected') {
+    console.log('Twitter webhook rejected unconnected sender', { tweetId: tweet.id })
+    await postReply(env, tweet.id, 'Connect to Tipbot to send payments: https://tip.bot/link/x')
+    return
+  }
+  if (result.code === 'confirmation_required' && result.confirmUrl) {
+    console.log('Twitter webhook requested confirmation', { tweetId: tweet.id })
+    await postReply(
+      env,
+      tweet.id,
+      `Tipbot needs your approval to send this payment. Confirm payment: ${result.confirmUrl}`,
+    )
+    return
+  }
+  if (result.code === 'insufficient_funds') {
+    console.log('Twitter webhook rejected insufficient funds', { tweetId: tweet.id })
+    await postReply(
+      env,
+      tweet.id,
+      'Payment not sent. Your wallet has insufficient funds. Add funds and try again: https://wallet.tempo.xyz',
+    )
+    return
+  }
+  if (result.code === 'self_tip') {
+    console.log('Twitter webhook rejected self tip', { tweetId: tweet.id })
+    await postReply(env, tweet.id, 'Payment not sent. Cannot send a payment to yourself.')
+    return
+  }
+  if (result.code === 'pending') {
+    console.log('Twitter webhook payment still sending', { tweetId: tweet.id })
+    await postReply(env, tweet.id, 'Payment still sending.')
+    return
+  }
+  console.log('Twitter webhook failed tip', { code: result.code, tweetId: tweet.id })
+  await postReply(env, tweet.id, result.message ?? 'Payment failed.')
 }
 
 export async function handleWebhook(env: Env, body: unknown) {
@@ -584,6 +745,34 @@ export function formatTwitterReceiptText(input: {
   transactionHash: string
 }) {
   return `${formatHandle(input.senderHandle)} ${input.memo ? 'sent' : 'tipped'} ${formatHandle(input.recipientHandle)} ${input.amount}${input.memo ? ` for ${input.memo}` : ''}\nReceipt: ${Tempo.formatTxLink(input.chainId, input.transactionHash)}`
+}
+
+export function formatTwitterBatchReceiptText(input: {
+  amount: string
+  chainId: number | undefined
+  memo: string | null | undefined
+  queuedRecipients: Tip.TipRecipientInput[]
+  senderHandle: string | undefined
+  sentRecipients: Tip.TipRecipientInput[]
+  transactionHash: string | undefined
+}) {
+  const summary = (() => {
+    if (input.sentRecipients.length && input.queuedRecipients.length)
+      return `sent ${formatTwitterRecipientSummary(input.sentRecipients)} and queued ${formatTwitterRecipientSummary(input.queuedRecipients)}`
+    if (input.sentRecipients.length)
+      return `sent ${formatTwitterRecipientSummary(input.sentRecipients)}`
+    return `queued ${formatTwitterRecipientSummary(input.queuedRecipients)}`
+  })()
+  return [
+    `${formatHandle(input.senderHandle)} ${summary} ${input.amount} each${input.memo ? ` for ${input.memo}` : ''}`,
+    '',
+    'Recipients:',
+    ...formatTwitterRecipientLines(input.sentRecipients, input.queuedRecipients),
+    ...(input.transactionHash && input.chainId
+      ? ['', `Receipt: ${Tempo.formatTxLink(input.chainId, input.transactionHash)}`]
+      : []),
+    ...(input.queuedRecipients.length ? ['Connect to claim: https://tip.bot/link/x'] : []),
+  ].join('\n')
 }
 
 export function parseWebhookTweets(body: unknown): TwitterTweetInput[] {
@@ -819,29 +1008,36 @@ async function parseTwitterTip(env: Env, input: TwitterTweetInput) {
     .map((match) => match[2]!)
     .filter((handle) => handle.toLowerCase() !== botHandle.toLowerCase())
   const uniqueHandles = [...new Set(handles.map((handle) => handle.toLowerCase()))]
-  if (uniqueHandles.length > 1) return { code: 'multiple_recipients' as const }
+  if (uniqueHandles.length > twitterMaxTipRecipients)
+    return { code: 'too_many_recipients' as const }
 
-  const explicitHandle = uniqueHandles[0]
-  const recipient = explicitHandle
-    ? await getUserByUsername(env, explicitHandle)
-    : input.replyToAuthorId
-      ? { id: input.replyToAuthorId, username: undefined }
-      : null
-  if (!recipient) return null
+  const recipients = await (async () => {
+    if (!uniqueHandles.length && input.replyToAuthorId)
+      return [{ id: input.replyToAuthorId, username: undefined }]
+    const resolved = [] as Array<{ id: string; username: string | undefined }>
+    for (const handle of uniqueHandles) {
+      const account = await getUserByUsername(env, handle)
+      if (!account) return null
+      resolved.push({ id: account.id, username: account.username })
+    }
+    return resolved
+  })()
+  if (!recipients?.length) return null
 
-  const remaining = input.text
-    .replace(new RegExp(`(^|[^\\p{L}\\p{N}_])@${escapeRegex(botHandle)}\\b`, 'giu'), '$1')
-    .replace(
-      explicitHandle
-        ? new RegExp(`(^|[^\\p{L}\\p{N}_])@${escapeRegex(explicitHandle)}\\b`, 'giu')
-        : /$a/,
+  let remaining = input.text.replace(
+    new RegExp(`(^|[^\\p{L}\\p{N}_])@${escapeRegex(botHandle)}\\b`, 'giu'),
+    '$1',
+  )
+  for (const handle of uniqueHandles)
+    remaining = remaining.replace(
+      new RegExp(`(^|[^\\p{L}\\p{N}_])@${escapeRegex(handle)}\\b`, 'giu'),
       '$1',
     )
-    .trim()
-  if (!explicitHandle && !remaining) return null
+  remaining = remaining.trim()
+  if (!uniqueHandles.length && !remaining) return null
 
-  const parsed = Tip.parseTipText(
-    `<@${recipient.id}${recipient.username ? `|@${recipient.username}` : ''}> ${remaining}`,
+  const parsed = Tip.parseTipBatchText(
+    `${recipients.map((recipient) => `<@${recipient.id}${recipient.username ? `|@${recipient.username}` : ''}>`).join(' ')} ${remaining}`,
   )
   if (!parsed) return null
   let tokenAddress = null
@@ -854,9 +1050,34 @@ async function parseTwitterTip(env: Env, input: TwitterTweetInput) {
   return {
     amount: parsed.amount,
     memo: parsed.memo,
-    recipientHandle: recipient.username ?? explicitHandle,
-    recipientUserId: recipient.id,
+    ok: true as const,
+    recipients: parsed.recipients,
     tokenAddress,
+  }
+}
+
+async function resolveTwitterTipRecipients(env: Env, recipients: Tip.TipRecipientInput[]) {
+  const workspace = await ensureTwitterWorkspace(DB.create(env.DB), new Date().toISOString())
+  const connectedRows = await DB.create(env.DB)
+    .selectFrom('member')
+    .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+    .select('member.provider_user_id')
+    .where('member.workspace_id', '=', workspace.id)
+    .where(
+      'member.provider_user_id',
+      'in',
+      recipients.map((recipient) => recipient.recipientProviderUserId),
+    )
+    .where('provider_identity.account_id', 'is not', null)
+    .execute()
+  const connectedIds = new Set(connectedRows.map((row) => row.provider_user_id))
+  return {
+    connected: recipients.filter((recipient) =>
+      connectedIds.has(recipient.recipientProviderUserId),
+    ),
+    unconnected: recipients.filter(
+      (recipient) => !connectedIds.has(recipient.recipientProviderUserId),
+    ),
   }
 }
 
@@ -1135,6 +1356,33 @@ function formatTwitterAmount(input: {
 function formatHandle(value: string | undefined) {
   if (!value) return '@account'
   return `@${value.replace(/^@+/, '')}`
+}
+
+function formatTwitterRecipientLines(
+  sentRecipients: Tip.TipRecipientInput[],
+  queuedRecipients: Tip.TipRecipientInput[],
+) {
+  const recipients = [
+    ...sentRecipients.map((recipient) => ({ connected: true, recipient })),
+    ...queuedRecipients.map((recipient) => ({ connected: false, recipient })),
+  ]
+  const lines = recipients
+    .slice(0, 10)
+    .map(
+      (item) =>
+        `• ${formatHandle(item.recipient.recipientProviderLabel)}${item.connected ? '' : ' (not connected yet)'}`,
+    )
+  if (recipients.length > lines.length) lines.push(`• +${recipients.length - lines.length} others`)
+  return lines
+}
+
+function formatTwitterRecipientSummary(recipients: Tip.TipRecipientInput[]) {
+  const handles = recipients
+    .slice(0, 5)
+    .map((recipient) => formatHandle(recipient.recipientProviderLabel))
+  if (recipients.length > handles.length)
+    handles.push(`+ ${recipients.length - handles.length} others`)
+  return handles.join(' ')
 }
 
 function getTwitterDisplayText(text: string, range: [number, number] | undefined) {

@@ -202,6 +202,216 @@ describe('/api/chat/twitter', () => {
     })
   }, 20_000) // 20 seconds
 
+  test('Twitter webhook sends multi-tip for connected X accounts', async () => {
+    const senderProviderUserId = twitterProviderUserId()
+    const aliceProviderUserId = twitterProviderUserId()
+    const carolProviderUserId = twitterProviderUserId()
+    const tweetId = `tweet-${Nanoid.generate()}`
+    const posts: Array<{ body: unknown }> = []
+    const connected = await connectTwitterTipAccounts({
+      recipientProviderUserId: aliceProviderUserId,
+      senderProviderUserId,
+    })
+    await linkTwitterAccount({
+      handle: 'carol',
+      providerUserId: carolProviderUserId,
+      root: Account.fromSecp256k1(Secp256k1.randomPrivateKey()),
+      workspaceId: connected.workspace.id,
+    })
+    server.use(
+      mswHttp.get('https://api.twitter.com/2/users/by/username/alice', () =>
+        HttpResponse.json({ data: { id: aliceProviderUserId, username: 'alice' } }),
+      ),
+      mswHttp.get('https://api.twitter.com/2/users/by/username/carol', () =>
+        HttpResponse.json({ data: { id: carolProviderUserId, username: 'carol' } }),
+      ),
+      mswHttp.post('https://api.twitter.com/2/tweets', async ({ request }) => {
+        posts.push({ body: await request.json() })
+        return HttpResponse.json({ data: { id: `reply-${Nanoid.generate()}`, text: 'ok' } })
+      }),
+    )
+
+    const response = await postTwitterWebhook({
+      authorHandle: 'bob',
+      authorId: senderProviderUserId,
+      id: tweetId,
+      text: '@tipbotgg @alice @carol $0.001 for coffee',
+    })
+    const batch = await db
+      .selectFrom('tip_batch')
+      .selectAll()
+      .where('idempotency_key', '=', `twitter:${tweetId}`)
+      .executeTakeFirstOrThrow()
+    const tips = await db.selectFrom('tip').selectAll().where('batch_id', '=', batch.id).execute()
+
+    expect(response.status).toBe(200)
+    expect(batch).toMatchObject({ amount_each: 1000, recipient_count: 2, status: 'confirmed' })
+    expect(tips).toHaveLength(2)
+    expect(posts).toHaveLength(1)
+    expect(posts[0]?.body).toMatchObject({
+      reply: { in_reply_to_tweet_id: tweetId },
+      text: expect.stringContaining('@bob sent @alice @carol $0.001 each for coffee'),
+    })
+    expect((posts[0]?.body as { text: string } | undefined)?.text).toContain(
+      'Recipients:\n• @alice\n• @carol',
+    )
+    expect((posts[0]?.body as { text: string } | undefined)?.text).toContain('Receipt:')
+  }, 20_000) // 20 seconds
+
+  test('Twitter webhook sends connected tips and queues unconnected multi-tip recipients', async () => {
+    const senderProviderUserId = twitterProviderUserId()
+    const aliceProviderUserId = twitterProviderUserId()
+    const carolProviderUserId = twitterProviderUserId()
+    const tweetId = `tweet-${Nanoid.generate()}`
+    const posts: Array<{ body: unknown }> = []
+    const connected = await connectTwitterTipAccounts({
+      recipientProviderUserId: aliceProviderUserId,
+      senderProviderUserId,
+    })
+    server.use(
+      mswHttp.get('https://api.twitter.com/2/users/by/username/alice', () =>
+        HttpResponse.json({ data: { id: aliceProviderUserId, username: 'alice' } }),
+      ),
+      mswHttp.get('https://api.twitter.com/2/users/by/username/carol', () =>
+        HttpResponse.json({ data: { id: carolProviderUserId, username: 'carol' } }),
+      ),
+      mswHttp.post('https://api.twitter.com/2/tweets', async ({ request }) => {
+        posts.push({ body: await request.json() })
+        return HttpResponse.json({ data: { id: `reply-${Nanoid.generate()}`, text: 'ok' } })
+      }),
+    )
+
+    const response = await postTwitterWebhook({
+      authorHandle: 'bob',
+      authorId: senderProviderUserId,
+      id: tweetId,
+      text: '@tipbotgg @alice @carol $0.001 for coffee',
+    })
+    const batch = await db
+      .selectFrom('tip_batch')
+      .selectAll()
+      .where('idempotency_key', '=', `twitter:${tweetId}`)
+      .executeTakeFirstOrThrow()
+    const pending = await db
+      .selectFrom('pending_tip')
+      .selectAll()
+      .where('idempotency_key', '=', `twitter:${tweetId}:${carolProviderUserId}`)
+      .executeTakeFirstOrThrow()
+
+    expect(response.status).toBe(200)
+    expect(batch).toMatchObject({ amount_each: 1000, recipient_count: 1, status: 'confirmed' })
+    expect(pending).toMatchObject({
+      amount: 1000,
+      memo: 'coffee',
+      recipient_provider_user_id: carolProviderUserId,
+      sender_member_id: connected.senderMember.id,
+      status: 'pending',
+    })
+    expect(posts).toHaveLength(1)
+    expect(posts[0]?.body).toMatchObject({
+      reply: { in_reply_to_tweet_id: tweetId },
+      text: expect.stringContaining('@bob sent @alice and queued @carol $0.001 each for coffee'),
+    })
+    expect((posts[0]?.body as { text: string } | undefined)?.text).toContain(
+      'Recipients:\n• @alice\n• @carol (not connected yet)',
+    )
+    expect((posts[0]?.body as { text: string } | undefined)?.text).toContain(
+      'Connect to claim: https://tip.bot/link/x',
+    )
+  }, 20_000) // 20 seconds
+
+  test('Twitter webhook deduplicates duplicate multi-tip handles', async () => {
+    const senderProviderUserId = twitterProviderUserId()
+    const aliceProviderUserId = twitterProviderUserId()
+    const carolProviderUserId = twitterProviderUserId()
+    const tweetId = `tweet-${Nanoid.generate()}`
+    const posts: Array<{ body: unknown }> = []
+    const connected = await connectTwitterTipAccounts({
+      recipientProviderUserId: aliceProviderUserId,
+      senderProviderUserId,
+    })
+    await linkTwitterAccount({
+      handle: 'carol',
+      providerUserId: carolProviderUserId,
+      root: Account.fromSecp256k1(Secp256k1.randomPrivateKey()),
+      workspaceId: connected.workspace.id,
+    })
+    server.use(
+      mswHttp.get('https://api.twitter.com/2/users/by/username/alice', () =>
+        HttpResponse.json({ data: { id: aliceProviderUserId, username: 'alice' } }),
+      ),
+      mswHttp.get('https://api.twitter.com/2/users/by/username/carol', () =>
+        HttpResponse.json({ data: { id: carolProviderUserId, username: 'carol' } }),
+      ),
+      mswHttp.post('https://api.twitter.com/2/tweets', async ({ request }) => {
+        posts.push({ body: await request.json() })
+        return HttpResponse.json({ data: { id: `reply-${Nanoid.generate()}`, text: 'ok' } })
+      }),
+    )
+
+    const response = await postTwitterWebhook({
+      authorHandle: 'bob',
+      authorId: senderProviderUserId,
+      id: tweetId,
+      text: '@tipbotgg @alice @alice @carol $0.001 for coffee',
+    })
+    const batch = await db
+      .selectFrom('tip_batch')
+      .selectAll()
+      .where('idempotency_key', '=', `twitter:${tweetId}`)
+      .executeTakeFirstOrThrow()
+    const tips = await db.selectFrom('tip').selectAll().where('batch_id', '=', batch.id).execute()
+
+    expect(response.status).toBe(200)
+    expect(batch).toMatchObject({ amount_each: 1000, recipient_count: 2, status: 'confirmed' })
+    expect(tips).toHaveLength(2)
+    expect(posts).toHaveLength(1)
+    expect((posts[0]?.body as { text: string } | undefined)?.text).toContain(
+      'Recipients:\n• @alice\n• @carol',
+    )
+  }, 20_000) // 20 seconds
+
+  test('Twitter webhook rejects multi-tip over recipient cap', async () => {
+    const senderProviderUserId = twitterProviderUserId()
+    const tweetId = `tweet-${Nanoid.generate()}`
+    const posts: Array<{ body: unknown }> = []
+    await connectTwitterTipAccounts({ senderProviderUserId })
+    server.use(
+      mswHttp.post('https://api.twitter.com/2/tweets', async ({ request }) => {
+        posts.push({ body: await request.json() })
+        return HttpResponse.json({ data: { id: `reply-${Nanoid.generate()}`, text: 'ok' } })
+      }),
+    )
+
+    const response = await postTwitterWebhook({
+      authorHandle: 'bob',
+      authorId: senderProviderUserId,
+      id: tweetId,
+      text: `@tipbotgg ${Array.from({ length: 11 }, (_, index) => `@account${index}`).join(' ')} $0.001`,
+    })
+
+    expect(response.status).toBe(200)
+    await expect(
+      db
+        .selectFrom('tip_batch')
+        .selectAll()
+        .where('idempotency_key', '=', `twitter:${tweetId}`)
+        .execute(),
+    ).resolves.toEqual([])
+    await expect(
+      db
+        .selectFrom('pending_tip')
+        .selectAll()
+        .where('idempotency_key', 'like', `twitter:${tweetId}%`)
+        .execute(),
+    ).resolves.toEqual([])
+    expect(posts).toHaveLength(1)
+    expect(posts[0]?.body).toMatchObject({
+      reply: { in_reply_to_tweet_id: tweetId },
+      text: 'Payment not sent. X tips support up to 10 recipients.',
+    })
+  }, 20_000) // 20 seconds
+
   test('Account Activity reply display text sends tip without reply-prefix recipients', async () => {
     const senderProviderUserId = twitterProviderUserId()
     const recipientProviderUserId = twitterProviderUserId()
@@ -248,6 +458,66 @@ describe('/api/chat/twitter', () => {
       recipient_member_id: connected.recipientMember.id,
       sender_member_id: connected.senderMember.id,
     })
+  }, 20_000) // 20 seconds
+
+  test('Account Activity reply display text sends multi-tip without reply-prefix recipients', async () => {
+    const senderProviderUserId = twitterProviderUserId()
+    const aliceProviderUserId = twitterProviderUserId()
+    const carolProviderUserId = twitterProviderUserId()
+    const tweetId = `tweet-${Nanoid.generate()}`
+    const text = '@bob @mallory @tipbotgg @alice @carol $0.001 for reply test'
+    const connected = await connectTwitterTipAccounts({
+      recipientProviderUserId: aliceProviderUserId,
+      senderProviderUserId,
+    })
+    await linkTwitterAccount({
+      handle: 'carol',
+      providerUserId: carolProviderUserId,
+      root: Account.fromSecp256k1(Secp256k1.randomPrivateKey()),
+      workspaceId: connected.workspace.id,
+    })
+    server.use(
+      mswHttp.get('https://api.twitter.com/2/users/by/username/alice', () =>
+        HttpResponse.json({ data: { id: aliceProviderUserId, username: 'alice' } }),
+      ),
+      mswHttp.get('https://api.twitter.com/2/users/by/username/carol', () =>
+        HttpResponse.json({ data: { id: carolProviderUserId, username: 'carol' } }),
+      ),
+      mswHttp.post('https://api.twitter.com/2/tweets', () =>
+        HttpResponse.json({ data: { id: `reply-${Nanoid.generate()}`, text: 'ok' } }),
+      ),
+    )
+
+    const response = await postTwitterWebhook({
+      tweet_create_events: [
+        {
+          display_text_range: [text.indexOf('@tipbotgg'), text.length],
+          id_str: tweetId,
+          in_reply_to_status_id_str: `conversation-${Nanoid.generate()}`,
+          in_reply_to_user_id_str: 'tipbot-user',
+          text,
+          user: { id_str: senderProviderUserId, screen_name: 'bob' },
+        },
+      ],
+    })
+    const batch = await db
+      .selectFrom('tip_batch')
+      .selectAll()
+      .where('idempotency_key', '=', `twitter:${tweetId}`)
+      .executeTakeFirstOrThrow()
+    const tips = await db
+      .selectFrom('tip')
+      .innerJoin('member', 'member.id', 'tip.recipient_member_id')
+      .select('member.provider_user_id')
+      .where('tip.batch_id', '=', batch.id)
+      .orderBy('member.provider_user_id', 'asc')
+      .execute()
+
+    expect(response.status).toBe(200)
+    expect(batch).toMatchObject({ amount_each: 1000, recipient_count: 2, status: 'confirmed' })
+    expect(tips.map((tip) => tip.provider_user_id).sort()).toEqual(
+      [aliceProviderUserId, carolProviderUserId].sort(),
+    )
   }, 20_000) // 20 seconds
 
   test('pending Twitter tip is claimed only after matching X recipient links', async () => {
