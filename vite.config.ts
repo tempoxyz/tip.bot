@@ -142,6 +142,10 @@ export default defineConfig({
           }
         })()
       : [],
+    cors: {
+      credentials: true,
+      origin: true,
+    },
     fs: { allow: [process.cwd()] },
   },
   test: {
@@ -189,6 +193,9 @@ export default defineConfig({
                   compatibilityFlags: ['nodejs_compat'],
                   d1Databases: ['DB'],
                   durableObjects: {
+                    AUTH_NONCE: {
+                      className: 'NonceStorage',
+                    },
                     CHAT_STATE: {
                       className: 'TipbotChatStateDO',
                       useSQLite: true,

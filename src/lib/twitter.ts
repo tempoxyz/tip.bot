@@ -758,10 +758,10 @@ export function formatTwitterBatchReceiptText(input: {
 }) {
   const summary = (() => {
     if (input.sentRecipients.length && input.queuedRecipients.length)
-      return `sent ${formatTwitterRecipientSummary(input.sentRecipients)} and queued ${formatTwitterRecipientSummary(input.queuedRecipients)}`
+      return `sent ${formatTwitterRecipientCount(input.sentRecipients)} and queued ${formatTwitterRecipientCount(input.queuedRecipients)}`
     if (input.sentRecipients.length)
-      return `sent ${formatTwitterRecipientSummary(input.sentRecipients)}`
-    return `queued ${formatTwitterRecipientSummary(input.queuedRecipients)}`
+      return `sent ${formatTwitterRecipientCount(input.sentRecipients)}`
+    return `queued ${formatTwitterRecipientCount(input.queuedRecipients)}`
   })()
   return [
     `${formatHandle(input.senderHandle)} ${summary} ${input.amount} each${input.memo ? ` for ${input.memo}` : ''}`,
@@ -1002,9 +1002,13 @@ async function completeLinkChallenge(
   return { handle: tweet.authorHandle ? `@${tweet.authorHandle}` : undefined, ok: true as const }
 }
 
-async function parseTwitterTip(env: Env, input: TwitterTweetInput) {
+export async function parseTwitterTip(env: Env, input: TwitterTweetInput) {
   const botHandle = env.TWITTER_BOT_HANDLE.replace(/^@+/, '')
-  const handles = [...input.text.matchAll(/(^|[^\p{L}\p{N}_])@([A-Za-z0-9_]{1,15})/gu)]
+  const text = input.text.replace(
+    new RegExp(`^\\s*\\.(?=\\s*@${escapeRegex(botHandle)}\\b)`, 'iu'),
+    '',
+  )
+  const handles = [...text.matchAll(/(^|[^\p{L}\p{N}_])@([A-Za-z0-9_]{1,15})/gu)]
     .map((match) => match[2]!)
     .filter((handle) => handle.toLowerCase() !== botHandle.toLowerCase())
   const uniqueHandles = [...new Set(handles.map((handle) => handle.toLowerCase()))]
@@ -1024,7 +1028,7 @@ async function parseTwitterTip(env: Env, input: TwitterTweetInput) {
   })()
   if (!recipients?.length) return null
 
-  let remaining = input.text.replace(
+  let remaining = text.replace(
     new RegExp(`(^|[^\\p{L}\\p{N}_])@${escapeRegex(botHandle)}\\b`, 'giu'),
     '$1',
   )
@@ -1376,13 +1380,8 @@ function formatTwitterRecipientLines(
   return lines
 }
 
-function formatTwitterRecipientSummary(recipients: Tip.TipRecipientInput[]) {
-  const handles = recipients
-    .slice(0, 5)
-    .map((recipient) => formatHandle(recipient.recipientProviderLabel))
-  if (recipients.length > handles.length)
-    handles.push(`+ ${recipients.length - handles.length} others`)
-  return handles.join(' ')
+function formatTwitterRecipientCount(recipients: Tip.TipRecipientInput[]) {
+  return `${recipients.length} ${recipients.length === 1 ? 'account' : 'accounts'}`
 }
 
 function getTwitterDisplayText(text: string, range: [number, number] | undefined) {

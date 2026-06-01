@@ -1,4 +1,5 @@
 import serverEntry from '@tanstack/react-start/server-entry'
+import { Kv as AccountsKv } from 'accounts/server'
 import { api } from '#/api.ts'
 import { rpc } from '#/lib/rpc.ts'
 import { processPendingTipMessage } from '#/queues/pendingTip.ts'
@@ -65,3 +66,4 @@ declare module '@tanstack/react-router' {
 }
 
 export { TipbotChatStateDO } from '#/objects/chatState.ts'
+export class NonceStorage extends AccountsKv.NonceStorage {}

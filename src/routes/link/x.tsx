@@ -275,14 +275,14 @@ function LinkPanel() {
   }
 
   async function copyExampleTweet() {
-    await navigator.clipboard.writeText(exampleTweet)
+    await navigator.clipboard.writeText(`.${exampleTweet}`)
     setCopiedExampleTweet(true)
     window.setTimeout(() => setCopiedExampleTweet(false), 2_000) // 2 seconds
   }
 
   function composeExampleTweet() {
     const intentUrl = new URL('/intent/tweet', 'https://twitter.com')
-    intentUrl.searchParams.set('text', exampleTweet)
+    intentUrl.searchParams.set('text', `.${exampleTweet}`)
     openTweetComposer(intentUrl.toString())
   }
 

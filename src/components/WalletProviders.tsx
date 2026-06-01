@@ -6,7 +6,9 @@ import { dangerous_secp256k1, tempoWallet } from 'wagmi/tempo'
 
 const queryClient = new QueryClient()
 
-function Root(props: React.PropsWithChildren<{ feePayer?: string | undefined }>) {
+function Root(
+  props: React.PropsWithChildren<{ auth?: string | undefined; feePayer?: string | undefined }>,
+) {
   const [config] = React.useState(() =>
     createConfig({
       chains: [tempo, tempoModerato, tempoLocalnet],
@@ -16,7 +18,10 @@ function Root(props: React.PropsWithChildren<{ feePayer?: string | undefined }>)
               ...(props.feePayer ? { feePayer: props.feePayer } : {}),
               privateKey: __PLAYWRIGHT_ACCOUNT_PRIVATE_KEY__,
             })
-          : tempoWallet(props.feePayer ? { feePayer: props.feePayer } : {}),
+          : tempoWallet({
+              ...(props.auth ? { auth: props.auth } : {}),
+              ...(props.feePayer ? { feePayer: props.feePayer } : {}),
+            }),
       ],
       multiInjectedProviderDiscovery: false,
       ssr: true,

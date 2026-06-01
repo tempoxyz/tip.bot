@@ -1,3 +1,5 @@
+import { Handler, Kv } from 'accounts/server'
+import { env } from 'cloudflare:workers'
 import { Hono } from 'hono'
 import { Address, Base64, Hex } from 'ox'
 import * as chat from 'chat'
@@ -14,6 +16,12 @@ import * as Tip from '#/lib/tip.ts'
 import * as Twitter from '#/lib/twitter.ts'
 import * as DB from '#db/client.ts'
 
+const auth = Handler.auth({
+  domain: env.HOST,
+  path: '/api/auth',
+  store: Kv.durableObject(env.AUTH_NONCE as unknown as Kv.durableObject.Namespace),
+})
+
 export const api = new Hono<{
   Bindings: Env
   Variables: {
@@ -24,6 +32,271 @@ export const api = new Hono<{
     c.set('db', DB.create(c.env.DB))
     await next()
   })
+  .all('/api/auth/:path{.*}?', async (c) => {
+    const corsHeaders = (() => {
+      // Only auth-capable wallet and app origins may receive credentialed CORS headers.
+      const headers = new Headers()
+      const origin = c.req.raw.headers.get('origin')
+      if (!origin) return headers
+      const allowed = (() => {
+        try {
+          const url = new URL(origin)
+          const path = new URL(c.req.raw.url).pathname
+          return (
+            (path === '/api/auth/challenge' && url.protocol === 'https:') ||
+            url.hostname === env.HOST ||
+            url.hostname === 'accounts.tempo.xyz' ||
+            url.hostname === 'wallet.tempo.xyz' ||
+            (env.HOST.endsWith('.localhost') && url.hostname.endsWith('.localhost'))
+          )
+        } catch {
+          return false
+        }
+      })()
+      if (!allowed) return headers
+
+      headers.set('access-control-allow-origin', origin)
+      headers.set('access-control-allow-credentials', 'true')
+      headers.set(
+        'access-control-allow-headers',
+        c.req.raw.headers.get('access-control-request-headers') ?? 'authorization,content-type',
+      )
+      headers.set('access-control-allow-methods', 'POST,OPTIONS')
+      headers.set('vary', 'Origin')
+      return headers
+    })()
+    if (c.req.raw.method === 'OPTIONS')
+      return new Response(null, { headers: corsHeaders, status: 204 })
+
+    const response = await auth.fetch(c.req.raw)
+    const headers = new Headers(response.headers)
+    for (const [key, value] of corsHeaders) headers.set(key, value)
+    return new Response(response.body, {
+      headers,
+      status: response.status,
+      statusText: response.statusText,
+    })
+  })
+  .get('/api/dash/accounts', async (c) => {
+    const session = await auth.getSession(c.req.raw)
+    if (!session)
+      return c.json(
+        {
+          code: 'unauthorized' as const,
+          message: 'Connect your wallet to view connected accounts.',
+          ok: false as const,
+        },
+        401,
+      )
+
+    const address = Address.checksum(session.address)
+    const account = await c.var.db
+      .selectFrom('account')
+      .selectAll()
+      .where('address', '=', address)
+      .executeTakeFirst()
+    if (!account)
+      return c.json({
+        accounts: { slack: [], x: [] },
+        ok: true as const,
+        walletAddress: address,
+        walletExplorerUrl: Tempo.explorerLink(Tempo.chainLookup.mainnet, address),
+      })
+
+    const accessKey = await c.var.db
+      .selectFrom('access_key')
+      .select('chain_id')
+      .where('account_id', '=', account.id)
+      .orderBy('updated_at', 'desc')
+      .executeTakeFirst()
+
+    const rows: Array<{
+      display_name: string | null
+      id: string
+      login: string | null
+      name: string | null
+      provider: string
+      provider_user_id: string
+      provider_workspace_id: string | null
+      real_name: string | null
+      updated_at: string
+      workspace_name: string | null
+      workspace_provider_id: string | null
+    }> = await c.var.db
+      .selectFrom('provider_identity')
+      .leftJoin('member', 'member.provider_identity_id', 'provider_identity.id')
+      .leftJoin('workspace', 'workspace.id', 'member.workspace_id')
+      .select([
+        'member.login',
+        'member.name',
+        'provider_identity.display_name',
+        'provider_identity.id',
+        'provider_identity.provider',
+        'provider_identity.provider_user_id',
+        'provider_identity.provider_workspace_id',
+        'provider_identity.real_name',
+        'provider_identity.updated_at',
+        'workspace.name as workspace_name',
+        'workspace.provider_id as workspace_provider_id',
+      ])
+      .where('provider_identity.account_id', '=', account.id)
+      .orderBy('workspace.name', 'asc')
+      .orderBy('provider_identity.display_name', 'asc')
+      .execute()
+    const accounts = await (async () => {
+      // Convert provider identity rows to dashboard account view models.
+      return await Promise.all(
+        rows.map(async (row) => {
+          const provider =
+            row.provider === 'twitter' || row.provider_workspace_id === Twitter.twitterProviderId
+              ? ('x' as const)
+              : ('slack' as const)
+          const label =
+            row.display_name?.trim() ||
+            row.real_name?.trim() ||
+            row.name?.trim() ||
+            row.login?.trim() ||
+            row.provider_user_id
+          const username = provider === 'x' ? label.replace(/^@+/, '') : row.login?.trim() || label
+          const avatarUrl = await (async () => {
+            // Best-effort avatar lookup; dashboards still render without avatars.
+            if (provider === 'x') {
+              if (!username) return undefined
+              try {
+                return (
+                  (await Twitter.getUserByUsername(c.env, username))?.profile_image_url?.trim() ||
+                  undefined
+                )
+              } catch {
+                return undefined
+              }
+            }
+
+            if (!row.workspace_provider_id) return undefined
+            try {
+              await Chat.getChat().initialize()
+              const installation = await Chat.getSlack().getInstallation(row.workspace_provider_id)
+              if (!installation) return undefined
+              const user = await Slack.getUserInfo({
+                apiUrl: c.env.SLACK_API_URL,
+                botToken: installation.botToken,
+                providerUserId: row.provider_user_id,
+                withBotToken: (botToken, fn) => Chat.getSlack().withBotToken(botToken, fn),
+              })
+              return (
+                user?.profile?.image_192?.trim() ||
+                user?.profile?.image_72?.trim() ||
+                user?.profile?.image_48?.trim() ||
+                undefined
+              )
+            } catch {
+              return undefined
+            }
+          })()
+
+          return {
+            avatarUrl,
+            connectedAt: row.updated_at,
+            id: row.id,
+            label,
+            provider,
+            providerUserId: row.provider_user_id,
+            username,
+            workspace:
+              provider === 'slack'
+                ? {
+                    id: row.workspace_provider_id ?? row.provider_workspace_id,
+                    logoUrl: null,
+                    name: row.workspace_name ?? row.provider_workspace_id ?? 'Slack',
+                  }
+                : null,
+          }
+        }),
+      )
+    })()
+
+    return c.json({
+      accounts: {
+        slack: accounts.filter((item) => item.provider === 'slack'),
+        x: accounts.filter((item) => item.provider === 'x'),
+      },
+      ok: true as const,
+      walletAddress: account.address,
+      walletExplorerUrl: Tempo.explorerLink(
+        accessKey?.chain_id ?? Tempo.chainLookup.mainnet,
+        account.address,
+      ),
+    })
+  })
+  .post(
+    '/api/dash/accounts/disconnect',
+    hono.validator(
+      'json',
+      z.object({
+        identityId: z.string().min(1),
+      }),
+    ),
+    async (c) => {
+      const body = c.req.valid('json')
+      const session = await auth.getSession(c.req.raw)
+      if (!session)
+        return c.json(
+          {
+            code: 'unauthorized' as const,
+            message: 'Connect your wallet to manage connected accounts.',
+            ok: false as const,
+          },
+          401,
+        )
+
+      const account = await c.var.db
+        .selectFrom('account')
+        .selectAll()
+        .where('address', '=', Address.checksum(session.address))
+        .executeTakeFirst()
+      if (!account)
+        return c.json(
+          {
+            code: 'account_not_found' as const,
+            message: 'Wallet is not connected.',
+            ok: false as const,
+          },
+          404,
+        )
+
+      const identity = await c.var.db
+        .selectFrom('provider_identity')
+        .select(['account_id', 'id'])
+        .where('id', '=', body.identityId)
+        .where('account_id', '=', account.id)
+        .executeTakeFirst()
+      if (!identity)
+        return c.json(
+          {
+            code: 'connected_account_not_found' as const,
+            message: 'Connected account not found.',
+            ok: false as const,
+          },
+          404,
+        )
+
+      const now = new Date().toISOString()
+      await c.var.db
+        .updateTable('provider_identity')
+        .set({ account_id: null, updated_at: now })
+        .where('id', '=', identity.id)
+        .execute()
+      const remaining = await c.var.db
+        .selectFrom('provider_identity')
+        .select('id')
+        .where('account_id', '=', account.id)
+        .executeTakeFirst()
+      if (!remaining)
+        await c.var.db.deleteFrom('access_key').where('account_id', '=', account.id).execute()
+
+      return c.json({ ok: true as const })
+    },
+  )
   .get('/api/account/link/:token', async (c) => {
     const link = await c.var.db
       .selectFrom('account_link_token')
@@ -518,11 +791,78 @@ export const api = new Hono<{
           recipientProviderWorkspaceId: data.payload.recipientProviderWorkspaceId,
         },
       ]
-      const recipientProfiles = await resolveSlackRecipientProfiles(c.env, c.var.db, {
-        providerId: data.payload.providerId,
-        recipients: recipientInputs,
-        workspaceId: data.payload.workspaceId,
-      })
+      const recipientProfiles = await (async () => {
+        // Resolve labels and avatars for confirmation recipients.
+        const profiles = new Map<string, { avatarUrl?: string; label?: string }>()
+        for (const recipient of recipientInputs) {
+          const label = recipient.recipientProviderLabel?.trim()
+          if (label) profiles.set(recipient.recipientProviderUserId, { label })
+        }
+
+        const missingProviderUserIds = Array.from(
+          new Set(
+            recipientInputs
+              .map((recipient) => recipient.recipientProviderUserId)
+              .filter((providerUserId) => !profiles.get(providerUserId)?.label),
+          ),
+        )
+        if (missingProviderUserIds.length) {
+          const members = await c.var.db
+            .selectFrom('member')
+            .select(['login', 'name', 'provider_user_id'])
+            .where('workspace_id', '=', data.payload.workspaceId)
+            .where('provider_user_id', 'in', missingProviderUserIds)
+            .execute()
+          for (const member of members) {
+            const label = member.name?.trim() || member.login?.trim()
+            if (label) profiles.set(member.provider_user_id, { label })
+          }
+        }
+
+        if (data.payload.providerId === Twitter.twitterProviderId) {
+          for (const recipient of recipientInputs) {
+            const label = profiles.get(recipient.recipientProviderUserId)?.label
+            if (!label) continue
+            const profile = await Twitter.getUserByUsername(c.env, label).catch(() => null)
+            const avatarUrl = profile?.profile_image_url?.trim()
+            if (avatarUrl)
+              profiles.set(recipient.recipientProviderUserId, {
+                avatarUrl,
+                label,
+              })
+          }
+          return profiles
+        }
+
+        await Chat.getChat().initialize()
+        for (const recipient of recipientInputs) {
+          const installation = await Chat.getSlack().getInstallation(
+            recipient.recipientProviderWorkspaceId ?? data.payload.providerId,
+          )
+          if (!installation) continue
+          const user = await Slack.getUserInfo({
+            apiUrl: c.env.SLACK_API_URL,
+            botToken: installation.botToken,
+            providerUserId: recipient.recipientProviderUserId,
+            withBotToken: (botToken, fn) => Chat.getSlack().withBotToken(botToken, fn),
+          }).catch(() => undefined)
+          const label =
+            user?.profile?.display_name?.trim() ||
+            user?.profile?.real_name?.trim() ||
+            user?.real_name?.trim() ||
+            user?.name?.trim()
+          const avatarUrl =
+            user?.profile?.image_72?.trim() ||
+            user?.profile?.image_192?.trim() ||
+            user?.profile?.image_48?.trim()
+          if (label || avatarUrl)
+            profiles.set(recipient.recipientProviderUserId, {
+              avatarUrl,
+              label: profiles.get(recipient.recipientProviderUserId)?.label ?? label,
+            })
+        }
+        return profiles
+      })()
       const recipients = recipientInputs.map((recipient) => ({
         recipientAvatarUrl: recipientProfiles.get(recipient.recipientProviderUserId)?.avatarUrl,
         recipientProviderLabel:
@@ -1374,87 +1714,3 @@ export const api = new Hono<{
     await c.env.DB.prepare('SELECT 1').first()
     return c.json({ ok: true })
   })
-
-async function resolveSlackRecipientProfiles(
-  env: Env,
-  db: DB.Type,
-  input: {
-    providerId: string
-    recipients: Array<{
-      recipientProviderLabel?: string | null
-      recipientProviderUserId: string
-      recipientProviderWorkspaceId?: string
-    }>
-    workspaceId: string
-  },
-) {
-  const profiles = new Map<string, { avatarUrl?: string; label?: string }>()
-  for (const recipient of input.recipients) {
-    const label = recipient.recipientProviderLabel?.trim()
-    if (label) profiles.set(recipient.recipientProviderUserId, { label })
-  }
-
-  const missingProviderUserIds = Array.from(
-    new Set(
-      input.recipients
-        .map((recipient) => recipient.recipientProviderUserId)
-        .filter((providerUserId) => !profiles.get(providerUserId)?.label),
-    ),
-  )
-  if (missingProviderUserIds.length) {
-    const members = await db
-      .selectFrom('member')
-      .select(['login', 'name', 'provider_user_id'])
-      .where('workspace_id', '=', input.workspaceId)
-      .where('provider_user_id', 'in', missingProviderUserIds)
-      .execute()
-    for (const member of members) {
-      const label = member.name?.trim() || member.login?.trim()
-      if (label) profiles.set(member.provider_user_id, { label })
-    }
-  }
-
-  if (input.providerId === Twitter.twitterProviderId) {
-    for (const recipient of input.recipients) {
-      const label = profiles.get(recipient.recipientProviderUserId)?.label
-      if (!label) continue
-      const profile = await Twitter.getUserByUsername(env, label).catch(() => null)
-      const avatarUrl = profile?.profile_image_url?.trim()
-      if (avatarUrl)
-        profiles.set(recipient.recipientProviderUserId, {
-          avatarUrl,
-          label,
-        })
-    }
-    return profiles
-  }
-
-  await Chat.getChat().initialize()
-  for (const recipient of input.recipients) {
-    const installation = await Chat.getSlack().getInstallation(
-      recipient.recipientProviderWorkspaceId ?? input.providerId,
-    )
-    if (!installation) continue
-    const user = await Slack.getUserInfo({
-      apiUrl: env.SLACK_API_URL,
-      botToken: installation.botToken,
-      providerUserId: recipient.recipientProviderUserId,
-      withBotToken: (botToken, fn) => Chat.getSlack().withBotToken(botToken, fn),
-    }).catch(() => undefined)
-    const label =
-      user?.profile?.display_name?.trim() ||
-      user?.profile?.real_name?.trim() ||
-      user?.real_name?.trim() ||
-      user?.name?.trim()
-    const avatarUrl =
-      user?.profile?.image_72?.trim() ||
-      user?.profile?.image_192?.trim() ||
-      user?.profile?.image_48?.trim()
-    if (label || avatarUrl)
-      profiles.set(recipient.recipientProviderUserId, {
-        avatarUrl,
-        label: profiles.get(recipient.recipientProviderUserId)?.label ?? label,
-      })
-  }
-  return profiles
-}

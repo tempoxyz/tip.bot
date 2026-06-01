@@ -17,6 +17,7 @@ import * as Nanoid from '#/lib/nanoid.ts'
 import { createSlackHeaders } from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
+import * as Twitter from '#/lib/twitter.ts'
 import * as DB from '#db/client.ts'
 import * as Schema from '#db/schemas.gen.ts'
 import type { DB as DB_gen } from '#db/types.gen.ts'
@@ -73,6 +74,47 @@ test('/api/health returns ok', async () => {
 
   expect(response.status).toBe(200)
   await expect(response.json()).resolves.toEqual({ ok: true })
+})
+
+test('/api/auth responds to Tempo wallet CORS preflight', async () => {
+  const response = await api.fetch(
+    new Request('https://tipbot.localhost/api/auth/challenge', {
+      headers: {
+        'access-control-request-headers': 'x-accounts-request,content-type',
+        'access-control-request-method': 'POST',
+        origin: 'https://embedded.wallet.example',
+      },
+      method: 'OPTIONS',
+    }),
+    env,
+    executionCtx,
+  )
+
+  expect(response.status).toBe(204)
+  expect(response.headers.get('access-control-allow-origin')).toBe(
+    'https://embedded.wallet.example',
+  )
+  expect(response.headers.get('access-control-allow-credentials')).toBe('true')
+  expect(response.headers.get('access-control-allow-headers')).toBe(
+    'x-accounts-request,content-type',
+  )
+})
+
+test('/api/auth limits non-challenge CORS preflight to trusted origins', async () => {
+  const response = await api.fetch(
+    new Request('https://tipbot.localhost/api/auth/logout', {
+      headers: {
+        'access-control-request-method': 'POST',
+        origin: 'https://embedded.wallet.example',
+      },
+      method: 'OPTIONS',
+    }),
+    env,
+    executionCtx,
+  )
+
+  expect(response.status).toBe(204)
+  expect(response.headers.get('access-control-allow-origin')).toBeNull()
 })
 
 describe('/api/chat/twitter', () => {
@@ -141,6 +183,29 @@ describe('/api/chat/twitter', () => {
     expect(posts[0]?.authorization).not.toContain('Bearer')
   })
 
+  test('parses dot-prefixed Twitter bot mention as tip command', async () => {
+    server.use(
+      mswHttp.get('https://api.twitter.com/2/users/by/username/alice', () =>
+        HttpResponse.json({ data: { id: '200', username: 'alice' } }),
+      ),
+    )
+
+    await expect(
+      Twitter.parseTwitterTip(env, {
+        authorHandle: 'bob',
+        authorId: '100',
+        id: 'tweet-parse-dot-prefix',
+        text: '.@tipbotgg @alice $0.001 for coffee',
+      }),
+    ).resolves.toEqual({
+      amount: 1000,
+      memo: 'coffee',
+      ok: true,
+      recipients: [{ recipientProviderLabel: '@alice', recipientProviderUserId: '200' }],
+      tokenAddress: null,
+    })
+  })
+
   test('real v2 Twitter webhook payload sends a tip for connected X accounts', async () => {
     const senderProviderUserId = twitterProviderUserId()
     const recipientProviderUserId = twitterProviderUserId()
@@ -170,7 +235,7 @@ describe('/api/chat/twitter', () => {
         author_id: senderProviderUserId,
         conversation_id: `conversation-${Nanoid.generate()}`,
         id: tweetId,
-        text: '@tipbotgg @alice $0.001 for coffee',
+        text: '.@tipbotgg @alice $0.001 for coffee',
       },
       includes: { users: [{ id: senderProviderUserId, username: 'bob' }] },
     })
@@ -250,7 +315,7 @@ describe('/api/chat/twitter', () => {
     expect(posts).toHaveLength(1)
     expect(posts[0]?.body).toMatchObject({
       reply: { in_reply_to_tweet_id: tweetId },
-      text: expect.stringContaining('@bob sent @alice @carol $0.001 each for coffee'),
+      text: expect.stringContaining('@bob sent 2 accounts $0.001 each for coffee'),
     })
     expect((posts[0]?.body as { text: string } | undefined)?.text).toContain(
       'Recipients:\n• @alice\n• @carol',
@@ -310,7 +375,9 @@ describe('/api/chat/twitter', () => {
     expect(posts).toHaveLength(1)
     expect(posts[0]?.body).toMatchObject({
       reply: { in_reply_to_tweet_id: tweetId },
-      text: expect.stringContaining('@bob sent @alice and queued @carol $0.001 each for coffee'),
+      text: expect.stringContaining(
+        '@bob sent 1 account and queued 1 account $0.001 each for coffee',
+      ),
     })
     expect((posts[0]?.body as { text: string } | undefined)?.text).toContain(
       'Recipients:\n• @alice\n• @carol (not connected yet)',

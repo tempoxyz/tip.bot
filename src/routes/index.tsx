@@ -1,14 +1,64 @@
+import { useMutation } from '@tanstack/react-query'
 import { Link, createFileRoute } from '@tanstack/react-router'
+import { createServerFn } from '@tanstack/react-start'
+import { getRequest } from '@tanstack/react-start/server'
+import { env } from 'cloudflare:workers'
+import { useConnect, useConnection, useConnectors } from 'wagmi'
 import * as z from 'zod/mini'
+import { api } from '#/api.ts'
+import { WalletProviders } from '#/components/WalletProviders.tsx'
 import { slackBotDisplayName, tipbotImagePath } from '#/lib/app.ts'
+import { rpc } from '#/lib/rpc.ts'
 import IconLogosSlackIcon from '~icons/logos/slack-icon.jsx'
 import IconSimpleIconsX from '~icons/simple-icons/x.jsx'
 
 function Component() {
-  const search = Route.useSearch()
   return (
-    <main className="min-h-screen bg-bg2 px-6 py-12 text-gray10">
-      <section className="mx-auto flex max-w-6xl flex-col gap-10 lg:min-h-[calc(100vh-6rem)] lg:justify-center">
+    <WalletProviders.Root auth="/api/auth">
+      <HomePanel />
+    </WalletProviders.Root>
+  )
+}
+
+function HomePanel() {
+  const connect = useConnect()
+  const connection = useConnection()
+  const connectors = useConnectors()
+  const home = Route.useLoaderData()
+  const navigate = Route.useNavigate()
+  const search = Route.useSearch()
+  const openDashboard = useMutation({
+    mutationFn: async () => {
+      const connector = connection.connector ?? connectors[0]
+      if (!connector) throw new Error('Tempo Wallet is unavailable.')
+      if (connection.status === 'connected') {
+        await authenticateConnectedWallet(connector)
+        return
+      }
+      await connect.mutateAsync({ capabilities: { auth: '/api/auth' }, connector } as never)
+    },
+    onSuccess: () => void navigate({ to: '/dash' }),
+  })
+  return (
+    <main className="relative min-h-screen bg-bg2 px-6 py-12 text-gray10">
+      {home.dashboardAuthed ? (
+        <Link
+          className="absolute top-6 end-6 text-sm font-bold text-gray8 transition hover:text-gray10 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue9"
+          to="/dash"
+        >
+          Dashboard
+        </Link>
+      ) : (
+        <button
+          className="absolute top-6 end-6 text-sm font-bold text-gray8 transition hover:text-gray10 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue9"
+          disabled={openDashboard.isPending || connect.isPending}
+          onClick={() => openDashboard.mutate()}
+          type="button"
+        >
+          {openDashboard.isPending || connect.isPending ? 'Connecting' : 'Dashboard'}
+        </button>
+      )}
+      <section className="mx-auto flex max-w-5xl flex-col gap-16 lg:min-h-[calc(100vh-6rem)] lg:justify-center">
         <div className="mx-auto max-w-3xl space-y-4 text-center">
           <h1 className="text-5xl font-bold tracking-[-0.04em] text-gray10 sm:text-6xl">Tipbot</h1>
           <p className="text-2xl font-semibold leading-tight tracking-[-0.03em] text-gray10 sm:text-3xl">
@@ -53,7 +103,7 @@ function Component() {
               Slack: `@{slackBotDisplayName} @account $5 for coffee`
             </p>
             <div className="h-[23.5rem] w-full overflow-hidden rounded-xl border border-gray4 bg-bg1 shadow-xl shadow-gray-a2">
-              <div className="grid h-full grid-cols-[7rem_1fr] sm:grid-cols-[10rem_1fr]">
+              <div className="grid h-full grid-cols-[7rem_1fr] sm:grid-cols-[8rem_1fr]">
                 <aside className="bg-purple3 p-4 text-purple10">
                   <div className="mb-5 font-bold">tipbot</div>
                   <div className="space-y-1 text-sm font-medium text-purple10/70">
@@ -126,7 +176,7 @@ function Component() {
               </div>
             </div>
           </div>
-          <div className="flex flex-col items-center gap-4">
+          <div className="flex flex-col items-center gap-4 pt-6 lg:pt-0">
             <Link
               className="inline-flex h-12 items-center justify-center gap-3 rounded-lg border border-gray5 bg-bg1 px-4 text-base font-semibold leading-none text-gray10 no-underline shadow-sm transition hover:bg-gray1 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue9"
               to="/link/x"
@@ -224,7 +274,7 @@ function Component() {
           </div>
         </div>
       </section>
-      <footer className="mx-auto mt-10 max-w-6xl text-center text-sm font-medium text-gray8">
+      <footer className="mx-auto mt-10 max-w-5xl text-center text-sm font-medium text-gray8">
         <a
           className="transition hover:text-blue9"
           href="https://x.com/tipbotgg"
@@ -251,8 +301,28 @@ export const Route = createFileRoute('/')({
       },
     ],
   }),
+  loader: () => getHomeData(),
   validateSearch: z.object({
     slack: z.optional(z.literal('installed')),
     team: z.optional(z.string()),
   }),
 })
+
+const getHomeData = createServerFn({ method: 'GET' }).handler(async () => {
+  const request = getRequest()
+  const response = await api.fetch(
+    new Request(new URL(rpc.api.dash.accounts.$url().pathname, request.url), request),
+    env,
+  )
+  return { dashboardAuthed: response.status === 200 }
+})
+
+async function authenticateConnectedWallet(connector: ReturnType<typeof useConnectors>[number]) {
+  const provider = (await connector.getProvider()) as {
+    request: (parameters: { method: string; params: unknown[] }) => Promise<unknown>
+  }
+  await provider.request({
+    method: 'wallet_connect',
+    params: [{ capabilities: { auth: '/api/auth' } }],
+  })
+}

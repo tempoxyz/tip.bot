@@ -9,6 +9,7 @@ test('visitor starts slack install from the home page', async ({ app, page }) =>
 
   const addToSlack = page.getByRole('link', { name: 'Add to Slack' })
   await expect(addToSlack).toHaveAttribute('href', '/install/slack')
+  await expect(page.getByRole('button', { name: 'Dashboard' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Connect X' })).toHaveAttribute('href', '/link/x')
 
   await addToSlack.click()
@@ -23,4 +24,11 @@ test('visitor returns after installing tipbot in slack', async ({ app, page }) =
   await expect(page.getByText('Installed for wevm', { exact: true })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Add to Slack' })).toBeHidden()
   await expect(page.getByRole('link', { name: 'Connect X' })).toBeVisible()
+})
+
+test('visitor is redirected from dashboard without auth', async ({ app, page }) => {
+  await page.goto(app.url({ to: '/dash' }))
+
+  await expect(page).toHaveURL(app.url({ to: '/' }))
+  await expect(page.getByRole('button', { name: 'Dashboard' })).toBeVisible()
 })

@@ -9,12 +9,18 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as DashRouteImport } from './routes/dash'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as LinkXRouteImport } from './routes/link/x'
 import { Route as InstallSlackRouteImport } from './routes/install/slack'
 import { Route as ConnectTokenRouteImport } from './routes/connect/$token'
 import { Route as ConfirmTokenRouteImport } from './routes/confirm/$token'
 
+const DashRoute = DashRouteImport.update({
+  id: '/dash',
+  path: '/dash',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -43,6 +49,7 @@ const ConfirmTokenRoute = ConfirmTokenRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/dash': typeof DashRoute
   '/confirm/$token': typeof ConfirmTokenRoute
   '/connect/$token': typeof ConnectTokenRoute
   '/install/slack': typeof InstallSlackRoute
@@ -50,6 +57,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/dash': typeof DashRoute
   '/confirm/$token': typeof ConfirmTokenRoute
   '/connect/$token': typeof ConnectTokenRoute
   '/install/slack': typeof InstallSlackRoute
@@ -58,6 +66,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/dash': typeof DashRoute
   '/confirm/$token': typeof ConfirmTokenRoute
   '/connect/$token': typeof ConnectTokenRoute
   '/install/slack': typeof InstallSlackRoute
@@ -67,15 +76,23 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/dash'
     | '/confirm/$token'
     | '/connect/$token'
     | '/install/slack'
     | '/link/x'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/confirm/$token' | '/connect/$token' | '/install/slack' | '/link/x'
+  to:
+    | '/'
+    | '/dash'
+    | '/confirm/$token'
+    | '/connect/$token'
+    | '/install/slack'
+    | '/link/x'
   id:
     | '__root__'
     | '/'
+    | '/dash'
     | '/confirm/$token'
     | '/connect/$token'
     | '/install/slack'
@@ -84,6 +101,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  DashRoute: typeof DashRoute
   ConfirmTokenRoute: typeof ConfirmTokenRoute
   ConnectTokenRoute: typeof ConnectTokenRoute
   InstallSlackRoute: typeof InstallSlackRoute
@@ -92,6 +110,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/dash': {
+      id: '/dash'
+      path: '/dash'
+      fullPath: '/dash'
+      preLoaderRoute: typeof DashRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -132,6 +157,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  DashRoute: DashRoute,
   ConfirmTokenRoute: ConfirmTokenRoute,
   ConnectTokenRoute: ConnectTokenRoute,
   InstallSlackRoute: InstallSlackRoute,
