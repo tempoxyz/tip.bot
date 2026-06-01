@@ -66,6 +66,28 @@ test('visitor connects X account with OAuth', async ({ app, page }) => {
   await expect(page.getByText('You can now receive and send tips on X.')).toBeVisible()
 })
 
+test('visitor cannot create passkey in X in-app browser', async ({ app, page }) => {
+  let challengeRequested = false
+
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'userAgent', {
+      get: () =>
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Twitter for iPhone',
+    })
+  })
+  await page.route('**/api/link/twitter/oauth/challenge', async (route) => {
+    challengeRequested = true
+    await route.abort()
+  })
+
+  await page.goto(app.url({ to: '/link/x' }))
+  await page.waitForLoadState('networkidle')
+
+  await expect(page.getByRole('alert')).toContainText("X's in-app browser cannot create passkeys.")
+  await expect(page.getByRole('button', { name: 'Open in phone browser first' })).toBeDisabled()
+  expect(challengeRequested).toBe(false)
+})
+
 test('visitor connects X account with proof tweet', async ({ app, page }) => {
   const accessKey = AccessKey.generate()
   const challengeId = crypto.randomUUID()

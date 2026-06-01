@@ -15,6 +15,7 @@ const cloudflareEnv = z.enum(['preview', 'production'])
 
 const wranglerVars = z.object({
   HOST: z.string(),
+  TWITTER_BOT_HANDLE: z.string(),
 })
 
 const wranglerJsoncCodec = z.codec(

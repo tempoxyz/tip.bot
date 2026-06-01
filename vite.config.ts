@@ -55,6 +55,7 @@ export default defineConfig({
             ? `(typeof window !== 'undefined' ? window.location.origin : 'https://${host}')`
             : JSON.stringify(`https://${host}`),
           __SLACK_APP_ID__: JSON.stringify(process.env.SLACK_APP_ID ?? ''),
+          __TWITTER_BOT_HANDLE__: JSON.stringify(getWranglerVar('TWITTER_BOT_HANDLE')),
         }
       })()
     : {},

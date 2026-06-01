@@ -1,3 +1,8 @@
-# https://www.robotstxt.org/robotstxt.html
 User-agent: *
-Disallow:
+Disallow: /api/
+Disallow: /confirm/
+Disallow: /connect/
+Disallow: /dash
+Allow: /
+
+Sitemap: https://tip.bot/sitemap.xml

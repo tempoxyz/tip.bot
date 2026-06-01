@@ -85,6 +85,7 @@ async function loadDashboardData(request: Request) {
         sql<number>`count("tip"."id")`.as('tips'),
       ])
       .where('recipient_id', '=', account.id)
+      .where('chain_id', '=', Tempo.chainLookup.mainnet)
       .where('confirmed_at', 'is not', null)
       .executeTakeFirstOrThrow(),
     db
@@ -94,6 +95,7 @@ async function loadDashboardData(request: Request) {
         sql<number>`count("tip"."id")`.as('tips'),
       ])
       .where('sender_id', '=', account.id)
+      .where('chain_id', '=', Tempo.chainLookup.mainnet)
       .where('confirmed_at', 'is not', null)
       .executeTakeFirstOrThrow(),
     db
@@ -131,21 +133,18 @@ async function loadDashboardData(request: Request) {
         row.provider_workspace_id === Twitter.twitterProviderId
           ? ('x' as const)
           : ('slack' as const)
-      const label =
-        row.display_name?.trim() ||
-        row.real_name?.trim() ||
-        row.name?.trim() ||
-        row.login?.trim() ||
-        row.provider_user_id
-      const username = provider === 'x' ? label.replace(/^@+/, '') : row.login?.trim() || label
-      const avatarUrl = await (async () => {
+      const profile = await (async () => {
         if (provider === 'x') {
+          const username = row.display_name?.trim().replace(/^@+/, '') || row.login?.trim()
           if (!username) return undefined
           try {
-            return (
-              (await Twitter.getUserByUsername(env, username))?.profile_image_url?.trim() ||
-              undefined
-            )
+            const user = await Twitter.getUserByUsername(env, username)
+            if (!user) return undefined
+            return {
+              avatarUrl: user.profile_image_url?.trim() || undefined,
+              label: user.name.trim() || user.username,
+              username: user.username,
+            }
           } catch {
             return undefined
           }
@@ -162,19 +161,38 @@ async function loadDashboardData(request: Request) {
             providerUserId: row.provider_user_id,
             withBotToken: (botToken, fn) => Chat.getSlack().withBotToken(botToken, fn),
           })
-          return (
-            user?.profile?.image_192?.trim() ||
-            user?.profile?.image_72?.trim() ||
-            user?.profile?.image_48?.trim() ||
-            undefined
-          )
+          if (!user) return undefined
+          return {
+            avatarUrl:
+              user.profile?.image_192?.trim() ||
+              user.profile?.image_72?.trim() ||
+              user.profile?.image_48?.trim() ||
+              undefined,
+            label:
+              user.profile?.display_name?.trim() ||
+              user.profile?.real_name?.trim() ||
+              user.real_name?.trim() ||
+              user.name?.trim() ||
+              undefined,
+            username: user.name?.trim() || undefined,
+          }
         } catch {
           return undefined
         }
       })()
+      const label =
+        profile?.label ||
+        row.display_name?.trim() ||
+        row.real_name?.trim() ||
+        row.name?.trim() ||
+        row.login?.trim() ||
+        row.provider_user_id
+      const username =
+        profile?.username ||
+        (provider === 'x' ? label.replace(/^@+/, '') : row.login?.trim() || label)
 
       return {
-        avatarUrl,
+        avatarUrl: profile?.avatarUrl,
         connectedAt: row.updated_at,
         id: row.id,
         label,

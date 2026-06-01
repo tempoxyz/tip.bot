@@ -288,6 +288,7 @@ function HomePanel() {
 export const Route = createFileRoute('/')({
   component: Component,
   head: () => ({
+    links: [{ href: new URL('/', __ORIGIN__).toString(), rel: 'canonical' }],
     meta: [
       {
         content: __SLACK_APP_ID__,

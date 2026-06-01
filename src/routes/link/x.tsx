@@ -34,6 +34,7 @@ function LinkPanel() {
   const navigate = Route.useNavigate()
   const search = Route.useSearch()
   const [challenge, setChallenge] = React.useState<Challenge | null>(null)
+  const [copiedCurrentLink, setCopiedCurrentLink] = React.useState(false)
   const [connectedWalletAddress, setConnectedWalletAddress] = React.useState<string | null>(null)
   const [pendingConnection, setPendingConnection] = React.useState<PendingConnection | null>(null)
   const [status, setStatus] = React.useState<
@@ -45,6 +46,14 @@ function LinkPanel() {
   const [tweetUrl, setTweetUrl] = React.useState('')
   const [xUsername, setXUsername] = React.useState('')
   const exampleTweet = '@tipbotgg @awkweb $0.01 for building tipbot'
+  const twitterInAppBrowser = React.useSyncExternalStore(
+    () => () => {},
+    () =>
+      typeof navigator !== 'undefined' &&
+      /Twitter/i.test(navigator.userAgent) &&
+      !/Twitterbot/i.test(navigator.userAgent),
+    () => false,
+  )
   const walletAddress =
     connection.status === 'connected' && connection.address
       ? connection.address
@@ -278,6 +287,12 @@ function LinkPanel() {
     await navigator.clipboard.writeText(`.${exampleTweet}`)
     setCopiedExampleTweet(true)
     window.setTimeout(() => setCopiedExampleTweet(false), 2_000) // 2 seconds
+  }
+
+  async function copyCurrentLink() {
+    await navigator.clipboard.writeText(window.location.href)
+    setCopiedCurrentLink(true)
+    window.setTimeout(() => setCopiedCurrentLink(false), 2_000) // 2 seconds
   }
 
   function composeExampleTweet() {
@@ -515,6 +530,25 @@ function LinkPanel() {
                   ) : null}
                   {!pendingConnection ? (
                     <>
+                      {twitterInAppBrowser ? (
+                        <div
+                          className="rounded-xl border border-amber6 bg-amber3 p-4 text-sm text-amber11"
+                          role="alert"
+                        >
+                          <p className="font-bold">Open this page in your phone browser.</p>
+                          <p className="mt-1">
+                            X&apos;s in-app browser cannot create passkeys. Use the share menu to
+                            open this page in Safari or Chrome, or copy the link below.
+                          </p>
+                          <button
+                            className="mt-3 inline-flex h-10 items-center justify-center rounded-lg border border-amber7 bg-bg2 px-4 text-sm font-bold text-amber11 transition-colors outline-none hover:bg-amber4 focus-visible:ring-2 focus-visible:ring-amber8 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                            onClick={() => void copyCurrentLink()}
+                            type="button"
+                          >
+                            {copiedCurrentLink ? 'Copied' : 'Copy link'}
+                          </button>
+                        </div>
+                      ) : null}
                       <h3 className="text-lg font-bold text-gray10">
                         With this connection, Tipbot can:
                       </h3>
@@ -554,6 +588,7 @@ function LinkPanel() {
                     <button
                       className="inline-flex h-12 shrink-0 items-center justify-center rounded-lg bg-green8 px-6 text-lg font-bold whitespace-nowrap text-white transition-colors outline-none hover:bg-green7 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
                       disabled={
+                        (twitterInAppBrowser && !pendingConnection) ||
                         status === 'connecting' ||
                         status === 'signing' ||
                         status === 'oauthing' ||
@@ -584,7 +619,9 @@ function LinkPanel() {
                               ? showTweetFallback
                                 ? 'Prepare proof tweet'
                                 : 'Connect X'
-                              : 'Connect wallet'}
+                              : twitterInAppBrowser
+                                ? 'Open in phone browser first'
+                                : 'Connect wallet'}
                     </button>
                     {pendingConnection ? (
                       <button
