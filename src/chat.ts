@@ -7,6 +7,7 @@ import * as Emoji from '#/lib/emoji.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Slack from '#/lib/slack.ts'
+import * as Telegram from '#/lib/telegram.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
 import { createCloudflareState } from '#/vendor/chatStateCloudflareDO.ts'
@@ -23,7 +24,7 @@ let bot: chat.Chat | null = null
 export function getChat() {
   if (bot) return bot
   bot = new chat.Chat({
-    adapters: { slack: getSlack() },
+    adapters: { slack: getSlack(), telegram: getTelegram() },
     state: createCloudflareState({
       name: 'tipbot',
       namespace: env.CHAT_STATE,
@@ -34,9 +35,12 @@ export function getChat() {
     userName: 'tipbot',
   })
   bot.onAction(async (event) => {
-    if (event.adapter !== getSlack()) throw new Error('Provider not implemented yet.')
     const action = z.safeParse(z.enum(actionNames), event.actionId)
     if (!action.success) return
+    if (event.adapter !== getSlack() && event.adapter !== getTelegram())
+      throw new Error('Provider not implemented yet.')
+    if (event.adapter === getTelegram() && !['confirm_cancel', 'confirm_tip'].includes(action.data))
+      return
     await actions[action.data](event)
   })
   bot.onModalSubmit(async (event) => {
@@ -46,6 +50,10 @@ export function getChat() {
     return await modalSubmits[modalSubmit.data](event)
   })
   bot.onNewMention(async (thread, message) => {
+    if (thread.adapter === getTelegram()) {
+      await handleTelegramMention(thread, message)
+      return
+    }
     if (thread.adapter !== getSlack()) throw new Error('Provider not implemented yet.')
 
     const raw = z.parse(
@@ -378,6 +386,8 @@ export function getSlack() {
   return slack
 }
 
+export const getTelegram = Telegram.getAdapter
+
 const actions = {
   async config_edit(event) {
     const raw = z.parse(
@@ -521,7 +531,7 @@ const actions = {
       amount: pending.amount,
       idempotencyKey: pending.idempotencyKey,
       memo: pending.memo,
-      provider: 'slack',
+      provider: pending.providerType ?? 'slack',
       providerChannelId: pending.providerChannelId,
       providerId: pending.providerId,
       providerThreadId: pending.providerThreadId,
@@ -562,6 +572,81 @@ const actions = {
   (typeof actionNames)[number],
   (event: chat.ActionEvent) => Promise<void>
 >
+
+async function handleTelegramMention(thread: chat.Thread, message: chat.Message) {
+  const raw = z.parse(Telegram.messageSchema, message.raw)
+  await handleTelegramMessageRaw(thread.channel, message.author, raw)
+}
+
+export async function handleTelegramUpdate(update: unknown) {
+  const raw = Telegram.parseUpdate(update)
+  if (!raw.from) return
+  await handleTelegramMessageRaw(
+    getChat().channel(Telegram.channelId(raw)),
+    {
+      fullName: Telegram.userLabel(raw.from),
+      isBot: raw.from.is_bot,
+      isMe: false,
+      userId: String(raw.from.id),
+      userName: Telegram.userLabel(raw.from),
+    },
+    raw,
+  )
+}
+
+async function handleTelegramMessageRaw(
+  channel: chat.Channel,
+  author: chat.Author,
+  raw: Telegram.Message,
+) {
+  if (!raw.from || raw.from.is_bot) return
+  if (!Telegram.isGroupMessage(raw)) return
+
+  const db = DB.create(env.DB)
+  const workspace = await Telegram.ensureWorkspace(db, raw)
+  await Telegram.ensureMessageMembers(db, workspace, raw)
+  const parsed = await Telegram.parseMention(db, workspace, raw, {
+    botUsername: env.TELEGRAM_BOT_USERNAME,
+    commandPattern,
+  })
+  const threadTs = Telegram.threadTs(raw)
+  const event = {
+    channel,
+    threadTs,
+    user: author,
+  } satisfies TipEvent
+  const ctx = {
+    allowUninstalledWorkspaceCreate: true,
+    db,
+    provider: { id: String(raw.chat.id), type: 'telegram' },
+    text: parsed.text,
+    threadTs,
+  } satisfies HandlerContext
+
+  if (parsed.unresolvedMention) {
+    await channel.post(
+      `Payment not sent. I don’t know ${parsed.unresolvedMention} yet. Ask them to message this group or start Tipbot, then try again.`,
+    )
+    return
+  }
+  if (parsed.command === 'config') {
+    await channel.post(Telegram.configText(workspace))
+    return
+  }
+  if (parsed.command && parsed.command !== 'default') {
+    const command = z.parse(z.enum(commandNames), parsed.command)
+    await handlers[command](event, ctx)
+    return
+  }
+  await handlers.default(event, {
+    ...ctx,
+    defaultTip: {
+      idempotencyKey: `telegram:${raw.chat.id}:${raw.message_id}`,
+      mention: true,
+      threadTs,
+    },
+  })
+}
 
 const modalSubmits = {
   async config_edit(event) {
@@ -1296,7 +1381,7 @@ const handlers = {
         event.user,
         `Payment not sent. Memo must be at most 32 bytes; shorten the text after \`for\`.${suggestion ? ` Try: \`${suggestion}\`.` : ''}`,
       )
-      if (options.threadTs)
+      if (options.threadTs && ctx.provider.type === 'slack')
         await Slack.setAssistantThreadStatus({
           apiUrl: env.SLACK_API_URL,
           channelId: event.channel.id,
@@ -1312,6 +1397,7 @@ const handlers = {
     const shouldResolvePlan =
       parsed.recipients.length !== 1 ||
       Boolean(parsed.usergroups?.length) ||
+      ctx.provider.type === 'telegram' ||
       (await (async () => {
         // Single-recipient Slack Connect tips still need workspace-safe recipient resolution.
         const installation = await getSlack().getInstallation(
@@ -1333,10 +1419,14 @@ const handlers = {
           previewRequired: false,
           recipients: parsed.recipients,
           skippedRecipients: [],
+          usergroupId: undefined,
+          usergroupLabel: undefined,
         }
-      : await resolveSlackTipPlan(event, ctx, parsed, {
-          amountEach: parsed.amount ?? workspace?.default_amount,
-        })
+      : ctx.provider.type === 'telegram'
+        ? await resolveTelegramTipPlan(ctx, parsed)
+        : await resolveSlackTipPlan(event, ctx, parsed, {
+            amountEach: parsed.amount ?? workspace?.default_amount,
+          })
     if (!plan.ok) {
       await postPrivateReply(event, event.user, plan.message, {
         providerId: ctx.channelProviderId ?? ctx.provider.id,
@@ -1369,7 +1459,7 @@ const handlers = {
       return
     }
 
-    if (options.threadTs)
+    if (options.threadTs && ctx.provider.type === 'slack')
       void Slack.setAssistantThreadStatus({
         apiUrl: env.SLACK_API_URL,
         channelId: event.channel.id,
@@ -1459,7 +1549,7 @@ const handlers = {
             : undefined,
           options.threadTs,
         )
-        if (result.memo && options.threadTs)
+        if (result.memo && options.threadTs && ctx.provider.type === 'slack')
           await postSlackMemoReply(event, ctx, result.memo, options.threadTs)
       } else if (result.ok)
         await postSlackReceiptMessage(
@@ -1497,6 +1587,10 @@ const handlers = {
           return result.message ?? 'Payment failed.'
         })()
         if (result.code === 'insufficient_funds') {
+          if (ctx.provider.type === 'telegram') {
+            await postPrivateReply(event, event.user, message)
+            return
+          }
           await postSlackInsufficientFunds(
             event,
             ctx,
@@ -1525,7 +1619,7 @@ const handlers = {
     } finally {
       // Clear Slack's assistant thread status after this request finishes or hands off to
       // confirmation.
-      if (options.threadTs)
+      if (options.threadTs && ctx.provider.type === 'slack')
         await Slack.setAssistantThreadStatus({
           apiUrl: env.SLACK_API_URL,
           channelId: event.channel.id,
@@ -1585,7 +1679,7 @@ type HandlerContext = {
   threadTs?: string
 }
 
-type ProviderContext = { id: string; type: 'slack' }
+type ProviderContext = { id: string; type: 'slack' | 'telegram' }
 
 type TipEvent = {
   channel: chat.Channel
@@ -1613,6 +1707,7 @@ type PendingSlackTip = {
   memo: string | null
   providerChannelId: string
   providerId: string
+  providerType?: ProviderContext['type']
   providerThreadId?: string
   recipients: Tip.TipRecipientInput[]
   senderProviderUserId: string
@@ -1637,6 +1732,35 @@ export function isReactionTipIdempotencyKey(value: string) {
 
 export function isReceiptBoostIdempotencyKey(value: string) {
   return value.startsWith(receiptBoostIdempotencyPrefix)
+}
+
+async function resolveTelegramTipPlan(
+  ctx: HandlerContext,
+  parsed: ParsedTipBatch,
+): Promise<
+  | {
+      ok: true
+      previewRequired: false
+      recipients: Tip.TipRecipientInput[]
+      skippedRecipients: Tip.TipSkippedRecipient[]
+      usergroupId?: undefined
+      usergroupLabel?: undefined
+    }
+  | { message: string; ok: false }
+> {
+  if (parsed.usergroups?.length)
+    return {
+      message: 'Payment not sent. Telegram group mentions are not supported yet.',
+      ok: false,
+    }
+  if (parsed.recipients.some((recipient) => recipient.recipientProviderUserId === ctx.provider.id))
+    return { message: 'Payment not sent. Cannot send a payment to this group.', ok: false }
+  return {
+    ok: true,
+    previewRequired: false,
+    recipients: parsed.recipients,
+    skippedRecipients: [],
+  }
 }
 
 async function resolveSlackTipPlan(
@@ -2725,6 +2849,21 @@ async function postSlackPaymentConfirmation(
   confirmUrl: string,
   options: { label: string; message: string; threadTs?: string },
 ) {
+  if (ctx.provider.type === 'telegram') {
+    await postPrivateReply(event, event.user, {
+      card: chat.Card({
+        children: [
+          chat.CardText(`${options.message}\nLink expires in 10 minutes.`),
+          chat.Actions([
+            chat.LinkButton({ label: options.label, style: 'primary', url: confirmUrl }),
+          ]),
+        ],
+      }),
+      fallbackText: `${options.message}: ${confirmUrl}`,
+    })
+    return
+  }
+
   const confirmUrlLabel = confirmUrl.replace(/(\/confirm\/.{8}).+$/, '$1...')
   const body = new URLSearchParams()
   body.set('channel', event.channel.id.replace(/^slack:/, ''))
@@ -3632,6 +3771,16 @@ async function postPrivateReply(
   options: { providerId?: string; threadTs?: string } = {},
 ) {
   const threadTs = options.threadTs ?? event.threadTs
+  if (event.channel.id.startsWith('telegram:')) {
+    try {
+      await getChat()
+        .channel(await getTelegram().openDM(user.userId))
+        .post(message)
+    } catch {
+      await event.channel.post(Telegram.openInstruction())
+    }
+    return
+  }
   if (options.providerId && typeof message === 'string') {
     const body = new URLSearchParams()
     body.set('channel', Slack.getChannelId(event.channel.id))
@@ -3746,6 +3895,14 @@ async function postTipResult(
       return
     }
     if (result.code === 'insufficient_funds') {
+      if (ctx.provider.type === 'telegram') {
+        await postPrivateReply(
+          event,
+          event.user,
+          'Payment not sent. Your wallet has insufficient funds.',
+        )
+        return
+      }
       await postSlackInsufficientFunds(event, ctx, threadTs)
       return
     }
@@ -3791,7 +3948,8 @@ async function postTipResult(
         : undefined,
       threadTs,
     )
-    if (result.memo && threadTs) await postSlackMemoReply(event, ctx, result.memo, threadTs)
+    if (result.memo && threadTs && ctx.provider.type === 'slack')
+      await postSlackMemoReply(event, ctx, result.memo, threadTs)
     return
   }
   await postPrivateReply(event, event.user, 'Payment already sent.')
@@ -3807,6 +3965,17 @@ async function postSlackQueuedTipMessage(
     threadTs?: string
   },
 ) {
+  if (ctx.provider.type === 'telegram') {
+    const amount = result.isDefaultToken
+      ? formatCurrencyAmount(result.amount, result.tokenCurrency)
+      : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
+    const text = `${options.mentionUser(result.senderProviderUserId)} queued ${options.mentionUser(result.recipientProviderUserId)} ${amount}${result.memo ? ` for ${result.memo}` : ''}. ${options.mentionUser(result.recipientProviderUserId)} needs to start Tipbot to claim.`
+    const message = await getChat()
+      .channel(options.threadTs ? `${options.channelId}:${options.threadTs}` : options.channelId)
+      .post(text)
+    return message.id
+  }
+
   const installation = await getSlack().getInstallation(ctx.channelProviderId ?? ctx.provider.id)
   if (!installation) throw new Error('Tibot app not installed for this workspace.')
 
@@ -4279,6 +4448,14 @@ async function postSlackReceiptMessage(
   context?: string,
   threadTs?: string,
 ) {
+  if (ctx.provider.type === 'telegram') {
+    const receiptText = text.replace(/\.$/, '')
+    const receiptLink = Tempo.formatTxLink(chainId, transactionHash)
+    const channel = threadTs ? getChat().channel(`${event.channel.id}:${threadTs}`) : event.channel
+    await channel.post(`${receiptText} · Receipt: ${receiptLink}${context ? `\n${context}` : ''}`)
+    return
+  }
+
   const installation = await getSlack().getInstallation(ctx.channelProviderId ?? ctx.provider.id)
   if (!installation) throw new Error('Tibot app not installed for this workspace.')
 
