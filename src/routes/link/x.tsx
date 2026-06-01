@@ -323,7 +323,6 @@ function LinkPanel() {
                 <button
                   className="inline-flex h-10 items-center justify-center rounded-lg bg-green8 px-4 text-sm font-bold whitespace-nowrap text-white transition-colors outline-none hover:bg-green7 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
                   onClick={composeExampleTweet}
-                  onPointerDown={() => setWaitingForExampleTweet(true)}
                   type="button"
                 >
                   Open in X
