@@ -9,10 +9,6 @@ on:
       sha:
         required: true
         type: string
-      telegram_bot_username:
-        default: ggtipbot
-        required: false
-        type: string
       twitter_bot_handle:
         default: tipbotgg
         required: false
@@ -34,10 +30,6 @@ on:
         required: false
       SLACK_CONFIG_REFRESH_TOKEN:
         required: false
-      TELEGRAM_BOT_TOKEN:
-        required: true
-      TELEGRAM_WEBHOOK_SECRET_TOKEN:
-        required: true
       TWITTER_OAUTH_CLIENT_ID:
         required: true
       TWITTER_OAUTH_CLIENT_SECRET:
@@ -55,7 +47,6 @@ env:
   SLACK_BOT_DISPLAY_NAME: Tipbot PR ${{ inputs.pr_number }}
   SLACK_COMMAND: /tippr${{ inputs.pr_number }}
   SLACK_APP_NAME: Tipbot PR ${{ inputs.pr_number }}
-  TELEGRAM_BOT_USERNAME: ${{ inputs.telegram_bot_username }}
   TWITTER_BOT_HANDLE: ${{ inputs.twitter_bot_handle }}
   WRANGLER_SEND_METRICS: false
 
@@ -376,14 +367,12 @@ jobs:
         env:
           D1_ID: ${{ steps.d1.outputs.id }}
           PR_NUMBER: ${{ inputs.pr_number }}
-          TELEGRAM_BOT_USERNAME: ${{ env.TELEGRAM_BOT_USERNAME }}
           TWITTER_BOT_HANDLE: ${{ vars.TWITTER_BOT_HANDLE || env.TWITTER_BOT_HANDLE }}
         run: |
           sed -i.bak \
             -e "s|__PREVIEW_NAME__|${PREVIEW_NAME}|g" \
             -e "s|__PREVIEW_APEX__|${PREVIEW_APEX}|g" \
             -e "s|__PREVIEW_PR_NUMBER__|${PR_NUMBER}|g" \
-            -e "s|__PREVIEW_TELEGRAM_BOT_USERNAME__|${TELEGRAM_BOT_USERNAME}|g" \
             -e "s|__PREVIEW_TWITTER_BOT_HANDLE__|${TWITTER_BOT_HANDLE}|g" \
             -e "s|__PREVIEW_D1_ID__|${D1_ID}|g" \
             wrangler.jsonc
@@ -437,8 +426,6 @@ jobs:
             SLACK_CLIENT_ID
             SLACK_CLIENT_SECRET
             SLACK_SIGNING_SECRET
-            TELEGRAM_BOT_TOKEN
-            TELEGRAM_WEBHOOK_SECRET_TOKEN
             TWITTER_OAUTH_CLIENT_ID
             TWITTER_OAUTH_CLIENT_SECRET
         env:
@@ -448,8 +435,6 @@ jobs:
           SLACK_CLIENT_ID: ${{ steps.slack.outputs.client_id || steps.state.outputs.client_id }}
           SLACK_CLIENT_SECRET: ${{ steps.slack.outputs.client_secret || steps.state.outputs.client_secret }}
           SLACK_SIGNING_SECRET: ${{ steps.slack.outputs.signing_secret || steps.state.outputs.signing_secret }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_WEBHOOK_SECRET_TOKEN: ${{ secrets.TELEGRAM_WEBHOOK_SECRET_TOKEN }}
           TWITTER_OAUTH_CLIENT_ID: ${{ secrets.TWITTER_OAUTH_CLIENT_ID }}
           TWITTER_OAUTH_CLIENT_SECRET: ${{ secrets.TWITTER_OAUTH_CLIENT_SECRET }}
 
