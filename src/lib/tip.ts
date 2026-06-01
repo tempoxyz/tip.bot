@@ -1538,7 +1538,7 @@ async function createConfirmationRequired(
     amount?: number
     idempotencyKey: string
     memo: string | null
-    provider: 'slack'
+    provider: Database.Selectable.workspace['provider']
     providerChannelId: string
     providerId: string
     providerThreadId?: string
@@ -1628,7 +1628,7 @@ async function submitTipBatch(
     idempotencyKey: string
     keyAuthorization: KeyAuthorization.Signed
     memo: string | null
-    provider: 'slack'
+    provider: Database.Selectable.workspace['provider']
     providerChannelId: string
     providerId: string
     providerThreadId?: string

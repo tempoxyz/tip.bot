@@ -13,7 +13,7 @@ export const payloadSchema = z.object({
   kind: z.enum(['reusable_access_key', 'onetime_payment']),
   memo: z.string().nullable(),
   nonce: z.string().min(1),
-  provider: z.literal('slack'),
+  provider: z.enum(['slack', 'telegram']),
   providerChannelId: z.string().min(1),
   providerId: z.string().min(1),
   providerThreadId: z.string().min(1).optional(),

@@ -81,7 +81,7 @@ type pending_tip = {
   id: string
   idempotency_key: string
   memo: string | null
-  provider: k.Generated<'slack'>
+  provider: k.Generated<'slack' | 'telegram'>
   provider_channel_id: string
   provider_id: string
   provider_message_ts: string | null
@@ -105,7 +105,7 @@ type provider_identity = {
   display_name: string | null
   id: string
   metadata: string | null
-  provider: 'slack'
+  provider: 'slack' | 'telegram'
   provider_global_user_id: string | null
   provider_user_id: string
   provider_workspace_id: string | null
@@ -220,7 +220,7 @@ type tip_batch = {
   id: string
   idempotency_key: string
   memo: string | null
-  provider: k.Generated<'slack'>
+  provider: k.Generated<'slack' | 'telegram'>
   provider_channel_id: string
   provider_id: string
   provider_thread_id: string | null
@@ -254,7 +254,7 @@ type workspace = {
   id: string
   installed_at: string | null
   name: string | null
-  provider: k.Generated<'slack'>
+  provider: k.Generated<'slack' | 'telegram'>
   provider_id: string
   uninstalled_at: string | null
   updated_at: k.Generated<string>
