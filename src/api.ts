@@ -672,12 +672,7 @@ export const api = new Hono<{
         kind: data.payload.kind,
         memo: data.payload.memo,
         ok: true as const,
-        providerLabel:
-          data.payload.providerId === Twitter.twitterProviderId
-            ? 'X'
-            : data.payload.provider === 'telegram'
-              ? 'Telegram'
-              : 'Slack',
+        providerLabel: data.payload.providerId === Twitter.twitterProviderId ? 'X' : 'Slack',
         recipientAvatarUrl,
         recipientProviderLabel,
         recipientProviderUserId: data.payload.recipientProviderUserId,
@@ -740,30 +735,6 @@ export const api = new Hono<{
               result,
             }).catch((error) => {
               console.error('Failed to post Twitter receipt after confirmation:', error)
-            }),
-          )
-        else if (result.status === 'sent' && data.payload.provider === 'telegram')
-          c.executionCtx.waitUntil(
-            (async () => {
-              await Chat.getChat().initialize()
-              const amount = result.isDefaultToken
-                ? formatCurrencyAmount(result.amount, result.tokenCurrency)
-                : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
-              const text =
-                'recipients' in result
-                  ? `${result.senderProviderUserId} ${result.memo ? 'sent' : 'tipped'} ${result.recipients.map((recipient) => recipient.recipientProviderUserId).join(' ')} ${amount} each${result.memo ? ` for ${result.memo}` : ''}`
-                  : `${result.senderProviderUserId} ${result.memo ? 'sent' : 'tipped'} ${result.recipientProviderUserId} ${amount}${result.memo ? ` for ${result.memo}` : ''}`
-              await Chat.getChat()
-                .channel(
-                  data.payload.providerThreadId
-                    ? `${data.payload.providerChannelId}:${data.payload.providerThreadId}`
-                    : data.payload.providerChannelId,
-                )
-                .post(
-                  `${text} · Receipt: ${Tempo.formatTxLink(result.chainId, result.transactionHash)}`,
-                )
-            })().catch((error) => {
-              console.error('Failed to post Telegram receipt after confirmation:', error)
             }),
           )
         else if (
@@ -1072,17 +1043,6 @@ export const api = new Hono<{
         400,
       )
     }
-  })
-  .post('/api/chat/telegram', async (c) => {
-    if (c.req.header('x-telegram-bot-api-secret-token') !== c.env.TELEGRAM_WEBHOOK_SECRET_TOKEN)
-      return c.json({ code: 'invalid_signature' as const, ok: false as const }, 401)
-    const update = await c.req.json()
-    c.executionCtx.waitUntil(
-      Chat.handleTelegramUpdate(update).catch((error) => {
-        console.error('Telegram webhook failed:', error)
-      }),
-    )
-    return c.json({ ok: true as const })
   })
   .post('/api/chat/slack', async (c) => {
     const request = c.req.raw

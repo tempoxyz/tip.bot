@@ -38,9 +38,6 @@ importers:
       '@chat-adapter/slack':
         specifier: 4.27.0
         version: 4.27.0(patch_hash=f129c43965d79b15a626b2f5e493aee5ae9b5638ff12257bd4cf6cecb048d1dd)
-      '@chat-adapter/telegram':
-        specifier: 4.27.0
-        version: 4.27.0
       '@emoji-mart/data':
         specifier: 1.2.1
         version: 1.2.1
@@ -324,9 +321,6 @@ packages:
 
   '@chat-adapter/slack@4.27.0':
     resolution: {integrity: sha512-Hx9tahCY/gA6EDydGdXcaz5r28sJOAAwnUP/j48Wv9U4LylsT4hXtLBoSmxb8gRvom2FypxD9Ry/SwzPnwnpBw==}
-
-  '@chat-adapter/telegram@4.27.0':
-    resolution: {integrity: sha512-taRZAPw5Sw7G4BtsGCIV5QqaXrKUlmLWoX04NZxGUC0Gn7MuYPwh7P7wMk04LvQ2lZfhjVCr22UlvayloUPSfg==}
 
   '@cloudflare/kv-asset-handler@0.5.0':
     resolution: {integrity: sha512-jxQYkj8dSIzc0cD6cMMNdOc1UVjqSqu8BZdor5s8cGjW2I8BjODt/kWPVdY+u9zj3ms75Q5qaZgnxUad83+eAg==}
@@ -4265,13 +4259,6 @@ snapshots:
       - debug
       - supports-color
       - utf-8-validate
-
-  '@chat-adapter/telegram@4.27.0':
-    dependencies:
-      '@chat-adapter/shared': 4.27.0
-      chat: 4.27.0
-    transitivePeerDependencies:
-      - supports-color
 
   '@cloudflare/kv-asset-handler@0.5.0': {}
 

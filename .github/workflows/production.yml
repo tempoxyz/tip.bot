@@ -15,8 +15,6 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/check.yml
-    with:
-      skip_workers: true
 
   deploy:
     name: Deploy

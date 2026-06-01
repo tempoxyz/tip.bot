@@ -18,8 +18,6 @@ jobs:
   check:
     name: Check
     uses: ./.github/workflows/check.yml
-    with:
-      skip_workers: true
 
   preview:
     name: Preview

@@ -23,14 +23,12 @@
     "prepare": "vp config && pnpm gen:types",
     "preview": "vp build && vp preview",
     "slack:app": "node --experimental-strip-types scripts/slack.ts",
-    "telegram:app": "node --experimental-strip-types scripts/telegram.ts",
     "test": "vp test",
     "test:e2e": "playwright test --config test/e2e.config.ts"
   },
   "dependencies": {
     "@base-ui/react": "1.4.1",
     "@chat-adapter/slack": "4.27.0",
-    "@chat-adapter/telegram": "4.27.0",
     "@emoji-mart/data": "1.2.1",
     "@hono/zod-validator": "^0.8.0",
     "@tanstack/react-query": "^5.100.10",
