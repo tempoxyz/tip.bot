@@ -558,7 +558,7 @@ describe('/api/link/twitter', () => {
     expect(authorizationUrl.origin).toBe('https://x.com')
     expect(authorizationUrl.pathname).toBe('/i/oauth2/authorize')
     expect(authorizationUrl.searchParams.get('client_id')).toBe(env.TWITTER_OAUTH_CLIENT_ID)
-    expect(authorizationUrl.searchParams.get('scope')).toBe('users.read')
+    expect(authorizationUrl.searchParams.get('scope')).toBe('tweet.read users.read')
     expect(authorizationUrl.searchParams.get('code_challenge_method')).toBe('S256')
     expect(authorizationUrl.searchParams.get('state')).toEqual(expect.any(String))
 

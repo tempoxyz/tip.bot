@@ -31,6 +31,7 @@ function LinkPanel() {
   const connection = useConnection()
   const connectors = useConnectors()
   const disconnectWallet = useDisconnect()
+  const navigate = Route.useNavigate()
   const search = Route.useSearch()
   const [challenge, setChallenge] = React.useState<Challenge | null>(null)
   const [connectedWalletAddress, setConnectedWalletAddress] = React.useState<string | null>(null)
@@ -128,6 +129,9 @@ function LinkPanel() {
           address: pendingConnection.address,
           challengeId: pendingConnection.challengeJson.challengeId,
           keyAuthorization: pendingConnection.keyAuthorization,
+          ...(!pendingConnection.challengeJson.username
+            ? { username: xUsername.trim().replace(/^@+/, '') }
+            : {}),
         },
       })
       if (proofResponse.status !== 200) {
@@ -137,16 +141,14 @@ function LinkPanel() {
         )
       }
       const proofJson = await proofResponse.json()
-      if (!pendingConnection.challengeJson.name || !pendingConnection.challengeJson.username)
-        throw new Error('Could not prepare Twitter proof.')
       return {
-        avatarUrl: pendingConnection.challengeJson.avatarUrl,
+        avatarUrl: pendingConnection.challengeJson.avatarUrl ?? proofJson.avatarUrl,
         challengeId: pendingConnection.challengeJson.challengeId,
         intentUrl: proofJson.intentUrl,
-        name: pendingConnection.challengeJson.name,
+        name: pendingConnection.challengeJson.name ?? proofJson.name,
         proof: proofJson.proof,
         tweetText: proofJson.tweetText,
-        username: pendingConnection.challengeJson.username,
+        username: pendingConnection.challengeJson.username ?? proofJson.username,
       }
     },
     onError: () => setStatus('idle'),
@@ -393,7 +395,7 @@ function LinkPanel() {
                 </div>
               ) : (
                 <div className="space-y-6 border-b border-gray5 py-6">
-                  {walletAddress || showTweetFallback ? (
+                  {pendingConnection ? (
                     <div className="space-y-3">
                       {showTweetFallback ? (
                         <>
@@ -410,7 +412,7 @@ function LinkPanel() {
                             <input
                               autoComplete="username"
                               className="h-12 w-full rounded-lg border border-gray5 bg-bg1 ps-7 pe-3 text-gray10 outline-none focus-visible:border-blue9 focus-visible:ring-2 focus-visible:ring-blue5 focus-visible:outline-none"
-                              disabled={Boolean(pendingConnection)}
+                              disabled={Boolean(pendingConnection?.challengeJson.username)}
                               id="x-username"
                               onChange={(event) => setXUsername(event.currentTarget.value)}
                               placeholder="yourhandle"
@@ -434,8 +436,8 @@ function LinkPanel() {
                             <div className="space-y-1">
                               <p className="text-lg font-bold text-gray10">Read your X profile</p>
                               <p className="text-base text-gray9">
-                                Tipbot uses your X id, username, and display name to link the right
-                                account.
+                                X requires read-only tweet access to return your profile. Tipbot
+                                only uses your id, username, and display name.
                               </p>
                             </div>
                           </div>
@@ -450,7 +452,7 @@ function LinkPanel() {
                             <div className="space-y-1">
                               <p className="text-lg font-bold text-gray10">Post tweets for you</p>
                               <p className="text-base text-gray9">
-                                Tipbot only requests profile access for account verification.
+                                Tipbot requests read-only access for account verification.
                               </p>
                             </div>
                           </div>
@@ -470,7 +472,7 @@ function LinkPanel() {
                       )}
                     </div>
                   ) : null}
-                  {!walletAddress ? (
+                  {!pendingConnection ? (
                     <>
                       <h3 className="text-lg font-bold text-gray10">
                         With this connection, Tipbot can:
@@ -509,12 +511,16 @@ function LinkPanel() {
                 {!challenge ? (
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                     <button
-                      className="inline-flex h-12 items-center justify-center rounded-lg bg-green8 px-6 text-lg font-bold text-white transition-colors outline-none hover:bg-green7 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                      className="inline-flex h-12 shrink-0 items-center justify-center rounded-lg bg-green8 px-6 text-lg font-bold whitespace-nowrap text-white transition-colors outline-none hover:bg-green7 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
                       disabled={
                         status === 'connecting' ||
                         status === 'signing' ||
                         status === 'oauthing' ||
-                        Boolean(!pendingConnection && showTweetFallback && !xUsername.trim())
+                        Boolean(
+                          showTweetFallback &&
+                          !pendingConnection?.challengeJson.username &&
+                          !xUsername.trim(),
+                        )
                       }
                       onClick={() => {
                         connectWalletMutation.reset()
@@ -537,21 +543,15 @@ function LinkPanel() {
                               ? showTweetFallback
                                 ? 'Prepare proof tweet'
                                 : 'Connect X'
-                              : walletAddress
-                                ? 'Create access key'
-                                : showTweetFallback
-                                  ? 'Connect wallet'
-                                  : 'Connect wallet'}
+                              : 'Connect wallet'}
                     </button>
-                    {!pendingConnection ? (
+                    {pendingConnection ? (
                       <button
-                        className="inline-flex h-12 items-center justify-center rounded-lg border border-transparent px-6 text-lg font-bold text-gray8 transition-colors outline-none hover:bg-gray3 hover:text-gray10 focus-visible:ring-2 focus-visible:ring-gray8 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                        className="inline-flex h-12 shrink-0 items-center justify-center rounded-lg border border-transparent px-6 text-lg font-bold whitespace-nowrap text-gray8 transition-colors outline-none hover:bg-gray3 hover:text-gray10 focus-visible:ring-2 focus-visible:ring-gray8 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
                         onClick={() => setShowTweetFallback((value) => !value)}
                         type="button"
                       >
-                        {showTweetFallback
-                          ? 'Use X OAuth instead'
-                          : 'Verify with proof tweet instead'}
+                        {showTweetFallback ? 'Use X OAuth instead' : 'Verify with proof tweet'}
                       </button>
                     ) : null}
                   </div>
@@ -582,6 +582,7 @@ function LinkPanel() {
                         setPendingConnection(null)
                         setShowTweetFallback(false)
                         setXUsername('')
+                        void navigate({ replace: true, search: {} })
                       },
                     })
                   }}

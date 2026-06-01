@@ -182,7 +182,7 @@ export async function createOAuthAuthorizationUrl(
   url.searchParams.set('response_type', 'code')
   url.searchParams.set('client_id', env.TWITTER_OAUTH_CLIENT_ID)
   url.searchParams.set('redirect_uri', input.redirectUri)
-  url.searchParams.set('scope', 'users.read')
+  url.searchParams.set('scope', 'tweet.read users.read')
   url.searchParams.set('state', state)
   url.searchParams.set('code_challenge', await createCodeChallenge(codeVerifier))
   url.searchParams.set('code_challenge_method', 'S256')
@@ -286,6 +286,7 @@ export async function createProof(
     address: string
     challengeId: string
     keyAuthorization: unknown
+    username?: string | undefined
   },
 ) {
   const db = DB.create(env.DB)
@@ -297,7 +298,21 @@ export async function createProof(
     .executeTakeFirst()
   if (!challenge || challenge.used_at || challenge.expires_at <= new Date().toISOString())
     throw new Error('This Twitter connection proof is invalid or expired.')
-  if (!challenge.expected_provider_user_id || !challenge.expected_provider_handle)
+  const twitterAccount = await (async () => {
+    if (challenge.expected_provider_user_id && challenge.expected_provider_handle)
+      return {
+        id: challenge.expected_provider_user_id,
+        name: challenge.expected_provider_handle.replace(/^@/, ''),
+        profile_image_url: undefined,
+        username: challenge.expected_provider_handle.replace(/^@/, ''),
+      }
+    if (!input.username) return null
+    return await getUserByUsername(env, input.username)
+  })()
+  if (!twitterAccount) throw new Error('This Twitter connection proof is invalid or expired.')
+  const expectedProviderHandle = `@${twitterAccount.username}`
+  const expectedProviderUserId = twitterAccount.id
+  if (!expectedProviderUserId || !expectedProviderHandle)
     throw new Error('This Twitter connection proof is invalid or expired.')
   const workspace = await ensureTwitterWorkspace(db, new Date().toISOString())
 
@@ -321,6 +336,8 @@ export async function createProof(
     .updateTable('provider_link_challenge')
     .set({
       access_key_authorization: verified.serialized,
+      expected_provider_handle: expectedProviderHandle,
+      expected_provider_user_id: expectedProviderUserId,
       proof_hash: await AccountLink.hashToken(env, proof),
       updated_at: new Date().toISOString(),
       wallet_address: verified.rootAddress,
@@ -337,7 +354,14 @@ export async function createProof(
   ].join('\n')
   const intentUrl = new URL('/intent/tweet', 'https://twitter.com')
   intentUrl.searchParams.set('text', tweetText)
-  return { intentUrl: intentUrl.toString(), proof, tweetText }
+  return {
+    avatarUrl: twitterAccount.profile_image_url,
+    intentUrl: intentUrl.toString(),
+    name: twitterAccount.name,
+    proof,
+    tweetText,
+    username: twitterAccount.username,
+  }
 }
 
 export async function verifyLinkChallenge(

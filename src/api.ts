@@ -369,6 +369,12 @@ export const api = new Hono<{
         address: z.string().min(1),
         challengeId: z.string().min(1),
         keyAuthorization: z.unknown(),
+        username: z
+          .string()
+          .min(1)
+          .max(16)
+          .regex(/^@?[A-Za-z0-9_]{1,15}$/)
+          .optional(),
       }),
     ),
     async (c) => {

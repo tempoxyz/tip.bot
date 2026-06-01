@@ -82,15 +82,13 @@ test('visitor connects X account with proof tweet', async ({ app, page }) => {
   await page.addInitScript(
     `window.open = (url) => { window.sessionStorage.setItem('openedUrl', String(url)); return null }`,
   )
-  await page.route('**/api/link/twitter/challenge', async (route) => {
+  await page.route('**/api/link/twitter/oauth/challenge', async (route) => {
     expect(route.request().method()).toBe('POST')
     const json = route.request().postDataJSON() as {
       address?: string
-      json?: { address?: string; username?: string }
-      username?: string
+      json?: { address?: string }
     }
     expect(json.address ?? json.json?.address).toBeUndefined()
-    expect(json.username ?? json.json?.username).toBe('tipbotgg')
     await route.fulfill({
       body: JSON.stringify({
         accessKeyExpiry: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
@@ -99,11 +97,8 @@ test('visitor connects X account with proof tweet', async ({ app, page }) => {
         accessKeyPublicKey: accessKey.publicKey,
         chainId: Tempo.chainLookup.mainnet,
         challengeId,
-        avatarUrl: 'https://example.com/avatar.jpg',
-        name: 'Tipbot',
         ok: true,
         tokenAddress: Tempo.addressLookup.usdcE,
-        username: 'tipbotgg',
       }),
       contentType: 'application/json',
       status: 200,
@@ -114,18 +109,28 @@ test('visitor connects X account with proof tweet', async ({ app, page }) => {
     const json = route.request().postDataJSON() as {
       address?: string
       challengeId?: string
-      json?: { address?: string; challengeId?: string; keyAuthorization?: unknown }
+      json?: {
+        address?: string
+        challengeId?: string
+        keyAuthorization?: unknown
+        username?: string
+      }
       keyAuthorization?: unknown
+      username?: string
     }
     expect(json.address ?? json.json?.address).toBe(root.address)
     expect(json.challengeId ?? json.json?.challengeId).toBe(challengeId)
     expect(json.keyAuthorization ?? json.json?.keyAuthorization).toEqual(expect.any(Object))
+    expect(json.username ?? json.json?.username).toBe('tipbotgg')
     await route.fulfill({
       body: JSON.stringify({
+        avatarUrl: 'https://example.com/avatar.jpg',
         intentUrl: intentUrl.toString(),
+        name: 'Tipbot',
         ok: true,
         proof,
         tweetText,
+        username: 'tipbotgg',
       }),
       contentType: 'application/json',
       status: 200,
@@ -163,12 +168,11 @@ test('visitor connects X account with proof tweet', async ({ app, page }) => {
   await expect(page.getByRole('heading', { name: 'Connect X to Tipbot' })).toBeVisible()
   await expect(page.getByText('Step 1/3')).toBeVisible()
   await expect(page.getByLabel('X username')).toBeHidden()
-  await page.getByRole('button', { name: 'Verify with proof tweet instead' }).click()
-  await expect(page.getByText('Step 1/3')).toBeVisible()
-  await expect(page.getByLabel('X username')).toBeVisible()
-  await page.getByLabel('X username').fill('@tipbotgg')
   await page.getByRole('button', { name: 'Connect wallet' }).click()
   await expect(page.getByText('Step 2/3')).toBeVisible()
+  await page.getByRole('button', { name: 'Verify with proof tweet' }).click()
+  await expect(page.getByLabel('X username')).toBeVisible()
+  await page.getByLabel('X username').fill('@tipbotgg')
   await expect(page.getByRole('button', { name: 'Disconnect wallet' })).toBeVisible()
   await page.getByRole('button', { name: 'Prepare proof tweet' }).click()
   await expect(page.getByText('Step 3/3')).toBeVisible()
@@ -209,15 +213,13 @@ test('visitor connects X account after automatic proof tweet polling', async ({ 
   await page.addInitScript(
     `window.open = (url) => { window.sessionStorage.setItem('openedUrl', String(url)); return null }`,
   )
-  await page.route('**/api/link/twitter/challenge', async (route) => {
+  await page.route('**/api/link/twitter/oauth/challenge', async (route) => {
     expect(route.request().method()).toBe('POST')
     const json = route.request().postDataJSON() as {
       address?: string
-      json?: { address?: string; username?: string }
-      username?: string
+      json?: { address?: string }
     }
     expect(json.address ?? json.json?.address).toBeUndefined()
-    expect(json.username ?? json.json?.username).toBe('tipbotgg')
     await route.fulfill({
       body: JSON.stringify({
         accessKeyExpiry: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
@@ -226,11 +228,8 @@ test('visitor connects X account after automatic proof tweet polling', async ({ 
         accessKeyPublicKey: accessKey.publicKey,
         chainId: Tempo.chainLookup.mainnet,
         challengeId,
-        avatarUrl: 'https://example.com/avatar.jpg',
-        name: 'Tipbot',
         ok: true,
         tokenAddress: Tempo.addressLookup.usdcE,
-        username: 'tipbotgg',
       }),
       contentType: 'application/json',
       status: 200,
@@ -241,18 +240,28 @@ test('visitor connects X account after automatic proof tweet polling', async ({ 
     const json = route.request().postDataJSON() as {
       address?: string
       challengeId?: string
-      json?: { address?: string; challengeId?: string; keyAuthorization?: unknown }
+      json?: {
+        address?: string
+        challengeId?: string
+        keyAuthorization?: unknown
+        username?: string
+      }
       keyAuthorization?: unknown
+      username?: string
     }
     expect(json.address ?? json.json?.address).toBe(root.address)
     expect(json.challengeId ?? json.json?.challengeId).toBe(challengeId)
     expect(json.keyAuthorization ?? json.json?.keyAuthorization).toEqual(expect.any(Object))
+    expect(json.username ?? json.json?.username).toBe('tipbotgg')
     await route.fulfill({
       body: JSON.stringify({
+        avatarUrl: 'https://example.com/avatar.jpg',
         intentUrl: intentUrl.toString(),
+        name: 'Tipbot',
         ok: true,
         proof,
         tweetText,
+        username: 'tipbotgg',
       }),
       contentType: 'application/json',
       status: 200,
@@ -283,11 +292,11 @@ test('visitor connects X account after automatic proof tweet polling', async ({ 
 
   await page.goto(app.url({ to: '/link/x' }))
   await page.waitForLoadState('networkidle')
-  await page.getByRole('button', { name: 'Verify with proof tweet instead' }).click()
-  await expect(page.getByLabel('X username')).toBeVisible()
-  await page.getByLabel('X username').fill('tipbotgg')
   await page.getByRole('button', { name: 'Connect wallet' }).click()
   await expect(page.getByText('Step 2/3')).toBeVisible()
+  await page.getByRole('button', { name: 'Verify with proof tweet' }).click()
+  await expect(page.getByLabel('X username')).toBeVisible()
+  await page.getByLabel('X username').fill('tipbotgg')
   await page.getByRole('button', { name: 'Prepare proof tweet' }).click()
   await expect(page.getByText(tweetText)).toBeVisible()
   await page.getByRole('button', { name: 'Post connection tweet' }).click()
