@@ -481,6 +481,10 @@ export async function handleTweet(env: Env, input: TwitterTweetInput) {
     })
     return
   }
+  if (result.ok && result.status === 'duplicate') {
+    console.log('Twitter webhook ignored duplicate tip', { tweetId: input.id })
+    return
+  }
   if (result.ok && result.status === 'sent') {
     console.log('Twitter webhook sent tip', {
       transactionHash: result.transactionHash,
@@ -734,6 +738,40 @@ export async function updatePendingTipMessage(env: Env, result: Tip.PendingTipCl
     result.pendingTip.provider_thread_id ?? result.pendingTip.provider_channel_id,
     text,
   )
+}
+
+export async function postConfirmationReceipt(
+  env: Env,
+  input: {
+    providerChannelId: string
+    providerThreadId?: string | undefined
+    result: Extract<Tip.TipResult, { ok: true }> | Extract<Tip.TipBatchResult, { ok: true }>
+  },
+) {
+  if (input.result.status !== 'sent') return
+  const db = DB.create(env.DB)
+  const sender = await getTwitterIdentity(db, input.result.senderProviderUserId)
+  const senderHandle = sender?.display_name?.replace(/^@+/, '')
+  const text =
+    'recipients' in input.result
+      ? formatTwitterBatchReceiptText({
+          amount: formatTwitterAmount(input.result),
+          chainId: input.result.chainId,
+          memo: input.result.memo,
+          queuedRecipients: [],
+          senderHandle,
+          sentRecipients: input.result.recipients,
+          transactionHash: input.result.transactionHash,
+        })
+      : formatTwitterReceiptText({
+          amount: formatTwitterAmount(input.result),
+          chainId: input.result.chainId,
+          memo: input.result.memo,
+          recipientHandle: await getTwitterReceiptHandle(db, input.result.recipientProviderUserId),
+          senderHandle,
+          transactionHash: input.result.transactionHash,
+        })
+  await postReply(env, input.providerThreadId ?? input.providerChannelId, text)
 }
 
 export function formatTwitterReceiptText(input: {
@@ -1344,6 +1382,10 @@ async function getTwitterIdentity(db: DB.Type, providerUserId: string) {
     .where('provider_workspace_id', '=', twitterProviderId)
     .where('provider_user_id', '=', providerUserId)
     .executeTakeFirst()
+}
+
+async function getTwitterReceiptHandle(db: DB.Type, providerUserId: string) {
+  return (await getTwitterIdentity(db, providerUserId))?.display_name?.replace(/^@+/, '')
 }
 
 function formatTwitterAmount(input: {

@@ -727,7 +727,17 @@ export const api = new Hono<{
             400,
           )
 
-        if (
+        if (result.status === 'sent' && data.payload.providerId === Twitter.twitterProviderId)
+          c.executionCtx.waitUntil(
+            Twitter.postConfirmationReceipt(c.env, {
+              providerChannelId: data.payload.providerChannelId,
+              providerThreadId: data.payload.providerThreadId,
+              result,
+            }).catch((error) => {
+              console.error('Failed to post Twitter receipt after confirmation:', error)
+            }),
+          )
+        else if (
           result.status === 'sent' &&
           Chat.isReactionTipIdempotencyKey(data.payload.idempotencyKey)
         )

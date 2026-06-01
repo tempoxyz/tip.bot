@@ -267,6 +267,46 @@ describe('/api/chat/twitter', () => {
     })
   }, 20_000) // 20 seconds
 
+  test('Twitter webhook ignores duplicate single-tip delivery after receipt reply', async () => {
+    const senderProviderUserId = twitterProviderUserId()
+    const recipientProviderUserId = twitterProviderUserId()
+    const tweetId = `tweet-${Nanoid.generate()}`
+    const posts: Array<{ body: unknown }> = []
+    await connectTwitterTipAccounts({ recipientProviderUserId, senderProviderUserId })
+    server.use(
+      mswHttp.get('https://api.twitter.com/2/users/by/username/alice', () =>
+        HttpResponse.json({ data: { id: recipientProviderUserId, username: 'alice' } }),
+      ),
+      mswHttp.post('https://api.twitter.com/2/tweets', async ({ request }) => {
+        posts.push({ body: await request.json() })
+        return HttpResponse.json({ data: { id: `reply-${Nanoid.generate()}`, text: 'ok' } })
+      }),
+    )
+
+    const tweet = {
+      authorHandle: 'bob',
+      authorId: senderProviderUserId,
+      id: tweetId,
+      text: '@tipbotgg @alice $0.001 for coffee',
+    }
+    const firstResponse = await postTwitterWebhook(tweet)
+    const duplicateResponse = await postTwitterWebhook(tweet)
+    const tips = await db
+      .selectFrom('tip')
+      .selectAll()
+      .where('idempotency_key', '=', `twitter:${tweetId}`)
+      .execute()
+
+    expect(firstResponse.status).toBe(200)
+    expect(duplicateResponse.status).toBe(200)
+    expect(tips).toHaveLength(1)
+    expect(posts).toHaveLength(1)
+    expect(posts[0]?.body).toMatchObject({
+      reply: { in_reply_to_tweet_id: tweetId },
+      text: expect.stringContaining('@bob sent @alice $0.001 for coffee'),
+    })
+  }, 20_000) // 20 seconds
+
   test('Twitter webhook sends multi-tip for connected X accounts', async () => {
     const senderProviderUserId = twitterProviderUserId()
     const aliceProviderUserId = twitterProviderUserId()
@@ -1865,6 +1905,73 @@ describe('/api/confirm/:token', () => {
     })
   })
 
+  test('posts X receipt after confirmed payment', async () => {
+    const workspace = await ensureTwitterTestWorkspace()
+    const senderRoot = Account.fromSecp256k1(Constants.tip.senderRootPrivateKey)
+    const recipientRoot = Account.fromSecp256k1(Constants.tip.recipientRootPrivateKey)
+    const senderAccount = await findOrCreateAccount(senderRoot.address)
+    const recipientAccount = await findOrCreateAccount(recipientRoot.address)
+    const senderProviderUserId = twitterProviderUserId()
+    const recipientProviderUserId = twitterProviderUserId()
+    const tweetId = `tweet-${Nanoid.generate()}`
+    const posts: Array<{ body: unknown }> = []
+    await insertMember({
+      account_id: senderAccount.id,
+      login: '@bob',
+      provider_user_id: senderProviderUserId,
+      workspace_id: workspace.id,
+    })
+    await insertMember({
+      account_id: recipientAccount.id,
+      login: '@alice',
+      provider_user_id: recipientProviderUserId,
+      workspace_id: workspace.id,
+    })
+    server.use(
+      mswHttp.post('https://api.twitter.com/2/tweets', async ({ request }) => {
+        posts.push({ body: await request.json() })
+        return HttpResponse.json({ data: { id: `reply-${Nanoid.generate()}`, text: 'ok' } })
+      }),
+    )
+    const nonce = Nanoid.generate()
+    const payload = {
+      amount: 1000,
+      chainId: workspace.chain_id,
+      expiresAt: new Date(Date.now() + AccountLink.confirmationLinkTtlMs).toISOString(), // 10 minutes
+      idempotencyKey: `twitter:${tweetId}`,
+      kind: 'onetime_payment',
+      memo: 'coffee',
+      nonce,
+      provider: 'slack',
+      providerChannelId: `conversation-${Nanoid.generate()}`,
+      providerId: Twitter.twitterProviderId,
+      providerThreadId: tweetId,
+      recipientProviderLabel: '@alice',
+      recipientProviderUserId,
+      senderProviderUserId,
+      source: 'mention',
+      tokenAddress: workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+      workspaceId: workspace.id,
+    } satisfies Confirmation.Payload
+    const token = await Confirmation.encrypt(env, payload)
+    const signedTransaction = await signConfirmationTransaction({ payload, token })
+
+    const response = await client.api.confirm[':token'].$post({
+      json: { address: senderRoot.address, signedTransaction },
+      param: { token },
+    })
+    await Promise.all(waitUntil)
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ ok: true })
+    expect(posts).toHaveLength(1)
+    expect(posts[0]?.body).toMatchObject({
+      reply: { in_reply_to_tweet_id: tweetId },
+      text: expect.stringContaining('@bob sent @alice $0.001 for coffee'),
+    })
+    expect((posts[0]?.body as { text: string } | undefined)?.text).toContain('Receipt:')
+  }, 20_000) // 20 seconds
+
   test('rejects invalid confirmation links generically', async () => {
     const response = await client.api.confirm[':token'].$get({ param: { token: 'missing' } })
 
@@ -2537,9 +2644,10 @@ async function findOrCreateAccount(address: string) {
   return await factory.account.insert({ address })
 }
 
-async function signConfirmationTransaction(
-  confirmation: Awaited<ReturnType<typeof createConfirmationToken>>,
-) {
+async function signConfirmationTransaction(confirmation: {
+  payload: Confirmation.Payload
+  token: string
+}) {
   const response = await client.api.confirm[':token'].$get({
     param: { token: confirmation.token },
   })
