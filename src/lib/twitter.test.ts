@@ -104,7 +104,7 @@ test('parses v2 tweet payload with includes', () => {
   ])
 })
 
-test('formats Twitter receipt reply without sentence-ending period', () => {
+test('formats Twitter receipt reply like Slack without sentence-ending period', () => {
   const transactionHash = `0x${'1'.repeat(64)}`
 
   expect(
@@ -117,6 +117,18 @@ test('formats Twitter receipt reply without sentence-ending period', () => {
       transactionHash,
     }),
   ).toBe(
-    `@alice got $1 from @bob for coffee\nReceipt: ${Tempo.formatTxLink(Tempo.chainLookup.testnet, transactionHash)}`,
+    `@bob sent @alice $1 for coffee\nReceipt: ${Tempo.formatTxLink(Tempo.chainLookup.testnet, transactionHash)}`,
+  )
+  expect(
+    formatTwitterReceiptText({
+      amount: '$1',
+      chainId: Tempo.chainLookup.testnet,
+      memo: null,
+      recipientHandle: 'alice',
+      senderHandle: '@bob',
+      transactionHash,
+    }),
+  ).toBe(
+    `@bob tipped @alice $1\nReceipt: ${Tempo.formatTxLink(Tempo.chainLookup.testnet, transactionHash)}`,
   )
 })

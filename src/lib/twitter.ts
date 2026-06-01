@@ -320,7 +320,7 @@ export function formatTwitterReceiptText(input: {
   senderHandle: string | undefined
   transactionHash: string
 }) {
-  return `${formatHandle(input.recipientHandle)} got ${input.amount} from ${formatHandle(input.senderHandle)}${input.memo ? ` for ${input.memo}` : ''}\nReceipt: ${Tempo.formatTxLink(input.chainId, input.transactionHash)}`
+  return `${formatHandle(input.senderHandle)} ${input.memo ? 'sent' : 'tipped'} ${formatHandle(input.recipientHandle)} ${input.amount}${input.memo ? ` for ${input.memo}` : ''}\nReceipt: ${Tempo.formatTxLink(input.chainId, input.transactionHash)}`
 }
 
 export function parseWebhookTweets(body: unknown): TwitterTweetInput[] {
