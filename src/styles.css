@@ -133,15 +133,6 @@ form button:focus-visible {
   outline-offset: -1px;
 }
 
-input {
-  caret-shape: block;
-}
-
-input:focus-visible,
-textarea:focus-visible {
-  caret-color: var(--color-blue9);
-}
-
 @utility minimal-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: var(--color-gray-alpha3) transparent;

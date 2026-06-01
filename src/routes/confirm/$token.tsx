@@ -64,10 +64,12 @@ function ConfirmPanel(props: {
   const [status, setStatus] = React.useState<'idle' | 'confirming' | 'sent'>('idle')
   const [transactionHash, setTransactionHash] = React.useState<string | null>(null)
   const recipients: Array<{
+    recipientAvatarUrl?: string | null
     recipientProviderLabel?: string | null
     recipientProviderUserId: string
   }> = data.recipients ?? [
     {
+      recipientAvatarUrl: data.recipientAvatarUrl,
       recipientProviderLabel: data.recipientProviderLabel,
       recipientProviderUserId: data.recipientProviderUserId,
     },
@@ -234,12 +236,22 @@ function ConfirmPanel(props: {
                   ) : null}
                   <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6 sm:p-5">
                     <span className="text-base font-bold text-gray8 sm:text-lg">To</span>
-                    <div className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
+                    <div className="flex flex-col gap-3 text-lg font-bold text-gray10 sm:items-end sm:text-end sm:text-xl">
                       {recipients.map((recipient) => (
-                        <div key={recipient.recipientProviderUserId}>
-                          {recipient.recipientProviderLabel
-                            ? `@${recipient.recipientProviderLabel}`
-                            : recipient.recipientProviderUserId}
+                        <div
+                          className="flex items-center gap-3 sm:flex-row-reverse"
+                          key={recipient.recipientProviderUserId}
+                        >
+                          {recipient.recipientAvatarUrl ? (
+                            <img
+                              alt={`${formatProviderLabel(recipient)} avatar`}
+                              className="size-8 rounded-lg object-cover"
+                              height={32}
+                              src={recipient.recipientAvatarUrl}
+                              width={32}
+                            />
+                          ) : null}
+                          <span>{formatProviderLabel(recipient)}</span>
                         </div>
                       ))}
                     </div>
@@ -258,9 +270,7 @@ function ConfirmPanel(props: {
                       <div className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
                         {skippedRecipients.map((recipient) => (
                           <div key={recipient.recipientProviderUserId}>
-                            {recipient.recipientProviderLabel
-                              ? `@${recipient.recipientProviderLabel}`
-                              : recipient.recipientProviderUserId}{' '}
+                            {formatProviderLabel(recipient)}{' '}
                             <span className="text-gray8">
                               ({recipient.reason === 'you' ? 'you' : 'not connected yet'})
                             </span>
@@ -290,7 +300,7 @@ function ConfirmPanel(props: {
                 </div>
                 <p className="text-base text-gray9">
                   {data.kind === 'reusable_access_key'
-                    ? `Tipbot can send future ${data.tokenSymbol} tips from Slack, up to ${formatCurrencyAmount(data.accessKeyLimit, data.tokenCurrency)} per day. You can disconnect anytime.`
+                    ? `Tipbot can send future ${data.tokenSymbol} tips from ${data.providerLabel}, up to ${formatCurrencyAmount(data.accessKeyLimit, data.tokenCurrency)} per day. You can disconnect anytime.`
                     : 'Tipbot will use this approval once and won’t save a new access key.'}
                 </p>
                 {error ? <p className="text-sm font-medium text-red9">{error}</p> : null}
@@ -355,4 +365,12 @@ function getAuthorizeAccessKey(
       { address: data.tokenAddress, selector: 'transferWithMemo(address,uint256,bytes32)' },
     ],
   }
+}
+
+function formatProviderLabel(input: {
+  recipientProviderLabel?: string | null
+  recipientProviderUserId: string
+}) {
+  if (!input.recipientProviderLabel) return input.recipientProviderUserId
+  return `@${input.recipientProviderLabel.replace(/^@+/, '')}`
 }

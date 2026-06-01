@@ -317,6 +317,9 @@ export async function getUserInfo(input: SlackBotTokenInput & { providerUserId: 
           profile: z
             .object({
               display_name: z.string().optional(),
+              image_192: z.string().optional(),
+              image_72: z.string().optional(),
+              image_48: z.string().optional(),
               real_name: z.string().optional(),
             })
             .optional(),

@@ -419,76 +419,29 @@ export const api = new Hono<{
     try {
       const data = await Tip.getConfirmationData(c.env, c.req.param('token'))
       const metadata = Tempo.getTokenMetadataFallback(data.payload.tokenAddress)
-      const recipientProviderLabel =
-        data.payload.recipientProviderLabel ??
-        (await c.var.db
-          .selectFrom('member')
-          .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
-          .select(['member.login', 'member.name'])
-          .where('workspace.id', '=', data.payload.workspaceId)
-          .where('member.provider_user_id', '=', data.payload.recipientProviderUserId)
-          .executeTakeFirst()
-          .then((member) => member?.name?.trim() || member?.login?.trim() || undefined)) ??
-        (await (async () => {
-          await Chat.getChat().initialize()
-          const installation = await Chat.getSlack().getInstallation(data.payload.providerId)
-          if (!installation) return undefined
-          const slackUserSchema = z.object({
-            id: z.string().optional(),
-            name: z.string().optional(),
-            profile: z
-              .object({
-                display_name: z.string().optional(),
-                real_name: z.string().optional(),
-              })
-              .nullable()
-              .optional(),
-          })
-
-          const body = new URLSearchParams()
-          body.set('user', data.payload.recipientProviderUserId)
-          const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
-            fetch(`${c.env.SLACK_API_URL}/users.info`, {
-              body,
-              headers: { authorization: `Bearer ${installation.botToken}` },
-              method: 'POST',
-            }),
-          )
-          const info = z.parse(
-            z.object({
-              ok: z.boolean().optional(),
-              user: slackUserSchema.optional(),
-            }),
-            await response.json(),
-          )
-          const user = info.ok
-            ? info.user
-            : await (async () => {
-                const listResponse = await Chat.getSlack().withBotToken(installation.botToken, () =>
-                  fetch(`${c.env.SLACK_API_URL}/users.list`, {
-                    headers: { authorization: `Bearer ${installation.botToken}` },
-                    method: 'GET',
-                  }),
-                )
-                const list = z.parse(
-                  z.object({
-                    members: z.array(slackUserSchema).optional(),
-                    ok: z.boolean().optional(),
-                  }),
-                  await listResponse.json(),
-                )
-                if (!list.ok) return undefined
-                return list.members?.find(
-                  (member) => member.id === data.payload.recipientProviderUserId,
-                )
-              })()
-          return (
-            user?.profile?.display_name?.trim() ||
-            user?.profile?.real_name?.trim() ||
-            user?.name?.trim() ||
-            undefined
-          )
-        })().catch(() => undefined))
+      const recipientInputs = data.payload.recipients ?? [
+        {
+          recipientProviderLabel: data.payload.recipientProviderLabel,
+          recipientProviderUserId: data.payload.recipientProviderUserId,
+          recipientProviderWorkspaceId: data.payload.recipientProviderWorkspaceId,
+        },
+      ]
+      const recipientProfiles = await resolveSlackRecipientProfiles(c.env, c.var.db, {
+        providerId: data.payload.providerId,
+        recipients: recipientInputs,
+        workspaceId: data.payload.workspaceId,
+      })
+      const recipients = recipientInputs.map((recipient) => ({
+        recipientAvatarUrl: recipientProfiles.get(recipient.recipientProviderUserId)?.avatarUrl,
+        recipientProviderLabel:
+          recipient.recipientProviderLabel ??
+          recipientProfiles.get(recipient.recipientProviderUserId)?.label,
+        recipientProviderUserId: recipient.recipientProviderUserId,
+        recipientProviderWorkspaceId: recipient.recipientProviderWorkspaceId,
+      }))
+      const recipientProfile = recipientProfiles.get(data.payload.recipientProviderUserId)
+      const recipientAvatarUrl = recipientProfile?.avatarUrl
+      const recipientProviderLabel = data.payload.recipientProviderLabel ?? recipientProfile?.label
       return c.json({
         accessKeyAddress: data.accessKey.address,
         accessKeyExpiry:
@@ -513,14 +466,11 @@ export const api = new Hono<{
         kind: data.payload.kind,
         memo: data.payload.memo,
         ok: true as const,
+        providerLabel: data.payload.providerId === Twitter.twitterProviderId ? 'X' : 'Slack',
+        recipientAvatarUrl,
         recipientProviderLabel,
         recipientProviderUserId: data.payload.recipientProviderUserId,
-        recipients: data.payload.recipients ?? [
-          {
-            recipientProviderLabel,
-            recipientProviderUserId: data.payload.recipientProviderUserId,
-          },
-        ],
+        recipients,
         skippedRecipients: data.payload.skippedRecipients ?? [],
         tokenAddress: Address.checksum(data.payload.tokenAddress),
         tokenCurrency: metadata.currency,
@@ -1332,3 +1282,87 @@ export const api = new Hono<{
     await c.env.DB.prepare('SELECT 1').first()
     return c.json({ ok: true })
   })
+
+async function resolveSlackRecipientProfiles(
+  env: Env,
+  db: DB.Type,
+  input: {
+    providerId: string
+    recipients: Array<{
+      recipientProviderLabel?: string | null
+      recipientProviderUserId: string
+      recipientProviderWorkspaceId?: string
+    }>
+    workspaceId: string
+  },
+) {
+  const profiles = new Map<string, { avatarUrl?: string; label?: string }>()
+  for (const recipient of input.recipients) {
+    const label = recipient.recipientProviderLabel?.trim()
+    if (label) profiles.set(recipient.recipientProviderUserId, { label })
+  }
+
+  const missingProviderUserIds = Array.from(
+    new Set(
+      input.recipients
+        .map((recipient) => recipient.recipientProviderUserId)
+        .filter((providerUserId) => !profiles.get(providerUserId)?.label),
+    ),
+  )
+  if (missingProviderUserIds.length) {
+    const members = await db
+      .selectFrom('member')
+      .select(['login', 'name', 'provider_user_id'])
+      .where('workspace_id', '=', input.workspaceId)
+      .where('provider_user_id', 'in', missingProviderUserIds)
+      .execute()
+    for (const member of members) {
+      const label = member.name?.trim() || member.login?.trim()
+      if (label) profiles.set(member.provider_user_id, { label })
+    }
+  }
+
+  if (input.providerId === Twitter.twitterProviderId) {
+    for (const recipient of input.recipients) {
+      const label = profiles.get(recipient.recipientProviderUserId)?.label
+      if (!label) continue
+      const profile = await Twitter.getUserByUsername(env, label).catch(() => null)
+      const avatarUrl = profile?.profile_image_url?.trim()
+      if (avatarUrl)
+        profiles.set(recipient.recipientProviderUserId, {
+          avatarUrl,
+          label,
+        })
+    }
+    return profiles
+  }
+
+  await Chat.getChat().initialize()
+  for (const recipient of input.recipients) {
+    const installation = await Chat.getSlack().getInstallation(
+      recipient.recipientProviderWorkspaceId ?? input.providerId,
+    )
+    if (!installation) continue
+    const user = await Slack.getUserInfo({
+      apiUrl: env.SLACK_API_URL,
+      botToken: installation.botToken,
+      providerUserId: recipient.recipientProviderUserId,
+      withBotToken: (botToken, fn) => Chat.getSlack().withBotToken(botToken, fn),
+    }).catch(() => undefined)
+    const label =
+      user?.profile?.display_name?.trim() ||
+      user?.profile?.real_name?.trim() ||
+      user?.real_name?.trim() ||
+      user?.name?.trim()
+    const avatarUrl =
+      user?.profile?.image_72?.trim() ||
+      user?.profile?.image_192?.trim() ||
+      user?.profile?.image_48?.trim()
+    if (label || avatarUrl)
+      profiles.set(recipient.recipientProviderUserId, {
+        avatarUrl,
+        label: profiles.get(recipient.recipientProviderUserId)?.label ?? label,
+      })
+  }
+  return profiles
+}

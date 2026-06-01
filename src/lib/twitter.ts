@@ -687,7 +687,7 @@ async function getTweet(env: Env, tweetId: string) {
   }
 }
 
-async function getUserByUsername(env: Env, username: string) {
+export async function getUserByUsername(env: Env, username: string) {
   const url = new URL(`/2/users/by/username/${username.replace(/^@+/, '')}`, env.TWITTER_API_URL)
   url.searchParams.set('user.fields', 'name,profile_image_url,username')
   const json = z.parse(

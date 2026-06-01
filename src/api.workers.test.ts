@@ -1201,6 +1201,7 @@ describe('/api/confirm/:token', () => {
             user: {
               id: Constants.slack.memberUserId,
               name: Constants.slack.memberUserName,
+              profile: { image_72: 'https://example.com/member.png' },
             },
           }),
         )
@@ -1223,8 +1224,115 @@ describe('/api/confirm/:token', () => {
       ok: true,
       recipientProviderLabel: Constants.slack.memberUserName,
       recipientProviderUserId: Constants.slack.memberUserId,
+      recipients: [
+        {
+          recipientProviderLabel: Constants.slack.memberUserName,
+          recipientProviderUserId: Constants.slack.memberUserId,
+        },
+      ],
+      recipientAvatarUrl: 'https://example.com/member.png',
     })
     fetchSpy.mockRestore()
+  })
+
+  test('resolves missing multi-recipient confirmation labels from Slack', async () => {
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.startsWith(env.SLACK_API_URL) && url.includes('/users.info')) {
+        const body = init?.body instanceof URLSearchParams ? init.body : new URLSearchParams()
+        const userId = body.get('user') ?? ''
+        return Promise.resolve(
+          Response.json({
+            ok: true,
+            user: {
+              id: userId,
+              name: userId === Constants.slack.memberUserId ? 'member' : 'singlechannelguest',
+              profile: {
+                image_72: `https://example.com/${userId}.png`,
+              },
+            },
+          }),
+        )
+      }
+      return originalFetch(input, init)
+    })
+    const confirmation = await createConfirmationToken({
+      recipientProviderUserIds: [
+        Constants.slack.memberUserId,
+        Constants.slack.singleChannelGuestUserId,
+      ],
+    })
+    await Chat.getChat().initialize()
+    await Chat.getSlack().setInstallation(confirmation.payload.providerId, {
+      botToken: Constants.slack.botToken,
+      botUserId: Constants.slack.botUserId,
+      teamName: Constants.slack.teamName,
+    })
+
+    const response = await client.api.confirm[':token'].$get({
+      param: { token: confirmation.token },
+    })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      recipients: [
+        {
+          recipientAvatarUrl: `https://example.com/${Constants.slack.memberUserId}.png`,
+          recipientProviderLabel: Constants.slack.memberUserName,
+          recipientProviderUserId: Constants.slack.memberUserId,
+        },
+        {
+          recipientAvatarUrl: `https://example.com/${Constants.slack.singleChannelGuestUserId}.png`,
+          recipientProviderLabel: Constants.slack.singleChannelGuestUserName,
+          recipientProviderUserId: Constants.slack.singleChannelGuestUserId,
+        },
+      ],
+    })
+    fetchSpy.mockRestore()
+  })
+
+  test('resolves Twitter confirmation recipient avatar from X', async () => {
+    const workspace = await ensureTwitterTestWorkspace()
+    mockTwitterUser({ id: 'twitter-confirm-recipient', username: 'alice' })
+    const token = await Confirmation.encrypt(env, {
+      accessKeyExpiresAt: new Date(Date.now() + AccountLink.reusableAccessKeyTtlMs).toISOString(), // 30 days
+      amount: 5_000_000,
+      chainId: workspace.chain_id,
+      expiresAt: new Date(Date.now() + AccountLink.confirmationLinkTtlMs).toISOString(), // 10 minutes
+      idempotencyKey: `confirm:${Nanoid.generate()}`,
+      kind: 'reusable_access_key',
+      memo: null,
+      nonce: Nanoid.generate(),
+      provider: 'slack',
+      providerChannelId: 'tweet-1',
+      providerId: 'x',
+      providerThreadId: 'tweet-1',
+      recipientProviderLabel: '@alice',
+      recipientProviderUserId: 'twitter-confirm-recipient',
+      senderProviderUserId: 'twitter-confirm-sender',
+      source: 'mention',
+      tokenAddress: workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+      workspaceId: workspace.id,
+    })
+
+    const response = await client.api.confirm[':token'].$get({ param: { token } })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      providerLabel: 'X',
+      recipientAvatarUrl: 'https://example.com/alice.jpg',
+      recipientProviderLabel: '@alice',
+      recipients: [
+        {
+          recipientAvatarUrl: 'https://example.com/alice.jpg',
+          recipientProviderLabel: '@alice',
+          recipientProviderUserId: 'twitter-confirm-recipient',
+        },
+      ],
+    })
   })
 
   test('rejects invalid confirmation links generically', async () => {
