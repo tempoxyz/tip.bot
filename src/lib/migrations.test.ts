@@ -34,6 +34,65 @@ SELECT COUNT(*) AS "count" FROM "reaction_tip_thread" WHERE "message_ts" = '1000
   expect(duplicateCount).toBe('1')
 })
 
+test('0020 allows Telegram provider rows while preserving Slack rows', () => {
+  const [
+    slackWorkspaceCount,
+    workspaceSettings,
+    channelProviderId,
+    telegramWorkspaceCount,
+    telegramIdentityCount,
+    telegramBatchCount,
+  ] = runSqlite(`
+    ${migrationsSql({ before: '0020_telegram_provider.sql' })}
+
+    INSERT INTO "account" ("id", "address", "created_at", "updated_at")
+    VALUES ('account', '0x0000000000000000000000000000000000000001', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+
+    INSERT INTO "workspace" ("id", "provider", "provider_id", "created_at", "updated_at", "default_token_address", "chain_id", "installed_at", "uninstalled_at")
+    VALUES ('slack-workspace', 'slack', 'TWORKSPACE', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '0x0000000000000000000000000000000000000002', 42161, '2026-01-02T00:00:00.000Z', '2026-01-03T00:00:00.000Z');
+
+    INSERT INTO "provider_identity" ("id", "provider", "provider_workspace_id", "provider_user_id", "created_at", "updated_at")
+    VALUES ('slack-identity', 'slack', 'TWORKSPACE', 'U123', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+
+    INSERT INTO "member" ("id", "workspace_id", "provider_identity_id", "provider_user_id", "created_at", "updated_at")
+    VALUES ('slack-member', 'slack-workspace', 'slack-identity', 'U123', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+
+    INSERT INTO "account_link_token" ("id", "account_id", "member_id", "token_hash", "access_key_address", "access_key_public_key", "access_key_ciphertext", "access_key_expires_at", "expires_at", "created_at", "channel_provider_id")
+    VALUES ('token', 'account', 'slack-member', 'hash', '0x0000000000000000000000000000000000000003', 'public', 'ciphertext', '2026-01-04T00:00:00.000Z', '2026-01-04T00:00:00.000Z', '2026-01-01T00:00:00.000Z', 'slack');
+
+    ${migrationSql('0020_telegram_provider.sql')}
+
+    INSERT INTO "workspace" ("id", "provider", "provider_id", "created_at", "updated_at")
+    VALUES ('telegram-workspace', 'telegram', '-100123', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+
+    INSERT INTO "provider_identity" ("id", "provider", "provider_workspace_id", "provider_user_id", "created_at", "updated_at")
+    VALUES ('telegram-identity', 'telegram', '-100123', '456', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+
+    INSERT INTO "member" ("id", "workspace_id", "provider_identity_id", "provider_user_id", "created_at", "updated_at")
+    VALUES ('telegram-member', 'telegram-workspace', 'telegram-identity', '456', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+
+    INSERT INTO "tip_batch" ("id", "workspace_id", "idempotency_key", "sender_member_id", "provider", "provider_id", "provider_channel_id", "amount_each", "total_amount", "recipient_count", "token_address", "status", "created_at", "updated_at")
+    VALUES ('telegram-batch', 'telegram-workspace', 'telegram-batch-key', 'telegram-member', 'telegram', '-100123', 'telegram:-100123', 1000, 1000, 1, '0x0000000000000000000000000000000000000001', 'pending', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+
+.mode list
+SELECT COUNT(*) FROM "workspace" WHERE "provider" = 'slack' AND "provider_id" = 'TWORKSPACE';
+SELECT "default_token_address" || '|' || "chain_id" || '|' || "installed_at" || '|' || "uninstalled_at" FROM "workspace" WHERE "id" = 'slack-workspace';
+SELECT "channel_provider_id" FROM "account_link_token" WHERE "id" = 'token';
+SELECT COUNT(*) FROM "workspace" WHERE "provider" = 'telegram' AND "provider_id" = '-100123';
+SELECT COUNT(*) FROM "provider_identity" WHERE "provider" = 'telegram' AND "provider_user_id" = '456';
+SELECT COUNT(*) FROM "tip_batch" WHERE "provider" = 'telegram' AND "id" = 'telegram-batch';
+  `)
+
+  expect(slackWorkspaceCount).toBe('1')
+  expect(workspaceSettings).toBe(
+    '0x0000000000000000000000000000000000000002|42161|2026-01-02T00:00:00.000Z|2026-01-03T00:00:00.000Z',
+  )
+  expect(channelProviderId).toBe('slack')
+  expect(telegramWorkspaceCount).toBe('1')
+  expect(telegramIdentityCount).toBe('1')
+  expect(telegramBatchCount).toBe('1')
+})
+
 function runSqlite(sql: string) {
   return execFileSync('sqlite3', [':memory:'], { encoding: 'utf8', input: sql })
     .trim()
