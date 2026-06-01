@@ -1,16 +1,16 @@
+import { Popover } from '@base-ui/react/popover'
 import { useMutation } from '@tanstack/react-query'
 import { Link, createFileRoute, redirect } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/react-start'
-import { getRequest } from '@tanstack/react-start/server'
-import { env } from 'cloudflare:workers'
-import type { InferResponseType } from 'hono/client'
 import * as React from 'react'
 import { useDisconnect } from 'wagmi'
-import { api } from '#/api.ts'
 import { WalletProviders } from '#/components/WalletProviders.tsx'
+import {
+  disconnectDashboardAccount,
+  getDashboardData,
+  type DashboardAccount,
+} from '#/function/dash.ts'
 import { slackCommand, tipbotImagePath } from '#/lib/app.ts'
 import { getErrorMessage } from '#/lib/error.ts'
-import { rpc } from '#/lib/rpc.ts'
 import IconLogosSlackIcon from '~icons/logos/slack-icon.jsx'
 import IconSimpleIconsX from '~icons/simple-icons/x.jsx'
 
@@ -36,21 +36,14 @@ function DashboardPanel() {
   const loaderDashboard = Route.useLoaderData()
   const disconnectWallet = useDisconnect()
   const navigate = Route.useNavigate()
-  const [confirmingAccountId, setConfirmingAccountId] = React.useState<string | null>(null)
   const [dashboard, setDashboard] = React.useState(loaderDashboard)
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null)
   const disconnectAccount = useMutation({
     mutationFn: async (account: DashboardAccount) => {
-      const response = await rpc.api.dash.accounts.disconnect.$post({
-        json: { identityId: account.id },
-      })
-      const json = await response.json()
-      if (response.status !== 200)
-        throw new Error('message' in json ? json.message : 'Could not disconnect account.')
+      await disconnectDashboardAccount({ data: { identityId: account.id } })
       return account
     },
     onSuccess: (account) => {
-      setConfirmingAccountId(null)
       setStatusMessage(`${account.label} disconnected.`)
       setDashboard((value) =>
         value
@@ -113,6 +106,26 @@ function DashboardPanel() {
             </button>
           </div>
         ) : null}
+        <section className="grid gap-4 sm:grid-cols-2">
+          <div className="rounded-xl border border-gray4 bg-bg1 p-4 shadow-sm">
+            <p className="text-sm font-bold text-gray10">Tips sent</p>
+            <p className="mt-2 text-3xl font-bold tracking-[-0.04em] text-gray10">
+              {dashboard.stats.sent.amount}
+            </p>
+            <p className="mt-1 text-sm text-gray8">
+              {dashboard.stats.sent.tips} {dashboard.stats.sent.tips === 1 ? 'tip' : 'tips'}
+            </p>
+          </div>
+          <div className="rounded-xl border border-gray4 bg-bg1 p-4 shadow-sm">
+            <p className="text-sm font-bold text-gray10">Tips received</p>
+            <p className="mt-2 text-3xl font-bold tracking-[-0.04em] text-gray10">
+              {dashboard.stats.received.amount}
+            </p>
+            <p className="mt-1 text-sm text-gray8">
+              {dashboard.stats.received.tips} {dashboard.stats.received.tips === 1 ? 'tip' : 'tips'}
+            </p>
+          </div>
+        </section>
         {statusMessage ? (
           <div
             className="rounded-xl border border-green6 bg-green1 p-4 text-sm font-semibold text-green10"
@@ -132,22 +145,16 @@ function DashboardPanel() {
         <div className="grid gap-6">
           <AccountSection
             accounts={dashboard.accounts.slack}
-            confirmingAccountId={confirmingAccountId}
             disconnectAccount={disconnectAccount}
             empty={<SlackEmptyState />}
             icon={<IconLogosSlackIcon aria-hidden="true" className="size-6" />}
-            onCancelConfirm={() => setConfirmingAccountId(null)}
-            onConfirmAccount={setConfirmingAccountId}
             title="Slack"
           />
           <AccountSection
             accounts={dashboard.accounts.x}
-            confirmingAccountId={confirmingAccountId}
             disconnectAccount={disconnectAccount}
             empty={<XEmptyState />}
             icon={<IconSimpleIconsX aria-hidden="true" className="size-5" />}
-            onCancelConfirm={() => setConfirmingAccountId(null)}
-            onConfirmAccount={setConfirmingAccountId}
             title="X"
           />
         </div>
@@ -158,12 +165,9 @@ function DashboardPanel() {
 
 function AccountSection(props: {
   accounts: DashboardAccount[]
-  confirmingAccountId: string | null
   disconnectAccount: ReturnType<typeof useMutation<DashboardAccount, Error, DashboardAccount>>
   empty: React.ReactNode
   icon: React.ReactNode
-  onCancelConfirm: () => void
-  onConfirmAccount: (accountId: string) => void
   title: string
 }) {
   return (
@@ -177,11 +181,8 @@ function AccountSection(props: {
           {props.accounts.map((account) => (
             <AccountRow
               account={account}
-              confirming={props.confirmingAccountId === account.id}
               disconnectAccount={props.disconnectAccount}
               key={account.id}
-              onCancelConfirm={props.onCancelConfirm}
-              onConfirmAccount={props.onConfirmAccount}
             />
           ))}
         </ul>
@@ -194,10 +195,7 @@ function AccountSection(props: {
 
 function AccountRow(props: {
   account: DashboardAccount
-  confirming: boolean
   disconnectAccount: ReturnType<typeof useMutation<DashboardAccount, Error, DashboardAccount>>
-  onCancelConfirm: () => void
-  onConfirmAccount: (accountId: string) => void
 }) {
   const account = props.account
   return (
@@ -211,45 +209,47 @@ function AccountRow(props: {
           </p>
           <p className="mt-1 text-sm text-gray8">
             {account.workspace ? `${account.workspace.name} · ` : ''}
-            Connected {formatDate(account.connectedAt)}
+            Connected{' '}
+            {new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(
+              new Date(account.connectedAt),
+            )}
           </p>
         </div>
       </div>
-      {props.confirming ? (
-        <div className="flex flex-col gap-3 sm:max-w-sm sm:items-end">
-          <p className="text-sm leading-6 text-gray8 sm:text-end">
-            Tipbot will no longer recognize this account. If this is your last connected account,
-            Tipbot’s access key for this wallet will be removed.
-          </p>
-          <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-            <button
-              className="inline-flex h-10 items-center justify-center rounded-lg border border-gray5 bg-bg1 px-4 text-sm font-bold text-gray10 transition hover:bg-gray1 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue9"
-              disabled={props.disconnectAccount.isPending}
-              onClick={props.onCancelConfirm}
-              type="button"
-            >
-              Cancel
-            </button>
-            <button
-              className="inline-flex h-10 items-center justify-center rounded-lg border border-red6 bg-red8 px-4 text-sm font-bold text-white transition hover:bg-red7 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-red9"
-              disabled={props.disconnectAccount.isPending}
-              onClick={() => props.disconnectAccount.mutate(account)}
-              type="button"
-            >
-              {props.disconnectAccount.isPending ? 'Disconnecting' : 'Confirm disconnect'}
-            </button>
-          </div>
-        </div>
-      ) : (
-        <button
+      <Popover.Root>
+        <Popover.Trigger
           className="inline-flex h-10 items-center justify-center rounded-lg border border-gray5 bg-bg1 px-4 text-sm font-semibold text-gray8 transition hover:border-red6 hover:bg-red1 hover:text-red10 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-red9"
           disabled={props.disconnectAccount.isPending}
-          onClick={() => props.onConfirmAccount(account.id)}
-          type="button"
         >
           Disconnect
-        </button>
-      )}
+        </Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Positioner align="end" className="z-50 outline-none" side="top" sideOffset={8}>
+            <Popover.Popup className="w-80 rounded-xl border border-gray5 bg-bg1 p-4 text-gray10 shadow-xl shadow-black/30 focus-visible:outline-none">
+              <Popover.Description className="text-sm leading-6 text-gray8">
+                Tipbot will no longer recognize this account. If this is your last connected
+                account, Tipbot’s access key for this wallet will be removed.
+              </Popover.Description>
+              <div className="mt-4 flex justify-end gap-2">
+                <Popover.Close
+                  className="inline-flex h-10 items-center justify-center rounded-lg border border-gray5 bg-bg1 px-4 text-sm font-bold text-gray10 transition hover:bg-gray1 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue9"
+                  disabled={props.disconnectAccount.isPending}
+                >
+                  Cancel
+                </Popover.Close>
+                <button
+                  className="inline-flex h-10 items-center justify-center rounded-lg border border-red6 bg-red8 px-4 text-sm font-bold text-white transition hover:bg-red7 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-red9"
+                  disabled={props.disconnectAccount.isPending}
+                  onClick={() => props.disconnectAccount.mutate(account)}
+                  type="button"
+                >
+                  {props.disconnectAccount.isPending ? 'Disconnecting' : 'Confirm disconnect'}
+                </button>
+              </div>
+            </Popover.Popup>
+          </Popover.Positioner>
+        </Popover.Portal>
+      </Popover.Root>
     </li>
   )
 }
@@ -311,22 +311,3 @@ function XEmptyState() {
     </div>
   )
 }
-
-const getDashboardData = createServerFn({ method: 'GET' }).handler(async () => {
-  const request = getRequest()
-  const response = await api.fetch(
-    new Request(new URL(rpc.api.dash.accounts.$url().pathname, request.url), request),
-    env,
-  )
-  if (response.status === 401) return { ok: false as const }
-  if (response.status !== 200) throw new Error('Could not load connected accounts.')
-  return (await response.json()) as Dashboard
-})
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(value))
-}
-
-type Dashboard = InferResponseType<typeof rpc.api.dash.accounts.$get, 200>
-
-type DashboardAccount = Dashboard['accounts']['slack'][number]

@@ -2,13 +2,10 @@ import { useMutation } from '@tanstack/react-query'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { getRequest } from '@tanstack/react-start/server'
-import { env } from 'cloudflare:workers'
 import { useConnect, useConnection, useConnectors } from 'wagmi'
 import * as z from 'zod/mini'
-import { api } from '#/api.ts'
 import { WalletProviders } from '#/components/WalletProviders.tsx'
 import { slackBotDisplayName, tipbotImagePath } from '#/lib/app.ts'
-import { rpc } from '#/lib/rpc.ts'
 import IconLogosSlackIcon from '~icons/logos/slack-icon.jsx'
 import IconSimpleIconsX from '~icons/simple-icons/x.jsx'
 
@@ -309,12 +306,8 @@ export const Route = createFileRoute('/')({
 })
 
 const getHomeData = createServerFn({ method: 'GET' }).handler(async () => {
-  const request = getRequest()
-  const response = await api.fetch(
-    new Request(new URL(rpc.api.dash.accounts.$url().pathname, request.url), request),
-    env,
-  )
-  return { dashboardAuthed: response.status === 200 }
+  const { auth } = await import('#/lib/auth.ts')
+  return { dashboardAuthed: Boolean(await auth.getSession(getRequest())) }
 })
 
 async function authenticateConnectedWallet(connector: ReturnType<typeof useConnectors>[number]) {
