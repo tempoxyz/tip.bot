@@ -9,7 +9,6 @@ test('visitor connects X account with OAuth', async ({ app, page }) => {
   const root = Account.fromSecp256k1(
     '0x0000000000000000000000000000000000000000000000000000000000000001',
   )
-
   await page.route('**/api/link/twitter/oauth/challenge', async (route) => {
     expect(route.request().method()).toBe('POST')
     const json = route.request().postDataJSON() as {
@@ -194,6 +193,14 @@ test('visitor connects X account with proof tweet', async ({ app, page }) => {
   await page.getByLabel('Paste your tweet URL').fill('https://x.com/tipbotgg/status/123')
 
   await expect(page.getByText('You can now receive and send tips on X.')).toBeVisible()
+  await expect(page.getByText('Waiting for tweet')).toBeHidden()
+  await page.getByRole('button', { name: 'Copy tweet' }).click()
+  await expect(page.getByText('Waiting for tweet')).toBeHidden()
+  await page.clock.install()
+  await page.getByRole('button', { name: 'Open in X' }).click()
+  await expect(page.getByText('Waiting for tweet')).toBeVisible()
+  await page.clock.fastForward(15_000)
+  await expect(page.getByText('Waiting for tweet')).toBeHidden()
 })
 
 test('visitor connects X account after automatic proof tweet polling', async ({ app, page }) => {

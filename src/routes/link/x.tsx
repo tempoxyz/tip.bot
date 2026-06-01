@@ -31,6 +31,7 @@ function LinkPanel() {
   const connection = useConnection()
   const connectors = useConnectors()
   const disconnectWallet = useDisconnect()
+  const waitingForExampleTweetTimeout = React.useRef<number | null>(null)
   const navigate = Route.useNavigate()
   const search = Route.useSearch()
   const [challenge, setChallenge] = React.useState<Challenge | null>(null)
@@ -42,6 +43,7 @@ function LinkPanel() {
   const [showManualVerification, setShowManualVerification] = React.useState(false)
   const [showTweetFallback, setShowTweetFallback] = React.useState(false)
   const [copiedExampleTweet, setCopiedExampleTweet] = React.useState(false)
+  const [waitingForExampleTweet, setWaitingForExampleTweet] = React.useState(false)
   const [tweetUrl, setTweetUrl] = React.useState('')
   const [xUsername, setXUsername] = React.useState('')
   const exampleTweet = '@tipbotgg @awkweb $0.01 for building tipbot'
@@ -283,6 +285,13 @@ function LinkPanel() {
   function composeExampleTweet() {
     const intentUrl = new URL('/intent/tweet', 'https://twitter.com')
     intentUrl.searchParams.set('text', exampleTweet)
+    setWaitingForExampleTweet(true)
+    if (waitingForExampleTweetTimeout.current)
+      window.clearTimeout(waitingForExampleTweetTimeout.current)
+    waitingForExampleTweetTimeout.current = window.setTimeout(() => {
+      setWaitingForExampleTweet(false)
+      waitingForExampleTweetTimeout.current = null
+    }, 15_000) // 15 seconds
     openTweetComposer(intentUrl.toString())
   }
 
@@ -314,6 +323,7 @@ function LinkPanel() {
                 <button
                   className="inline-flex h-10 items-center justify-center rounded-lg bg-green8 px-4 text-sm font-bold whitespace-nowrap text-white transition-colors outline-none hover:bg-green7 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
                   onClick={composeExampleTweet}
+                  onPointerDown={() => setWaitingForExampleTweet(true)}
                   type="button"
                 >
                   Open in X
@@ -326,6 +336,18 @@ function LinkPanel() {
                   {copiedExampleTweet ? 'Copied' : 'Copy tweet'}
                 </button>
               </div>
+              {waitingForExampleTweet ? (
+                <p
+                  className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-gray8"
+                  role="status"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="size-4 rounded-full border-2 border-gray5 border-t-gray8 motion-safe:animate-spin"
+                  />
+                  Waiting for tweet
+                </p>
+              ) : null}
             </div>
           </div>
         ) : (
