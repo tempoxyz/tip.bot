@@ -41,8 +41,10 @@ function LinkPanel() {
   >(search.status === 'connected' ? 'connected' : 'idle')
   const [showManualVerification, setShowManualVerification] = React.useState(false)
   const [showTweetFallback, setShowTweetFallback] = React.useState(false)
+  const [copiedExampleTweet, setCopiedExampleTweet] = React.useState(false)
   const [tweetUrl, setTweetUrl] = React.useState('')
   const [xUsername, setXUsername] = React.useState('')
+  const exampleTweet = '@tipbotgg @awkweb $0.01 for building tipbot'
   const walletAddress =
     connection.status === 'connected' && connection.address
       ? connection.address
@@ -272,6 +274,18 @@ function LinkPanel() {
     throw new Error('Could not verify the proof tweet yet.')
   }
 
+  async function copyExampleTweet() {
+    await navigator.clipboard.writeText(exampleTweet)
+    setCopiedExampleTweet(true)
+    window.setTimeout(() => setCopiedExampleTweet(false), 2_000) // 2 seconds
+  }
+
+  function composeExampleTweet() {
+    const intentUrl = new URL('/intent/tweet', 'https://twitter.com')
+    intentUrl.searchParams.set('text', exampleTweet)
+    openTweetComposer(intentUrl.toString())
+  }
+
   return (
     <main className="min-h-screen bg-bg2 px-6 pt-8 pb-12 text-gray10 sm:pt-16 lg:pt-24">
       <section className="mx-auto flex max-w-xl flex-col items-center gap-8">
@@ -283,9 +297,36 @@ function LinkPanel() {
           width={160}
         />
         {status === 'connected' ? (
-          <div className="space-y-3 text-center" role="status">
-            <h1 className="text-3xl font-bold text-gray10">Connected to Tipbot</h1>
-            <p className="text-base text-gray9">You can now receive and send tips on X.</p>
+          <div className="w-full space-y-8 text-center" role="status">
+            <div className="space-y-3">
+              <h1 className="text-3xl font-bold text-gray10">Connected to Tipbot</h1>
+              <p className="text-base text-gray9">You can now receive and send tips on X.</p>
+            </div>
+            <div className="mx-auto max-w-md rounded-2xl border border-gray5 bg-bg2 p-5 text-start shadow-lg">
+              <div className="space-y-2">
+                <p className="text-sm font-bold text-gray10">Try your first tip</p>
+                <p className="text-sm text-gray8">Post this on X to tip @awkweb.</p>
+              </div>
+              <div className="mt-4 rounded-xl border border-gray5 bg-bg1 p-4">
+                <p className="break-words font-mono text-sm text-gray10">{exampleTweet}</p>
+              </div>
+              <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+                <button
+                  className="inline-flex h-10 items-center justify-center rounded-lg bg-green8 px-4 text-sm font-bold whitespace-nowrap text-white transition-colors outline-none hover:bg-green7 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                  onClick={composeExampleTweet}
+                  type="button"
+                >
+                  Open in X
+                </button>
+                <button
+                  className="inline-flex h-10 items-center justify-center rounded-lg border border-gray5 bg-bg2 px-4 text-sm font-bold whitespace-nowrap text-gray10 transition-colors outline-none hover:bg-gray3 focus-visible:ring-2 focus-visible:ring-blue9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                  onClick={() => void copyExampleTweet()}
+                  type="button"
+                >
+                  {copiedExampleTweet ? 'Copied' : 'Copy tweet'}
+                </button>
+              </div>
+            </div>
           </div>
         ) : (
           <div className="w-full space-y-8">
@@ -551,7 +592,7 @@ function LinkPanel() {
                         onClick={() => setShowTweetFallback((value) => !value)}
                         type="button"
                       >
-                        {showTweetFallback ? 'Use X OAuth instead' : 'Verify with proof tweet'}
+                        {showTweetFallback ? 'Use X OAuth' : 'Verify with proof tweet'}
                       </button>
                     ) : null}
                   </div>
