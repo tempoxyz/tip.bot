@@ -116,7 +116,7 @@ describe('/api/chat/twitter', () => {
         authorization: expect.stringContaining('OAuth oauth_consumer_key="twitter-consumer-key"'),
         body: {
           reply: { in_reply_to_tweet_id: 'tweet-1' },
-          text: 'Connect at tip.bot/link/x to send tips.',
+          text: 'Connect to Tipbot to send payments: https://tip.bot/link/x',
         },
       },
     ])
@@ -181,7 +181,7 @@ describe('/api/chat/twitter', () => {
     expect(posts[0]?.authorization).toContain('oauth_signature=')
     expect(posts[0]?.body).toMatchObject({
       reply: { in_reply_to_tweet_id: tweetId },
-      text: expect.stringContaining('@alice got $0.001 from @bob for coffee'),
+      text: expect.stringContaining('@bob sent @alice $0.001 for coffee'),
     })
   }, 20_000) // 20 seconds
 

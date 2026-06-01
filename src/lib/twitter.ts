@@ -170,7 +170,11 @@ export async function handleTweet(env: Env, input: TwitterTweetInput) {
 
   if (parsed.code === 'multiple_recipients') {
     console.log('Twitter webhook rejected multiple recipients', { tweetId: input.id })
-    await postReply(env, input.id, 'Payment not sent. Mention one recipient for now.')
+    await postReply(
+      env,
+      input.id,
+      'Payment not sent. Multi-recipient tips are not supported on X yet; mention one recipient.',
+    )
     return
   }
 
@@ -198,7 +202,7 @@ export async function handleTweet(env: Env, input: TwitterTweetInput) {
     await postReply(
       env,
       input.id,
-      `${formatHandle(parsed.recipientHandle)} has ${formatTwitterAmount(result)} waiting from ${formatHandle(input.authorHandle)}${result.memo ? ` for ${result.memo}` : ''}.\nConnect at tip.bot/link/x to receive it.`,
+      `${formatHandle(input.authorHandle)} queued ${formatHandle(parsed.recipientHandle)} ${formatTwitterAmount(result)}${result.memo ? ` for ${result.memo}` : ''}\nConnect to Tipbot to receive it: https://tip.bot/link/x`,
     )
     await Tip.recordPendingTipMessage(env, {
       pendingTipId: result.pendingTipId,
@@ -227,12 +231,16 @@ export async function handleTweet(env: Env, input: TwitterTweetInput) {
   }
   if (!result.ok && result.code === 'sender_unconnected') {
     console.log('Twitter webhook rejected unconnected sender', { tweetId: input.id })
-    await postReply(env, input.id, 'Connect at tip.bot/link/x to send tips.')
+    await postReply(env, input.id, 'Connect to Tipbot to send payments: https://tip.bot/link/x')
     return
   }
   if (!result.ok && result.code === 'confirmation_required' && result.confirmUrl) {
     console.log('Twitter webhook requested confirmation', { tweetId: input.id })
-    await postReply(env, input.id, `One quick approval needed: ${result.confirmUrl}`)
+    await postReply(
+      env,
+      input.id,
+      `Tipbot needs your approval to send this payment. Confirm payment: ${result.confirmUrl}`,
+    )
     return
   }
   if (!result.ok && result.code === 'insufficient_funds') {
@@ -240,20 +248,25 @@ export async function handleTweet(env: Env, input: TwitterTweetInput) {
     await postReply(
       env,
       input.id,
-      'Payment not sent. Add funds at wallet.tempo.xyz, then try again.',
+      'Payment not sent. Your wallet has insufficient funds. Add funds and try again: https://wallet.tempo.xyz',
     )
     return
   }
   if (!result.ok && result.code === 'self_tip') {
     console.log('Twitter webhook rejected self tip', { tweetId: input.id })
-    await postReply(env, input.id, 'Payment not sent. You can’t tip yourself.')
+    await postReply(env, input.id, 'Payment not sent. Cannot send a payment to yourself.')
+    return
+  }
+  if (!result.ok && result.code === 'pending') {
+    console.log('Twitter webhook payment still sending', { tweetId: input.id })
+    await postReply(env, input.id, 'Payment still sending.')
     return
   }
   console.log('Twitter webhook failed tip', {
     code: result.ok ? result.status : result.code,
     tweetId: input.id,
   })
-  await postReply(env, input.id, 'Payment not sent. Try again later.')
+  await postReply(env, input.id, 'Payment failed.')
 }
 
 export async function handleWebhook(env: Env, body: unknown) {
@@ -303,8 +316,8 @@ export async function updatePendingTipMessage(env: Env, result: Tip.PendingTipCl
         transactionHash: result.transactionHash,
       })
     : result.status === 'expired'
-      ? `${formatHandle(recipientHandle)}’s tip from ${formatHandle(senderHandle)} expired before it was claimed.\nNo payment was sent.`
-      : `${formatHandle(recipientHandle)}’s tip from ${formatHandle(senderHandle)} could not be sent.\nNo payment was sent.`
+      ? `Expired before ${formatHandle(recipientHandle)} connected. No payment was sent.`
+      : 'Payment failed. No payment was sent.'
   await postReply(
     env,
     result.pendingTip.provider_thread_id ?? result.pendingTip.provider_channel_id,
