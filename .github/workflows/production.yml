@@ -15,6 +15,8 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/check.yml
+    with:
+      skip_workers: true
 
   deploy:
     name: Deploy
@@ -63,6 +65,8 @@ jobs:
             TWITTER_BEARER_TOKEN
             TWITTER_CONSUMER_KEY
             TWITTER_CONSUMER_SECRET
+            TWITTER_OAUTH_CLIENT_ID
+            TWITTER_OAUTH_CLIENT_SECRET
         env:
           FEE_PAYER_PRIVATE_KEY_MAINNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_MAINNET }}
           FEE_PAYER_PRIVATE_KEY_TESTNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_TESTNET }}
@@ -76,6 +80,8 @@ jobs:
           TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
           TWITTER_CONSUMER_KEY: ${{ secrets.TWITTER_CONSUMER_KEY }}
           TWITTER_CONSUMER_SECRET: ${{ secrets.TWITTER_CONSUMER_SECRET }}
+          TWITTER_OAUTH_CLIENT_ID: ${{ secrets.TWITTER_OAUTH_CLIENT_ID }}
+          TWITTER_OAUTH_CLIENT_SECRET: ${{ secrets.TWITTER_OAUTH_CLIENT_SECRET }}
 
   update_slack_app:
     name: Update Slack App

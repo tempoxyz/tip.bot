@@ -49,7 +49,24 @@ beforeEach(async () => {
   executionCtx.passThroughOnException.mockClear()
   executionCtx.waitUntil.mockClear()
   vi.restoreAllMocks()
+  const consoleError = console.error
+  const consoleLog = console.log
+  vi.spyOn(console, 'error').mockImplementation((...args) => {
+    if (isExpectedApiWorkerLog(args)) return
+    consoleError(...args)
+  })
+  vi.spyOn(console, 'log').mockImplementation((...args) => {
+    if (isExpectedApiWorkerLog(args)) return
+    consoleLog(...args)
+  })
 })
+
+function isExpectedApiWorkerLog(args: unknown[]) {
+  const message = typeof args[0] === 'string' ? args[0] : ''
+  return (
+    message.startsWith('Twitter webhook ') || message.startsWith('Twitter OAuth callback failed:')
+  )
+}
 
 test('/api/health returns ok', async () => {
   const response = await client.api.health.$get()
