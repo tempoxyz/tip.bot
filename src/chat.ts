@@ -1023,9 +1023,9 @@ const handlers = {
           }),
           chat.TextInput({
             id: 'ticket_amount',
-            initialValue: '0.1',
+            initialValue: '0.01',
             label: `Ticket price (${token.symbol})`,
-            placeholder: '0.10',
+            placeholder: '0.01',
           }),
           chat.Select({
             id: 'duration',

@@ -1776,7 +1776,7 @@ test('/tip raffle opens create modal', async () => {
     )
     .toEqual(
       expect.stringMatching(
-        /(?=.*Start raffle)(?=.*"initial_value":"0\.1")(?=.*"initial_option":\{"text":\{"type":"plain_text","text":"5 minutes")(?=.*"text":"90 seconds")(?=.*"value":"90s")/s,
+        /(?=.*Start raffle)(?=.*"initial_value":"0\.01")(?=.*"initial_option":\{"text":\{"type":"plain_text","text":"5 minutes")(?=.*"text":"90 seconds")(?=.*"value":"90s")/s,
       ),
     )
 })
@@ -1796,10 +1796,10 @@ test('/tip raffle create modal posts raffle message', async () => {
   expect(tipRaffle).toEqual({
     memo: 'team lunch',
     provider_user_id: Constants.slack.adminUserId,
-    ticket_amount: 100_000,
+    ticket_amount: 10_000,
   })
   await expectSlackMessage(`<@${Constants.slack.adminUserId}> opened a raffle: team lunch`)
-  await expectSlackMessage('Ticket: $0.10')
+  await expectSlackMessage('Ticket: $0.01')
   await expectSlackMessage('Tickets: 0')
 })
 
@@ -7942,7 +7942,7 @@ function createRaffleViewSubmissionPayload(
           ticket_amount: {
             ticket_amount: {
               type: 'plain_text_input',
-              value: input.amount ?? '0.1',
+              value: input.amount ?? '0.01',
             },
           },
         },
