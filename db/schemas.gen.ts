@@ -240,6 +240,38 @@ export const tip_batch = z.object({
   workspace_id: z.string(),
 })
 
+export const tip_raffle = z.object({
+  chain_id: z.number(),
+  created_at: z.string(),
+  creator_member_id: z.string(),
+  ended_at: z.string().nullable(),
+  ends_at: z.string(),
+  failed_ticket_count: z.number(),
+  id: z.string(),
+  memo: z.string(),
+  provider_channel_id: z.string(),
+  provider_id: z.string(),
+  provider_message_ts: z.string(),
+  settled_amount: z.number(),
+  status: z.enum(['open', 'settling', 'ended']),
+  ticket_amount: z.number(),
+  token_address: z.string(),
+  updated_at: z.string(),
+  winner_member_id: z.string().nullable(),
+  winning_ticket_number: z.number().nullable(),
+  workspace_id: z.string(),
+})
+
+export const tip_raffle_ticket = z.object({
+  buyer_member_id: z.string(),
+  created_at: z.string(),
+  id: z.string(),
+  idempotency_key: z.string(),
+  raffle_id: z.string(),
+  ticket_count: z.number(),
+  updated_at: z.string(),
+})
+
 export const tip_receipt_message = z.object({
   channel_id: z.string(),
   created_at: z.string(),
@@ -281,6 +313,8 @@ export const db = {
   tip: tip,
   tip_ask: tip_ask,
   tip_batch: tip_batch,
+  tip_raffle: tip_raffle,
+  tip_raffle_ticket: tip_raffle_ticket,
   tip_receipt_message: tip_receipt_message,
   workspace: workspace,
 }

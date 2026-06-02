@@ -44,6 +44,9 @@
       },
     ],
   },
+  "triggers": {
+    "crons": ["* * * * *"],
+  },
   "migrations": [
     {
       "tag": "chat_state_v1",
@@ -126,6 +129,9 @@
             "dead_letter_queue": "tipbot-pending-tip-__PREVIEW_APEX__-dlq",
           },
         ],
+      },
+      "triggers": {
+        "crons": ["* * * * *"],
       },
       "observability": {
         "enabled": true,
@@ -212,6 +218,9 @@
             "dead_letter_queue": "tipbot-pending-tip-dlq",
           },
         ],
+      },
+      "triggers": {
+        "crons": ["* * * * *"],
       },
       "secrets": {
         "required": [

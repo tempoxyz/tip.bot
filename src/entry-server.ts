@@ -1,6 +1,7 @@
 import serverEntry from '@tanstack/react-start/server-entry'
 import { Kv as AccountsKv } from 'accounts/server'
 import { api } from '#/api.ts'
+import { closeExpiredRaffles } from '#/crons/tipRaffle.ts'
 import { rpc } from '#/lib/rpc.ts'
 import { processPendingTipMessage } from '#/queues/pendingTip.ts'
 import { z } from 'zod'
@@ -35,6 +36,15 @@ export default {
         message.retry()
       }
     }
+  },
+  scheduled(controller, env, ctx) {
+    // TODO: cron union type gen
+    // https://github.com/cloudflare/workers-sdk/pull/12740
+    const crons = {
+      '* * * * *': closeExpiredRaffles,
+    } as const
+    const task = crons[controller.cron as keyof typeof crons]
+    if (task) ctx.waitUntil(task(env, ctx))
   },
 } satisfies ExportedHandler<Env, processPendingTipMessage.Body>
 

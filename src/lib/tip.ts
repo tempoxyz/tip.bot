@@ -505,6 +505,66 @@ export async function handleTipBatchRequest(
   })
 }
 
+export async function checkReusableTipAccessKey(
+  env: Env,
+  input: {
+    amount: number
+    chainId: number
+    memo: string | null
+    providerUserId: string
+    tokenAddress: string
+    workspaceId: string
+  },
+) {
+  const db = DB.create(env.DB)
+  const tokenAddress = Address.checksum(input.tokenAddress)
+  if (!Tempo.isAllowedToken(input.chainId, tokenAddress))
+    return { code: 'unsupported_token', ok: false }
+
+  const sender = await getConnectedMember(db, input.workspaceId, input.providerUserId)
+  if (!sender) return { code: 'sender_unconnected', ok: false }
+
+  const accessKeys = await db
+    .selectFrom('access_key')
+    .selectAll()
+    .where('account_id', '=', sender.account.id)
+    .where('chain_id', '=', input.chainId)
+    .where('revoked_at', 'is', null)
+    .where('expires_at', '>', new Date().toISOString())
+    .orderBy('created_at', 'desc')
+    .execute()
+  for (const row of accessKeys) {
+    const authorization = KeyAuthorization.fromRpc(JSON.parse(row.authorization) as never)
+    if (!supportsTip(authorization, { amount: input.amount, memo: input.memo, tokenAddress }))
+      continue
+    if (
+      !(await hasTrackedAccessKeyLimitRemaining(db, {
+        accessKeyId: row.id,
+        accountId: sender.account.id,
+        amount: input.amount,
+        authorization,
+        authorizationUsedAt: row.authorization_used_at,
+        chainId: input.chainId,
+        tokenAddress,
+      }))
+    )
+      continue
+
+    const client = createClient({
+      chain: Tempo.getChain(input.chainId),
+      transport: http(Tempo.getRpcUrl(env, input.chainId)),
+    })
+    const balance = await Actions.token.getBalance(client, {
+      account: sender.account.address as Address.Address,
+      token: tokenAddress as Address.Address,
+    })
+    if (balance < BigInt(input.amount)) return { code: 'insufficient_funds', ok: false }
+    return { memberId: sender.member.id, ok: true }
+  }
+
+  return { code: 'missing_sender_access_key', ok: false }
+}
+
 export function parseAmount(value: string) {
   const match = value.match(/^\$?(?:(0|[1-9]\d*)(?:\.(\d+))?|\.(\d+))$/)
   if (!match) return null

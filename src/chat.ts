@@ -507,6 +507,12 @@ const actions = {
   async tip_ask_option_moneybag(event) {
     await actions.tip_ask_option(event)
   },
+  async tip_raffle_buy_1(event) {
+    await handleTipRaffleBuy(event, { ticketCount: 1 })
+  },
+  async tip_raffle_buy_5(event) {
+    await handleTipRaffleBuy(event, { ticketCount: 5 })
+  },
   async config_edit(event) {
     const raw = z.parse(
       z.object({
@@ -692,6 +698,101 @@ const actions = {
 >
 
 const modalSubmits = {
+  async tip_raffle_create(event) {
+    const metadata = z.parse(
+      z.object({
+        channelId: z.string().min(1),
+        providerId: z.string().min(1),
+        threadTs: z.string().min(1).optional(),
+      }),
+      JSON.parse(event.privateMetadata ?? '{}'),
+    )
+    const memo = (event.values.memo ?? '').trim()
+    const ticketAmount = Tip.parseAmount(event.values.ticket_amount ?? '')
+    const duration = tipRaffleDurationOptions.find(
+      (option) => option.value === event.values.duration,
+    )
+    const errors: Record<string, string> = {}
+    if (!memo) errors.memo = 'Enter a raffle title.'
+    else if (Tip.isTransferMemoTooLong(memo)) errors.memo = 'Title must be at most 32 bytes.'
+    if (ticketAmount === null)
+      errors.ticket_amount = 'Enter a positive amount with up to 6 decimal places. Example: 0.10'
+    if (!duration) errors.duration = 'Choose a duration.'
+    if (Object.keys(errors).length > 0) return { action: 'errors' as const, errors }
+    if (ticketAmount === null || !duration) return
+
+    const db = DB.create(env.DB)
+    const workspace = await db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', 'slack')
+      .where('provider_id', '=', metadata.providerId)
+      .executeTakeFirst()
+    if (!workspace) return
+
+    const creator = await getConnectedSlackMember(db, workspace.id, event.user.userId)
+    if (!creator) return
+
+    const installation = await getSlack().getInstallation(metadata.providerId)
+    if (!installation) return
+
+    const now = new Date()
+    const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
+    const tipRaffle = {
+      chain_id: workspace.chain_id,
+      created_at: now.toISOString(),
+      creator_member_id: creator.memberId,
+      ended_at: null,
+      ends_at: new Date(now.getTime() + duration.ms).toISOString(),
+      failed_ticket_count: 0,
+      id: Nanoid.generate(),
+      memo,
+      provider_channel_id: metadata.channelId,
+      provider_id: metadata.providerId,
+      provider_message_ts: 'pending',
+      settled_amount: 0,
+      status: 'open',
+      ticket_amount: ticketAmount,
+      token_address: tokenAddress,
+      updated_at: now.toISOString(),
+      winner_member_id: null,
+      winning_ticket_number: null,
+      workspace_id: workspace.id,
+    } satisfies DB_gen.Insertable.tip_raffle
+    const message = await tipRaffleMessage(db, {
+      ...tipRaffle,
+      creator_provider_user_id: event.user.userId,
+      winner_provider_user_id: null,
+      workspace_default_token_address: workspace.default_token_address,
+    })
+    const body = new URLSearchParams()
+    body.set('blocks', JSON.stringify(message.blocks))
+    body.set('channel', metadata.channelId)
+    body.set('text', message.text)
+    if (metadata.threadTs) body.set('thread_ts', metadata.threadTs)
+    body.set('unfurl_links', 'false')
+    body.set('unfurl_media', 'false')
+    const response = await getSlack().withBotToken(installation.botToken, () =>
+      fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
+        body,
+        headers: { authorization: `Bearer ${installation.botToken}` },
+        method: 'POST',
+      }),
+    )
+    const json = z.parse(
+      z.object({
+        error: z.string().optional(),
+        ok: z.boolean().optional(),
+        ts: z.string().optional(),
+      }),
+      await response.json(),
+    )
+    if (!json.ok || !json.ts) throw Slack.slackApiError('chat.postMessage', json.error)
+    await db
+      .insertInto('tip_raffle')
+      .values({ ...tipRaffle, provider_message_ts: json.ts })
+      .execute()
+  },
   async config_edit(event) {
     const metadata = z.parse(
       z.object({
@@ -813,6 +914,73 @@ const modalSubmits = {
 >
 
 const handlers = {
+  async raffle(event, ctx) {
+    if (Slack.isDMChannelId(event.channel.id)) {
+      await postPrivateReply(event, event.user, 'Raffles can only be opened in channels.')
+      return
+    }
+
+    const workspace = await ctx.db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', ctx.provider.type)
+      .where('provider_id', '=', ctx.provider.id)
+      .executeTakeFirst()
+    if (!workspace) {
+      await postPrivateReply(
+        event,
+        event.user,
+        'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+      )
+      return
+    }
+
+    const creator = await getConnectedSlackMember(ctx.db, workspace.id, event.user.userId)
+    if (!creator) {
+      await postPrivateReply(
+        event,
+        event.user,
+        `Connect to Tipbot before opening a raffle. Run \`${getSlackCommand(env.HOST)} connect\` first.`,
+      )
+      return
+    }
+
+    const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
+    const token = await Tempo.getTokenMetadata(env, workspace.chain_id, tokenAddress)
+    if (!('openModal' in event)) return
+    await event.openModal(
+      chat.Modal({
+        callbackId: 'tip_raffle_create',
+        children: [
+          chat.TextInput({
+            id: 'memo',
+            label: 'Raffle title',
+            placeholder: 'team lunch',
+          }),
+          chat.TextInput({
+            id: 'ticket_amount',
+            label: `Ticket price (${token.symbol})`,
+            placeholder: '0.10',
+          }),
+          chat.Select({
+            id: 'duration',
+            initialOption: '24h',
+            label: 'Duration',
+            options: tipRaffleDurationOptions.map((option) =>
+              chat.SelectOption({ label: option.label, value: option.value }),
+            ),
+          }),
+        ],
+        privateMetadata: JSON.stringify({
+          channelId: Slack.getChannelId(event.channel.id),
+          providerId: ctx.provider.id,
+          threadTs: ctx.threadTs,
+        }),
+        submitLabel: 'Start raffle',
+        title: 'Start raffle',
+      }),
+    )
+  },
   async ask(event, ctx) {
     const memo = (() => {
       const value = ctx.text
@@ -1112,6 +1280,7 @@ const handlers = {
       [`${getSlackCommand(env.HOST)} disconnect`, 'Disconnect from Tipbot'],
       [`${getSlackCommand(env.HOST)} help`, 'Show help message'],
       [`${getSlackCommand(env.HOST)} leaderboard`, 'Show top tippers and recipients'],
+      [`${getSlackCommand(env.HOST)} raffle`, 'Start a raffle'],
       [`${getSlackCommand(env.HOST)} stats`, 'Show your tip stats'],
       [`${getSlackCommand(env.HOST)} status`, 'Check connection status'],
     ]
@@ -1797,6 +1966,7 @@ const commandNames = [
   'disconnect',
   'help',
   'leaderboard',
+  'raffle',
   'stats',
   'status',
 ] as const
@@ -1810,15 +1980,28 @@ const actionNames = [
   'tip_ask_option_dollar',
   'tip_ask_option_money_with_wings',
   'tip_ask_option_moneybag',
+  'tip_raffle_buy_1',
+  'tip_raffle_buy_5',
 ] as const
-const modalSubmitNames = ['config_edit'] as const
+const modalSubmitNames = ['config_edit', 'tip_raffle_create'] as const
 const tipAskIdempotencyPrefix = 'tip_ask:'
+const tipRaffleIdempotencyPrefix = 'tip_raffle:'
 const tipAskReactionNames = ['money_with_wings', 'dollar', 'moneybag'] as const
 const tipAskReactions = [
   { emoji: '💸', name: 'money_with_wings' },
   { emoji: '💵', name: 'dollar' },
   { emoji: '💰', name: 'moneybag' },
 ] as const satisfies Array<{ emoji: string; name: TipAskReaction }>
+const tipRaffleDurationOptions = [
+  { label: '5 minutes', ms: 5 * 60 * 1000, value: '5m' }, // 5 minutes
+  { label: '10 minutes', ms: 10 * 60 * 1000, value: '10m' }, // 10 minutes
+  { label: '15 minutes', ms: 15 * 60 * 1000, value: '15m' }, // 15 minutes
+  { label: '1 hour', ms: 60 * 60 * 1000, value: '1h' }, // 1 hour
+  { label: '4 hours', ms: 4 * 60 * 60 * 1000, value: '4h' }, // 4 hours
+  { label: '24 hours', ms: 24 * 60 * 60 * 1000, value: '24h' }, // 24 hours
+  { label: '3 days', ms: 3 * 24 * 60 * 60 * 1000, value: '3d' }, // 3 days
+  { label: '7 days', ms: 7 * 24 * 60 * 60 * 1000, value: '7d' }, // 7 days
+] as const
 const tokenOptions = [
   { address: Tempo.addressLookup.pathUsd, label: 'PathUSD', value: 'pathUSD' },
   { address: Tempo.addressLookup.usdcE, label: 'USDC.e', value: 'USDC.e' },
@@ -1878,6 +2061,27 @@ type TipAskMessageInput = Pick<
   | 'chain_id'
 > & {
   requester_provider_user_id: string
+  workspace_default_token_address: string | null
+}
+
+type TipRaffleMessageInput = Pick<
+  DB_gen.Selectable.tip_raffle,
+  | 'chain_id'
+  | 'ended_at'
+  | 'ends_at'
+  | 'failed_ticket_count'
+  | 'id'
+  | 'memo'
+  | 'provider_channel_id'
+  | 'provider_message_ts'
+  | 'settled_amount'
+  | 'status'
+  | 'ticket_amount'
+  | 'token_address'
+  | 'winning_ticket_number'
+> & {
+  creator_provider_user_id: string
+  winner_provider_user_id: string | null
   workspace_default_token_address: string | null
 }
 
@@ -3199,6 +3403,274 @@ export async function updateTipAskMessage(providerId: string, options: { tipAskI
     .execute()
 }
 
+export async function updateTipRaffleMessage(providerId: string, options: { tipRaffleId: string }) {
+  const db = DB.create(env.DB)
+  const tipRaffle = await selectTipRaffleMessageInput(db, options.tipRaffleId)
+  if (!tipRaffle) return
+
+  const installation = await getSlack().getInstallation(providerId)
+  if (!installation) return
+
+  const message = await tipRaffleMessage(db, tipRaffle)
+  const body = new URLSearchParams()
+  body.set('blocks', JSON.stringify(message.blocks))
+  body.set('channel', tipRaffle.provider_channel_id)
+  body.set('text', message.text)
+  body.set('ts', tipRaffle.provider_message_ts)
+  body.set('unfurl_links', 'false')
+  body.set('unfurl_media', 'false')
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.update`, {
+      body,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok) throw Slack.slackApiError('chat.update', json.error)
+  await db
+    .updateTable('tip_raffle')
+    .set({ updated_at: new Date().toISOString() })
+    .where('id', '=', tipRaffle.id)
+    .execute()
+}
+
+export async function closeExpiredTipRaffles() {
+  const db = DB.create(env.DB)
+  const rows = await db
+    .selectFrom('tip_raffle')
+    .select(['id', 'provider_id'])
+    .where('status', '=', 'open')
+    .where('ends_at', '<=', new Date().toISOString())
+    .orderBy('ends_at', 'asc')
+    .limit(20)
+    .execute()
+  for (const row of rows) await closeTipRaffle(db, row.id, row.provider_id)
+}
+
+async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount: 1 | 5 }) {
+  const payload = z
+    .object({
+      nonce: z.string().min(1),
+      tipRaffleId: z.string().min(1),
+    })
+    .safeParse(
+      (() => {
+        try {
+          return JSON.parse(event.value ?? 'null')
+        } catch {
+          return null
+        }
+      })(),
+    )
+  if (!payload.success) return
+
+  const raw = z.parse(
+    z.object({
+      channel: z.object({ id: z.string().min(1) }),
+      team: z.object({ id: z.string().min(1) }),
+    }),
+    event.raw,
+  )
+  const db = DB.create(env.DB)
+  const tipRaffle = await db
+    .selectFrom('tip_raffle')
+    .innerJoin('workspace', 'workspace.id', 'tip_raffle.workspace_id')
+    .select([
+      'tip_raffle.chain_id',
+      'tip_raffle.ends_at',
+      'tip_raffle.id',
+      'tip_raffle.memo',
+      'tip_raffle.provider_channel_id',
+      'tip_raffle.provider_id',
+      'tip_raffle.status',
+      'tip_raffle.ticket_amount',
+      'tip_raffle.token_address',
+      'workspace.id as workspace_id',
+      'workspace.provider_id as workspace_provider_id',
+    ])
+    .where('tip_raffle.id', '=', payload.data.tipRaffleId)
+    .where('tip_raffle.provider_id', '=', raw.team.id)
+    .executeTakeFirst()
+  if (!tipRaffle) return
+  if (tipRaffle.status !== 'open' || tipRaffle.ends_at <= new Date().toISOString()) {
+    await closeTipRaffle(db, tipRaffle.id, tipRaffle.provider_id)
+    await postSlackEphemeral(
+      tipRaffle.provider_id,
+      raw.channel.id,
+      event.user.userId,
+      'Raffle ended.',
+    )
+    return
+  }
+
+  const buyer = await getConnectedSlackMember(db, tipRaffle.workspace_id, event.user.userId)
+  const existing = buyer
+    ? await db
+        .selectFrom('tip_raffle_ticket')
+        .select(sql<number>`coalesce(sum(ticket_count), 0)`.as('ticket_count'))
+        .where('raffle_id', '=', tipRaffle.id)
+        .where('buyer_member_id', '=', buyer.memberId)
+        .executeTakeFirst()
+    : null
+  const totalAmount = ((existing?.ticket_count ?? 0) + input.ticketCount) * tipRaffle.ticket_amount
+  const accessKey = await Tip.checkReusableTipAccessKey(env, {
+    amount: totalAmount,
+    chainId: tipRaffle.chain_id,
+    memo: tipRaffle.memo,
+    providerUserId: event.user.userId,
+    tokenAddress: tipRaffle.token_address,
+    workspaceId: tipRaffle.workspace_id,
+  })
+  if (!accessKey.ok) {
+    if (accessKey.code === 'sender_unconnected' || accessKey.code === 'missing_sender_access_key') {
+      await postConnectLink(
+        { channel: getChat().channel(`slack:${tipRaffle.provider_channel_id}`), user: event.user },
+        {
+          db,
+          provider: { id: tipRaffle.provider_id, type: 'slack' },
+          text: '',
+        },
+      )
+      return
+    }
+    await postSlackEphemeral(
+      tipRaffle.provider_id,
+      raw.channel.id,
+      event.user.userId,
+      accessKey.code === 'insufficient_funds'
+        ? 'Ticket not bought. Your wallet has insufficient funds.'
+        : 'Ticket not bought. Try again.',
+    )
+    return
+  }
+  const buyerMemberId = accessKey.memberId
+  if (!buyerMemberId) return
+
+  await db
+    .insertInto('tip_raffle_ticket')
+    .values({
+      buyer_member_id: buyerMemberId,
+      created_at: new Date().toISOString(),
+      id: Nanoid.generate(),
+      idempotency_key: `${tipRaffleIdempotencyPrefix}${tipRaffle.id}:ticket:${event.user.userId}:${payload.data.nonce}`,
+      raffle_id: tipRaffle.id,
+      ticket_count: input.ticketCount,
+      updated_at: new Date().toISOString(),
+    })
+    .execute()
+    .catch((error) => {
+      if (!isUniqueConstraintError(error)) throw error
+    })
+  await updateTipRaffleMessage(tipRaffle.provider_id, { tipRaffleId: tipRaffle.id }).catch(
+    (error) => {
+      console.error('Failed to update Slack raffle:', error)
+    },
+  )
+}
+
+async function closeTipRaffle(db: DB.Type, tipRaffleId: string, providerId: string) {
+  const now = new Date().toISOString()
+  await db
+    .updateTable('tip_raffle')
+    .set({ status: 'settling', updated_at: now })
+    .where('id', '=', tipRaffleId)
+    .where('status', '=', 'open')
+    .execute()
+  const tipRaffle = await db
+    .selectFrom('tip_raffle')
+    .selectAll()
+    .where('id', '=', tipRaffleId)
+    .executeTakeFirst()
+  if (!tipRaffle || tipRaffle.status === 'ended') return
+
+  const rows = await db
+    .selectFrom('tip_raffle_ticket')
+    .innerJoin('member as buyer', 'buyer.id', 'tip_raffle_ticket.buyer_member_id')
+    .select([
+      'buyer.id as buyer_member_id',
+      'buyer.provider_user_id as buyer_provider_user_id',
+      sql<number>`sum(tip_raffle_ticket.ticket_count)`.as('ticket_count'),
+    ])
+    .where('tip_raffle_ticket.raffle_id', '=', tipRaffle.id)
+    .groupBy(['buyer.id', 'buyer.provider_user_id'])
+    .orderBy('buyer.id', 'asc')
+    .execute()
+  const buyerCount = rows.length
+  const ticketCount = rows.reduce((total, row) => total + Number(row.ticket_count), 0)
+  if (buyerCount < 2 || ticketCount < 2) {
+    await db
+      .updateTable('tip_raffle')
+      .set({ ended_at: now, status: 'ended', updated_at: now })
+      .where('id', '=', tipRaffle.id)
+      .execute()
+    await updateTipRaffleMessage(providerId, { tipRaffleId: tipRaffle.id })
+    return
+  }
+
+  const winningTicketNumber = (() => {
+    const array = new Uint32Array(1)
+    crypto.getRandomValues(array)
+    return (array[0]! % ticketCount) + 1
+  })()
+  let cursor = 0
+  const winner = rows.find((row) => {
+    cursor += Number(row.ticket_count)
+    return winningTicketNumber <= cursor
+  })
+  if (!winner) return
+
+  let settledAmount = 0
+  let failedTicketCount = 0
+  for (const row of rows) {
+    if (row.buyer_member_id === winner.buyer_member_id) continue
+    const amount = Number(row.ticket_count) * tipRaffle.ticket_amount
+    const result = await Tip.handleTipRequest(env, {
+      amount,
+      idempotencyKey: `${tipRaffleIdempotencyPrefix}${tipRaffle.id}:settle:${row.buyer_member_id}`,
+      memo: tipRaffle.memo,
+      provider: 'slack',
+      providerChannelId: tipRaffle.provider_channel_id,
+      providerId: tipRaffle.provider_id,
+      recipientProviderUserId: winner.buyer_provider_user_id,
+      senderProviderUserId: row.buyer_provider_user_id,
+      source: 'command',
+      tokenAddress: tipRaffle.token_address,
+      workspaceProviderId: tipRaffle.provider_id,
+    }).catch(
+      (error) =>
+        ({
+          code: 'failed',
+          message: error instanceof Error ? error.message : 'Raffle payout failed.',
+          ok: false,
+        }) satisfies Tip.TipResult,
+    )
+    if (result.ok) settledAmount += amount
+    else failedTicketCount += Number(row.ticket_count)
+  }
+
+  await db
+    .updateTable('tip_raffle')
+    .set({
+      ended_at: now,
+      failed_ticket_count: failedTicketCount,
+      settled_amount: settledAmount,
+      status: 'ended',
+      updated_at: now,
+      winner_member_id: winner.buyer_member_id,
+      winning_ticket_number: winningTicketNumber,
+    })
+    .where('id', '=', tipRaffle.id)
+    .execute()
+  await updateTipRaffleMessage(providerId, { tipRaffleId: tipRaffle.id })
+}
+
 export function getTipAskIdFromIdempotencyKey(value: string) {
   const parts = value.split(':')
   return parts[0] === 'tip_ask' && parts[1] ? parts[1] : null
@@ -3223,6 +3695,140 @@ function tipAskAmount(
   if (reaction === 'dollar') return tipAsk.dollar_amount
   if (reaction === 'moneybag') return tipAsk.moneybag_amount
   return tipAsk.money_with_wings_amount
+}
+
+async function selectTipRaffleMessageInput(db: DB.Type, tipRaffleId: string) {
+  return await db
+    .selectFrom('tip_raffle')
+    .innerJoin('workspace', 'workspace.id', 'tip_raffle.workspace_id')
+    .innerJoin('member as creator', 'creator.id', 'tip_raffle.creator_member_id')
+    .leftJoin('member as winner', 'winner.id', 'tip_raffle.winner_member_id')
+    .select([
+      'creator.provider_user_id as creator_provider_user_id',
+      'tip_raffle.chain_id',
+      'tip_raffle.ended_at',
+      'tip_raffle.ends_at',
+      'tip_raffle.failed_ticket_count',
+      'tip_raffle.id',
+      'tip_raffle.memo',
+      'tip_raffle.provider_channel_id',
+      'tip_raffle.provider_message_ts',
+      'tip_raffle.settled_amount',
+      'tip_raffle.status',
+      'tip_raffle.ticket_amount',
+      'tip_raffle.token_address',
+      'tip_raffle.winning_ticket_number',
+      'winner.provider_user_id as winner_provider_user_id',
+      'workspace.default_token_address as workspace_default_token_address',
+    ])
+    .where('tip_raffle.id', '=', tipRaffleId)
+    .executeTakeFirst()
+}
+
+async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
+  const token = await Tempo.getTokenMetadata(env, tipRaffle.chain_id, tipRaffle.token_address)
+  const formatTipRaffleAmount = (amount: number) => {
+    const value = formatAmount(amount)
+    return Address.isEqual(
+      Address.checksum(tipRaffle.token_address),
+      Address.checksum(tipRaffle.workspace_default_token_address ?? Tempo.addressLookup.pathUsd),
+    )
+      ? formatCurrencyAmount(value, token.currency)
+      : formatTipAmount(value, token.currency, token.symbol)
+  }
+  const rows = await db
+    .selectFrom('tip_raffle_ticket')
+    .innerJoin('member as buyer', 'buyer.id', 'tip_raffle_ticket.buyer_member_id')
+    .select([
+      'buyer.provider_user_id as buyer_provider_user_id',
+      sql<number>`sum(tip_raffle_ticket.ticket_count)`.as('ticket_count'),
+    ])
+    .where('tip_raffle_ticket.raffle_id', '=', tipRaffle.id)
+    .groupBy('buyer.provider_user_id')
+    .orderBy('buyer.provider_user_id', 'asc')
+    .execute()
+  const ticketCount = rows.reduce((total, row) => total + Number(row.ticket_count), 0)
+  const pledgedAmount = ticketCount * tipRaffle.ticket_amount
+  const entrantLines = rows.map(
+    (row) => `<@${row.buyer_provider_user_id}> x${Number(row.ticket_count)}`,
+  )
+  const title = `<@${tipRaffle.creator_provider_user_id}> opened a raffle: ${tipRaffle.memo}`
+  const ticketContext = `Ticket: ${formatTipRaffleAmount(tipRaffle.ticket_amount)} · Tickets: ${ticketCount}`
+  const summary = (() => {
+    if (tipRaffle.status === 'ended') {
+      if (!tipRaffle.winner_provider_user_id)
+        return `Ended · No winner · ${ticketCount} ${ticketCount === 1 ? 'ticket' : 'tickets'}`
+      return [
+        `Ended · Winner: <@${tipRaffle.winner_provider_user_id}>`,
+        `Paid out: ${formatTipRaffleAmount(tipRaffle.settled_amount)} / ${formatTipRaffleAmount(pledgedAmount)}`,
+        `Winning ticket: #${tipRaffle.winning_ticket_number}`,
+        ...(tipRaffle.failed_ticket_count
+          ? [
+              `${tipRaffle.failed_ticket_count} ${tipRaffle.failed_ticket_count === 1 ? 'ticket' : 'tickets'} failed payment`,
+            ]
+          : []),
+      ].join('\n')
+    }
+    return [
+      `Pot: ${formatTipRaffleAmount(pledgedAmount)} pledged`,
+      `Ends: ${(() => {
+        const date = new Date(tipRaffle.ends_at)
+        return `<!date^${Math.floor(date.getTime() / 1000)}^{date_short_pretty} {time}|${date.toISOString()}>`
+      })()}`,
+    ].join('\n')
+  })()
+  const text = [
+    title,
+    summary,
+    ...(tipRaffle.status === 'open' ? [ticketContext] : []),
+    ...(entrantLines.length ? ['', `Entrants: ${entrantLines.join(', ')}`] : []),
+  ].join('\n')
+  return {
+    blocks: [
+      {
+        text: { text: `${title}\n${summary}`, type: 'mrkdwn' },
+        type: 'section',
+      },
+      ...(tipRaffle.status === 'open'
+        ? [
+            {
+              elements: [1, 5].map((ticketCount) => ({
+                action_id: `tip_raffle_buy_${ticketCount}`,
+                text: {
+                  emoji: true,
+                  text: `Buy ${ticketCount}`,
+                  type: 'plain_text',
+                },
+                type: 'button',
+                value: JSON.stringify({
+                  nonce: Nanoid.generate(),
+                  tipRaffleId: tipRaffle.id,
+                }),
+              })),
+              type: 'actions',
+            },
+            {
+              elements: [
+                {
+                  text: ticketContext,
+                  type: 'mrkdwn',
+                },
+              ],
+              type: 'context',
+            },
+          ]
+        : []),
+      ...(entrantLines.length
+        ? [
+            {
+              text: { text: `Entrants: ${entrantLines.join(', ')}`, type: 'mrkdwn' },
+              type: 'section',
+            },
+          ]
+        : []),
+    ],
+    text,
+  }
 }
 
 async function tipAskMessage(db: DB.Type, tipAsk: TipAskMessageInput) {

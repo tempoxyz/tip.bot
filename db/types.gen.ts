@@ -18,6 +18,8 @@ export interface DB {
   tip: tip
   tip_ask: tip_ask
   tip_batch: tip_batch
+  tip_raffle: tip_raffle
+  tip_raffle_ticket: tip_raffle_ticket
   tip_receipt_message: tip_receipt_message
   workspace: workspace
 }
@@ -253,6 +255,38 @@ type tip_batch = {
   workspace_id: string
 }
 
+type tip_raffle = {
+  chain_id: number
+  created_at: k.Generated<string>
+  creator_member_id: string
+  ended_at: string | null
+  ends_at: string
+  failed_ticket_count: k.Generated<number>
+  id: string
+  memo: string
+  provider_channel_id: string
+  provider_id: string
+  provider_message_ts: string
+  settled_amount: k.Generated<number>
+  status: 'open' | 'settling' | 'ended'
+  ticket_amount: number
+  token_address: string
+  updated_at: k.Generated<string>
+  winner_member_id: string | null
+  winning_ticket_number: number | null
+  workspace_id: string
+}
+
+type tip_raffle_ticket = {
+  buyer_member_id: string
+  created_at: k.Generated<string>
+  id: string
+  idempotency_key: string
+  raffle_id: string
+  ticket_count: number
+  updated_at: k.Generated<string>
+}
+
 type tip_receipt_message = {
   channel_id: string
   created_at: k.Generated<string>
@@ -294,6 +328,8 @@ export declare namespace DB {
   type tip = k.Selectable<DB['tip']>
   type tip_ask = k.Selectable<DB['tip_ask']>
   type tip_batch = k.Selectable<DB['tip_batch']>
+  type tip_raffle = k.Selectable<DB['tip_raffle']>
+  type tip_raffle_ticket = k.Selectable<DB['tip_raffle_ticket']>
   type tip_receipt_message = k.Selectable<DB['tip_receipt_message']>
   type workspace = k.Selectable<DB['workspace']>
 
@@ -313,6 +349,8 @@ export declare namespace DB {
     type tip = k.Insertable<DB['tip']>
     type tip_ask = k.Insertable<DB['tip_ask']>
     type tip_batch = k.Insertable<DB['tip_batch']>
+    type tip_raffle = k.Insertable<DB['tip_raffle']>
+    type tip_raffle_ticket = k.Insertable<DB['tip_raffle_ticket']>
     type tip_receipt_message = k.Insertable<DB['tip_receipt_message']>
     type workspace = k.Insertable<DB['workspace']>
   }
@@ -333,6 +371,8 @@ export declare namespace DB {
     type tip = k.Selectable<DB['tip']>
     type tip_ask = k.Selectable<DB['tip_ask']>
     type tip_batch = k.Selectable<DB['tip_batch']>
+    type tip_raffle = k.Selectable<DB['tip_raffle']>
+    type tip_raffle_ticket = k.Selectable<DB['tip_raffle_ticket']>
     type tip_receipt_message = k.Selectable<DB['tip_receipt_message']>
     type workspace = k.Selectable<DB['workspace']>
   }
@@ -353,6 +393,8 @@ export declare namespace DB {
     type tip = k.Updateable<DB['tip']>
     type tip_ask = k.Updateable<DB['tip_ask']>
     type tip_batch = k.Updateable<DB['tip_batch']>
+    type tip_raffle = k.Updateable<DB['tip_raffle']>
+    type tip_raffle_ticket = k.Updateable<DB['tip_raffle_ticket']>
     type tip_receipt_message = k.Updateable<DB['tip_receipt_message']>
     type workspace = k.Updateable<DB['workspace']>
   }
