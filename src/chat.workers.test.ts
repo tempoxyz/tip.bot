@@ -289,6 +289,21 @@ describe('/tip @account', () => {
     await expectSlackMessageNotContaining('Receipt')
   })
 
+  test('previews rain command through channel membership', async () => {
+    await connectTipAccounts()
+    await memberSlack.conversations.join({ channel: Constants.slack.channelId })
+
+    const response = await postSlashCommand('rain')
+
+    expect(response.status).toBe(200)
+    await expectSlackMessage(
+      `You’re about to tip <!channel> <@${Constants.slack.memberUserId}> $0.001 each.`,
+    )
+    await expectSlackMessage(`• <@${Constants.slack.memberUserId}>`)
+    await expectSlackMessageNotContaining(`• <@${Constants.slack.adminUserId}> (you)`)
+    await expectSlackMessageNotContaining('Receipt')
+  })
+
   test('previews channel tip through paginated channel membership', async () => {
     const originalFetch = globalThis.fetch
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((async (input, init) => {

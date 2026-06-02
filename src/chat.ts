@@ -914,6 +914,10 @@ const modalSubmits = {
 >
 
 const handlers = {
+  async rain(event, ctx) {
+    const text = ['<!channel>', ctx.text].filter(Boolean).join(' ')
+    await handlers.default(event, { ...ctx, text })
+  },
   async raffle(event, ctx) {
     if (Slack.isDMChannelId(event.channel.id)) {
       await postPrivateReply(event, event.user, 'Raffles can only be opened in channels.')
@@ -1967,6 +1971,7 @@ const commandNames = [
   'disconnect',
   'help',
   'leaderboard',
+  'rain',
   'raffle',
   'stats',
   'status',
