@@ -982,7 +982,7 @@ const handlers = {
       }),
     )
   },
-  async ask(event, ctx) {
+  async jar(event, ctx) {
     const memo = (() => {
       const value = ctx.text
         .replace(/^for\s+/i, '')
@@ -999,7 +999,7 @@ const handlers = {
       await postPrivateReply(
         event,
         event.user,
-        'Tip jar not opened. Memo must be at most 32 bytes; shorten the text after `ask`.',
+        'Tip jar not opened. Memo must be at most 32 bytes; shorten the text after `jar`.',
       )
       return
     }
@@ -1274,12 +1274,12 @@ const handlers = {
 
     const commandRows = [
       [`${getSlackCommand(env.HOST)} @account [amount] [token] [for memo]`, 'Send payment'],
-      [`${getSlackCommand(env.HOST)} ask [memo]`, 'Open a tip jar'],
       [`${getSlackCommand(env.HOST)} balance`, 'Show wallet balance'],
       [`${getSlackCommand(env.HOST)} config`, 'Manage workspace configuration'],
       [`${getSlackCommand(env.HOST)} connect`, 'Connect to Tipbot'],
       [`${getSlackCommand(env.HOST)} disconnect`, 'Disconnect from Tipbot'],
       [`${getSlackCommand(env.HOST)} help`, 'Show help message'],
+      [`${getSlackCommand(env.HOST)} jar [memo]`, 'Open a tip jar'],
       [`${getSlackCommand(env.HOST)} leaderboard`, 'Show top tippers and recipients'],
       [`${getSlackCommand(env.HOST)} raffle`, 'Start a raffle'],
       [`${getSlackCommand(env.HOST)} stats`, 'Show your tip stats'],
@@ -1299,11 +1299,11 @@ const handlers = {
     const reactionTipConfigs = await getReactionTipConfigs(ctx.db, workspace?.id)
     const mentionExampleRows = [
       [`@${getSlackBotDisplayName(env.HOST)} @account`, 'Send default amount'],
-      [`@${getSlackBotDisplayName(env.HOST)} ask [memo]`, 'Open a tip jar'],
       [`@${getSlackBotDisplayName(env.HOST)} balance`, 'Show wallet balance'],
       [`@${getSlackBotDisplayName(env.HOST)} connect`, 'Connect to Tipbot'],
       [`@${getSlackBotDisplayName(env.HOST)} disconnect`, 'Disconnect from Tipbot'],
       [`@${getSlackBotDisplayName(env.HOST)} help`, 'Show help message'],
+      [`@${getSlackBotDisplayName(env.HOST)} jar [memo]`, 'Open a tip jar'],
       [`@${getSlackBotDisplayName(env.HOST)} leaderboard`, 'Show top tippers and recipients'],
       [`@${getSlackBotDisplayName(env.HOST)} stats`, 'Show your tip stats'],
       [`@${getSlackBotDisplayName(env.HOST)} status`, 'Check connection status'],
@@ -1960,12 +1960,12 @@ const handlers = {
 >
 
 const commandNames = [
-  'ask',
   'balance',
   'config',
   'connect',
   'disconnect',
   'help',
+  'jar',
   'leaderboard',
   'raffle',
   'stats',

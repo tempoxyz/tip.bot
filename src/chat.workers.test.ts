@@ -1197,7 +1197,7 @@ describe('/tip @account', () => {
   })
 })
 
-test('/tip ask opens a tip jar and updates totals when a preset is clicked', async () => {
+test('/tip jar opens a tip jar and updates totals when a preset is clicked', async () => {
   const connected = await connectTipAccounts({
     recipient: false,
     senderProviderUserId: Constants.slack.memberUserId,
@@ -1209,7 +1209,7 @@ test('/tip ask opens a tip jar and updates totals when a preset is clicked', asy
   })
 
   const fetchSpy = vi.spyOn(globalThis, 'fetch')
-  const response = await postSlashCommand('ask for lunch.')
+  const response = await postSlashCommand('jar for lunch.')
   const tipAsk = await db
     .selectFrom('tip_ask')
     .selectAll()
@@ -1351,8 +1351,8 @@ test('/tip ask opens a tip jar and updates totals when a preset is clicked', asy
   await expectSlackMessage(`💵 <@${Constants.slack.memberUserId}> x2`)
 }, 20_000) // 20 seconds
 
-test('/tip ask requires the asker to be connected', async () => {
-  const response = await postSlashCommand('ask for lunch')
+test('/tip jar requires the opener to be connected', async () => {
+  const response = await postSlashCommand('jar for lunch')
   const tipAsks = await db
     .selectFrom('tip_ask')
     .selectAll()
@@ -1364,11 +1364,11 @@ test('/tip ask requires the asker to be connected', async () => {
   await expectSlackMessage('Connect to Tipbot before opening a tip jar.')
 })
 
-test('/tip ask posts the tip jar in the source thread', async () => {
+test('/tip jar posts the tip jar in the source thread', async () => {
   await connectTipAccounts()
   const threadTs = `1700000030.${Nanoid.generate().slice(0, 6)}`
 
-  const response = await postSlashCommand('ask for lunch', { threadTs })
+  const response = await postSlashCommand('jar for lunch', { threadTs })
 
   expect(response.status).toBe(200)
   await expectSlackThreadMessage(
@@ -1590,13 +1590,13 @@ test('@Tipbot mention supports connect command for single channel guests', async
   await expectSlackThreadMessageNotContaining(messageTs, 'Link expires in 10 minutes.')
 }, 20_000) // 20 seconds
 
-test('@Tipbot mention supports ask command', async () => {
+test('@Tipbot mention supports jar command', async () => {
   await connectTipAccounts()
   const messageTs = `1700000029.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
     messageTs,
-    text: `<@${Constants.slack.botUserId}> ask for lunch`,
+    text: `<@${Constants.slack.botUserId}> jar for lunch`,
   })
   const tipAsk = await db
     .selectFrom('tip_ask')
@@ -1611,14 +1611,14 @@ test('@Tipbot mention supports ask command', async () => {
   await expectSlackMessage('[💸 $0.001] [💵 $0.01] [💰 $0.10]')
 })
 
-test('@Tipbot thread mention posts ask tip jar in the source thread', async () => {
+test('@Tipbot thread mention posts jar in the source thread', async () => {
   await connectTipAccounts()
   const parentTs = `1700000031.${Nanoid.generate().slice(0, 6)}`
   const messageTs = `1700000032.${Nanoid.generate().slice(0, 6)}`
 
   const response = await postSlackAppMention({
     messageTs,
-    text: `<@${Constants.slack.botUserId}> ask for lunch`,
+    text: `<@${Constants.slack.botUserId}> jar for lunch`,
     threadTs: parentTs,
   })
 
@@ -2161,7 +2161,7 @@ test('@Tipbot mention supports help command', async () => {
   const params = await getSlackPostEphemeralParams(fetchSpy, '@Tipbot balance')
   expect(params.get('blocks')).toContain('@Tipbot connect')
   expect(params.get('blocks')).toContain('@Tipbot disconnect')
-  expect(params.get('blocks')).toContain('@Tipbot ask [memo]')
+  expect(params.get('blocks')).toContain('@Tipbot jar [memo]')
   expect(params.get('blocks')).toContain('@Tipbot leaderboard')
   expect(params.get('blocks')).toContain('@Tipbot stats')
   expect(params.get('blocks')).toContain('@Tipbot status')
