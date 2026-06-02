@@ -3840,6 +3840,11 @@ async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
     .execute()
   const ticketCount = rows.reduce((total, row) => total + Number(row.ticket_count), 0)
   const pledgedAmount = ticketCount * tipRaffle.ticket_amount
+  const winnerRow = rows.find(
+    (row) => row.buyer_provider_user_id === tipRaffle.winner_provider_user_id,
+  )
+  const winnerTicketCount = Number(winnerRow?.ticket_count ?? 0)
+  const payableAmount = pledgedAmount - winnerTicketCount * tipRaffle.ticket_amount
   const entrantLines = rows.map(
     (row) => `<@${row.buyer_provider_user_id}> x${Number(row.ticket_count)}`,
   )
@@ -3854,9 +3859,13 @@ async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
           ticketContext,
           ...(entrants ? [entrants] : []),
         ].join('\n')
+      const settledText = formatTipRaffleAmount(tipRaffle.settled_amount)
+      const payableText = formatTipRaffleAmount(payableAmount)
+      const paidOutText =
+        tipRaffle.settled_amount === payableAmount ? settledText : `${settledText} / ${payableText}`
       return [
         `Ended · Winner: <@${tipRaffle.winner_provider_user_id}>`,
-        `Paid out: ${formatTipRaffleAmount(tipRaffle.settled_amount)}${tipRaffle.settled_amount === pledgedAmount ? '' : ` / ${formatTipRaffleAmount(pledgedAmount)}`}`,
+        `Paid out: ${paidOutText}`,
         `Winning ticket: #${tipRaffle.winning_ticket_number}`,
         ticketContext,
         ...(entrants ? [entrants] : []),

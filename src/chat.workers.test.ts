@@ -2057,7 +2057,9 @@ test('/tip raffle closes expired raffle and settles winner payout', async () => 
     sender_member_id: connected.recipientMember.id,
   })
   await expectSlackMessage(`Ended · Winner: <@${Constants.slack.adminUserId}>`)
-  await expectSlackMessage('Paid out: $0.001 / $0.002')
+  await expectSlackMessage('Paid out: $0.001')
+  await expectSlackMessageNotContaining('Paid out: $0.001 / $0.001')
+  await expectSlackMessageNotContaining('Paid out: $0.001 / $0.002')
   await expectSlackMessage('Ticket: $0.001 · Tickets: 2')
   await expectSlackMessage(`<@${Constants.slack.adminUserId}> x1`)
   await expectSlackMessage(`<@${Constants.slack.memberUserId}> x1`)
@@ -2066,14 +2068,6 @@ test('/tip raffle closes expired raffle and settles winner payout', async () => 
     tipRaffle.provider_message_ts,
     `<@${Constants.slack.memberUserId}> paid raffle winner <@${Constants.slack.adminUserId}> $0.001 for team lunch · Receipt`,
   )
-  await db
-    .updateTable('tip_raffle')
-    .set({ settled_amount: 2000 })
-    .where('id', '=', tipRaffle.id)
-    .execute()
-  await Chat.updateTipRaffleMessage(providerId, { tipRaffleId: tipRaffle.id })
-  await expectSlackMessage('Paid out: $0.002')
-  await expectSlackMessageNotContaining('Paid out: $0.002 / $0.002')
 }, 20_000) // 20 seconds
 
 test('/tip raffle reports failed settlement payments', async () => {
@@ -2191,7 +2185,7 @@ test('/tip raffle reports failed settlement payments', async () => {
     winner_member_id: connected.recipientMember.id,
   })
   await expectSlackMessage(`Ended · Winner: <@${Constants.slack.memberUserId}>`)
-  await expectSlackMessage('Paid out: $0.001 / $0.003')
+  await expectSlackMessage('Paid out: $0.001 / $0.002')
   await expectSlackMessage('1 ticket failed payment')
 }, 20_000) // 20 seconds
 
