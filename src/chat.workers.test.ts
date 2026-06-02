@@ -1728,10 +1728,10 @@ test('/tip raffle buy button records tickets and updates message', async () => {
     provider_user_id: Constants.slack.adminUserId,
     ticket_count: 5,
   })
-  await expectSlackMessage('Pot: $0.005 pledged')
+  await expectSlackMessage('Pot: $0.005')
   await expectSlackMessage('Ticket: $0.001 · Tickets: 5')
   const history = await slack.conversations.history({ channel: Constants.slack.channelId })
-  const message = history.messages?.find((message) => message.text?.includes('Pot: $0.005 pledged'))
+  const message = history.messages?.find((message) => message.text?.includes('Pot: $0.005'))
   expect(message?.text).toMatch(/Ends:[\s\S]*Entrants:[\s\S]*Ticket:/)
 })
 

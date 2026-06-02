@@ -3785,7 +3785,7 @@ async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
       ].join('\n')
     }
     return [
-      `Pot: ${formatTipRaffleAmount(pledgedAmount)} pledged`,
+      `Pot: ${formatTipRaffleAmount(pledgedAmount)}`,
       `Ends: ${(() => {
         const date = new Date(tipRaffle.ends_at)
         return `<!date^${Math.floor(date.getTime() / 1000)}^{date_short_pretty} {time}|${date.toISOString()}>`
