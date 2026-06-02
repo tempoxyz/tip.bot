@@ -1730,6 +1730,9 @@ test('/tip raffle buy button records tickets and updates message', async () => {
   })
   await expectSlackMessage('Pot: $0.005 pledged')
   await expectSlackMessage('Ticket: $0.001 · Tickets: 5')
+  const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+  const message = history.messages?.find((message) => message.text?.includes('Pot: $0.005 pledged'))
+  expect(message?.text).toMatch(/Ends:[\s\S]*Entrants:[\s\S]*Ticket:/)
 })
 
 test('/tip raffle cron ends without winner when fewer than two buyers enter', async () => {

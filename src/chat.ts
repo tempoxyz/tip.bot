@@ -3767,6 +3767,7 @@ async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
     (row) => `<@${row.buyer_provider_user_id}> x${Number(row.ticket_count)}`,
   )
   const title = `<@${tipRaffle.creator_provider_user_id}> opened a raffle: ${tipRaffle.memo}`
+  const entrants = entrantLines.length ? `Entrants: ${entrantLines.join(', ')}` : null
   const ticketContext = `Ticket: ${formatTipRaffleAmount(tipRaffle.ticket_amount)} · Tickets: ${ticketCount}`
   const summary = (() => {
     if (tipRaffle.status === 'ended') {
@@ -3789,14 +3790,10 @@ async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
         const date = new Date(tipRaffle.ends_at)
         return `<!date^${Math.floor(date.getTime() / 1000)}^{date_short_pretty} {time}|${date.toISOString()}>`
       })()}`,
+      ...(entrants ? [entrants] : []),
     ].join('\n')
   })()
-  const text = [
-    title,
-    summary,
-    ...(tipRaffle.status === 'open' ? [ticketContext] : []),
-    ...(entrantLines.length ? ['', `Entrants: ${entrantLines.join(', ')}`] : []),
-  ].join('\n')
+  const text = [title, summary, ...(tipRaffle.status === 'open' ? [ticketContext] : [])].join('\n')
   return {
     blocks: [
       {
@@ -3829,14 +3826,6 @@ async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
                 },
               ],
               type: 'context',
-            },
-          ]
-        : []),
-      ...(entrantLines.length
-        ? [
-            {
-              text: { text: `Entrants: ${entrantLines.join(', ')}`, type: 'mrkdwn' },
-              type: 'section',
             },
           ]
         : []),
