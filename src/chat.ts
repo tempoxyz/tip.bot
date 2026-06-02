@@ -412,6 +412,7 @@ const actions = {
       .select([
         'requester.provider_user_id as requester_provider_user_id',
         'tip_ask.chain_id',
+        'tip_ask.closed_at',
         'tip_ask.dollar_amount',
         'tip_ask.id',
         'tip_ask.memo',
@@ -429,6 +430,15 @@ const actions = {
       .where('tip_ask.provider_id', '=', raw.team.id)
       .executeTakeFirst()
     if (!tipAsk) return
+    if (tipAsk.closed_at) {
+      await postSlackEphemeral(
+        tipAsk.provider_id,
+        raw.channel.id,
+        event.user.userId,
+        'Tip jar is closed.',
+      )
+      return
+    }
 
     const tipEvent = {
       channel: getChat().channel(`slack:${tipAsk.provider_channel_id}`),
@@ -497,6 +507,60 @@ const actions = {
         return result.message ?? 'Payment failed.'
       })(),
     )
+  },
+  async tip_ask_close(event) {
+    const payload = z.object({ tipAskId: z.string().min(1) }).safeParse(
+      (() => {
+        try {
+          return JSON.parse(event.value ?? 'null')
+        } catch {
+          return null
+        }
+      })(),
+    )
+    if (!payload.success) return
+
+    const raw = z.parse(
+      z.object({
+        channel: z.object({ id: z.string().min(1) }),
+        team: z.object({ id: z.string().min(1) }),
+      }),
+      event.raw,
+    )
+    const db = DB.create(env.DB)
+    const tipAsk = await db
+      .selectFrom('tip_ask')
+      .innerJoin('member as requester', 'requester.id', 'tip_ask.requester_member_id')
+      .select([
+        'requester.provider_user_id as requester_provider_user_id',
+        'tip_ask.closed_at',
+        'tip_ask.id',
+        'tip_ask.provider_channel_id',
+        'tip_ask.provider_id',
+      ])
+      .where('tip_ask.id', '=', payload.data.tipAskId)
+      .where('tip_ask.provider_id', '=', raw.team.id)
+      .executeTakeFirst()
+    if (!tipAsk) return
+    if (tipAsk.requester_provider_user_id !== event.user.userId) {
+      await postSlackEphemeral(
+        tipAsk.provider_id,
+        raw.channel.id,
+        event.user.userId,
+        'Only the creator can close this tip jar.',
+      )
+      return
+    }
+    if (!tipAsk.closed_at) {
+      const now = new Date().toISOString()
+      await db
+        .updateTable('tip_ask')
+        .set({ closed_at: now, updated_at: now })
+        .where('id', '=', tipAsk.id)
+        .where('closed_at', 'is', null)
+        .execute()
+      await updateTipAskMessage(tipAsk.provider_id, { tipAskId: tipAsk.id })
+    }
   },
   async tip_ask_option_dollar(event) {
     await actions.tip_ask_option(event)
@@ -1051,6 +1115,7 @@ const handlers = {
     const tipAskId = Nanoid.generate()
     const tipAsk = {
       chain_id: workspace.chain_id,
+      closed_at: null,
       created_at: now,
       dollar_amount: amounts.dollar,
       id: tipAskId,
@@ -1097,6 +1162,35 @@ const handlers = {
       .insertInto('tip_ask')
       .values({ ...tipAsk, provider_message_ts: json.ts })
       .execute()
+    await postSlackEphemeral(
+      ctx.provider.id,
+      Slack.getChannelId(event.channel.id),
+      event.user.userId,
+      'Manage your tip jar.',
+      {
+        blocks: [
+          {
+            text: { text: 'Manage your tip jar.', type: 'mrkdwn' },
+            type: 'section',
+          },
+          {
+            elements: [
+              {
+                action_id: 'tip_ask_close',
+                style: 'danger',
+                text: { emoji: true, text: 'Close tip jar', type: 'plain_text' },
+                type: 'button',
+                value: JSON.stringify({ tipAskId }),
+              },
+            ],
+            type: 'actions',
+          },
+        ],
+        threadTs: ctx.threadTs,
+      },
+    ).catch((error) => {
+      console.error('Failed to post Slack tip jar controls:', error)
+    })
   },
   async balance(event, ctx) {
     if (ctx.text) {
@@ -1977,6 +2071,7 @@ const actionNames = [
   'connect_cancel',
   'confirm_cancel',
   'confirm_tip',
+  'tip_ask_close',
   'tip_ask_option',
   'tip_ask_option_dollar',
   'tip_ask_option_money_with_wings',
@@ -2055,6 +2150,7 @@ type TipAskReaction = (typeof tipAskReactionNames)[number]
 
 type TipAskMessageInput = Pick<
   DB_gen.Selectable.tip_ask,
+  | 'closed_at'
   | 'dollar_amount'
   | 'id'
   | 'memo'
@@ -3359,6 +3455,7 @@ export async function updateTipAskMessage(providerId: string, options: { tipAskI
     .select([
       'requester.provider_user_id as requester_provider_user_id',
       'tip_ask.chain_id',
+      'tip_ask.closed_at',
       'tip_ask.dollar_amount',
       'tip_ask.id',
       'tip_ask.memo',
@@ -3954,6 +4051,7 @@ async function tipAskMessage(db: DB.Type, tipAsk: TipAskMessageInput) {
   const summary = tipCount
     ? `${tipCount} ${tipCount === 1 ? 'tip' : 'tips'} · ${formatTipAskAmount(total)} total`
     : 'No tips yet'
+  const status = tipAsk.closed_at ? 'Closed' : null
   const reactionLines = tipAskReactions
     .map((reaction) => {
       const tipperCounts = new Map<string, number>()
@@ -3973,42 +4071,51 @@ async function tipAskMessage(db: DB.Type, tipAsk: TipAskMessageInput) {
     .filter((line) => line !== null)
   const text = [
     `<@${tipAsk.requester_provider_user_id}> opened a tip jar${tipAsk.memo ? ` for ${tipAsk.memo}` : ''}`,
+    ...(status ? [status] : []),
     summary,
-    '',
-    tipAskReactions
-      .map(
-        (reaction) =>
-          `[${reaction.emoji} ${formatTipAskAmount(tipAskAmount(tipAsk, reaction.name))}]`,
-      )
-      .join(' '),
+    ...(tipAsk.closed_at
+      ? []
+      : [
+          '',
+          tipAskReactions
+            .map(
+              (reaction) =>
+                `[${reaction.emoji} ${formatTipAskAmount(tipAskAmount(tipAsk, reaction.name))}]`,
+            )
+            .join(' '),
+        ]),
     ...(reactionLines.length ? ['', ...reactionLines] : []),
   ].join('\n')
   return {
     blocks: [
       {
         text: {
-          text: `<@${tipAsk.requester_provider_user_id}> opened a tip jar${tipAsk.memo ? ` for ${tipAsk.memo}` : ''}\n${summary}`,
+          text: `<@${tipAsk.requester_provider_user_id}> opened a tip jar${tipAsk.memo ? ` for ${tipAsk.memo}` : ''}\n${[...(status ? [status] : []), summary].join('\n')}`,
           type: 'mrkdwn',
         },
         type: 'section',
       },
-      {
-        elements: tipAskReactions.map((reaction) => ({
-          action_id: `tip_ask_option_${reaction.name}`,
-          text: {
-            emoji: true,
-            text: `${reaction.emoji} ${formatTipAskAmount(tipAskAmount(tipAsk, reaction.name))}`,
-            type: 'plain_text',
-          },
-          type: 'button',
-          value: JSON.stringify({
-            nonce: Nanoid.generate(),
-            reaction: reaction.name,
-            tipAskId: tipAsk.id,
-          }),
-        })),
-        type: 'actions',
-      },
+      ...(tipAsk.closed_at
+        ? []
+        : [
+            {
+              elements: tipAskReactions.map((reaction) => ({
+                action_id: `tip_ask_option_${reaction.name}`,
+                text: {
+                  emoji: true,
+                  text: `${reaction.emoji} ${formatTipAskAmount(tipAskAmount(tipAsk, reaction.name))}`,
+                  type: 'plain_text',
+                },
+                type: 'button',
+                value: JSON.stringify({
+                  nonce: Nanoid.generate(),
+                  reaction: reaction.name,
+                  tipAskId: tipAsk.id,
+                }),
+              })),
+              type: 'actions',
+            },
+          ]),
       ...(reactionLines.length
         ? [
             {

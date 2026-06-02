@@ -1218,6 +1218,7 @@ test('/tip jar opens a tip jar and updates totals when a preset is clicked', asy
 
   expect(response.status).toBe(200)
   expect(tipAsk).toMatchObject({
+    closed_at: null,
     dollar_amount: 10_000,
     memo: 'lunch',
     money_with_wings_amount: 1000,
@@ -1249,6 +1250,57 @@ test('/tip jar opens a tip jar and updates totals when a preset is clicked', asy
     'tip_ask_option_moneybag',
   ])
   expect(new Set(actionIds).size).toBe(actionIds.length)
+  const tipAskControlCall = fetchSpy.mock.calls.find((call) => {
+    const input = call[0]
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    const params = slackFetchBodyParams(call[1]?.body)
+    return (
+      url.endsWith('/chat.postEphemeral') &&
+      params.get('text') === 'Manage your tip jar.' &&
+      params.get('user') === Constants.slack.adminUserId
+    )
+  })
+  const controlBlocks = JSON.parse(
+    slackFetchBodyParams(tipAskControlCall?.[1]?.body).get('blocks') ?? '[]',
+  )
+  const closeButton = controlBlocks
+    .flatMap(
+      (block: { elements?: Array<{ action_id?: string; value?: string }> }) => block.elements ?? [],
+    )
+    .find((element: { action_id?: string }) => element.action_id === 'tip_ask_close')
+  const closeButtonPayload = JSON.parse(closeButton?.value ?? 'null') as { tipAskId: string }
+  expect(closeButtonPayload).toEqual({ tipAskId: tipAsk.id })
+
+  const unauthorizedCloseResponse = await postSlackInteraction({
+    actions: [
+      {
+        action_id: 'tip_ask_close',
+        type: 'button',
+        value: JSON.stringify(closeButtonPayload),
+      },
+    ],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: tipAsk.provider_message_ts,
+      type: 'message',
+    },
+    message: { ts: tipAsk.provider_message_ts },
+    team: { id: providerId },
+    trigger_id: 'tip-ask-close-member-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.memberUserId, name: Constants.slack.memberUserName },
+  })
+  const openTipAsk = await db
+    .selectFrom('tip_ask')
+    .select('closed_at')
+    .where('id', '=', tipAsk.id)
+    .executeTakeFirstOrThrow()
+
+  expect(unauthorizedCloseResponse.status).toBe(200)
+  expect(openTipAsk.closed_at).toBeNull()
+  await expectSlackMessage('Only the creator can close this tip jar.')
+
   const dollarButton = blocks
     .flatMap(
       (block: { elements?: Array<{ action_id?: string; value?: string }> }) => block.elements ?? [],
@@ -1349,6 +1401,70 @@ test('/tip jar opens a tip jar and updates totals when a preset is clicked', asy
   expect(tipCount.count).toBe(2)
   await expectSlackMessage('2 tips · $0.02 total')
   await expectSlackMessage(`💵 <@${Constants.slack.memberUserId}> x2`)
+
+  const closeResponse = await postSlackInteraction({
+    actions: [
+      {
+        action_id: 'tip_ask_close',
+        type: 'button',
+        value: JSON.stringify(closeButtonPayload),
+      },
+    ],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: tipAsk.provider_message_ts,
+      type: 'message',
+    },
+    message: { ts: tipAsk.provider_message_ts },
+    team: { id: providerId },
+    trigger_id: 'tip-ask-close-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.adminUserId, name: Constants.slack.adminUserName },
+  })
+  const closedTipAsk = await db
+    .selectFrom('tip_ask')
+    .select('closed_at')
+    .where('id', '=', tipAsk.id)
+    .executeTakeFirstOrThrow()
+
+  expect(closeResponse.status).toBe(200)
+  expect(closedTipAsk.closed_at).toEqual(expect.any(String))
+  await expectSlackMessage('Closed')
+
+  const thirdClickResponse = await postSlackInteraction({
+    actions: [
+      {
+        action_id: 'tip_ask_option_dollar',
+        type: 'button',
+        value: JSON.stringify({ ...dollarButtonPayload, nonce: 'third-click' }),
+      },
+    ],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: tipAsk.provider_message_ts,
+      type: 'message',
+    },
+    message: { ts: tipAsk.provider_message_ts },
+    team: { id: providerId },
+    trigger_id: 'tip-ask-dollar-trigger-3',
+    type: 'block_actions',
+    user: { id: Constants.slack.memberUserId, name: Constants.slack.memberUserName },
+  })
+  const tipCountAfterClose = await db
+    .selectFrom('tip')
+    .select(({ fn }) => fn.countAll<number>().as('count'))
+    .where(
+      'tip.idempotency_key',
+      'like',
+      `tip_ask:${tipAsk.id}:dollar:${Constants.slack.memberUserId}:%`,
+    )
+    .executeTakeFirstOrThrow()
+
+  expect(thirdClickResponse.status).toBe(200)
+  expect(tipCountAfterClose.count).toBe(2)
+  await expectSlackMessage('Tip jar is closed.')
 }, 20_000) // 20 seconds
 
 test('/tip jar requires the opener to be connected', async () => {

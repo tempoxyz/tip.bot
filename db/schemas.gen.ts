@@ -196,6 +196,7 @@ export const tip = z.object({
 
 export const tip_ask = z.object({
   chain_id: z.number(),
+  closed_at: z.string().nullable(),
   created_at: z.string(),
   dollar_amount: z.number(),
   id: z.string(),

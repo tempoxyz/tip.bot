@@ -218,6 +218,7 @@ type tip = {
 
 type tip_ask = {
   chain_id: number
+  closed_at: string | null
   created_at: k.Generated<string>
   dollar_amount: number
   id: string
