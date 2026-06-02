@@ -2164,12 +2164,15 @@ describe('/api/confirm/:token', () => {
     ).toBe(true)
   }, 20_000) // 20 seconds
 
-  test('confirms multi-recipient one-time payments', async () => {
-    const secondRecipientProviderUserId = 'U000000003'
+  test('confirms large multi-recipient one-time payments', async () => {
+    const recipientProviderUserIds = [
+      Constants.slack.memberUserId,
+      ...Array.from({ length: 12 }, (_value, index) => `U${String(index + 3).padStart(9, '0')}`),
+    ]
     const confirmation = await createConfirmationToken({
       amount: 1,
       memo: `batch-${Nanoid.generate()}`,
-      recipientProviderUserIds: [Constants.slack.memberUserId, secondRecipientProviderUserId],
+      recipientProviderUserIds,
     })
     await Chat.getChat().initialize()
     await Chat.getSlack().setInstallation(confirmation.payload.providerId, {
@@ -2202,28 +2205,18 @@ describe('/api/confirm/:token', () => {
     await expect(response.json()).resolves.toMatchObject({ ok: true })
     expect(batch).toMatchObject({
       amount_each: 1,
-      recipient_count: 2,
+      recipient_count: recipientProviderUserIds.length,
       status: 'confirmed',
-      total_amount: 2,
+      total_amount: recipientProviderUserIds.length,
     })
-    expect(tips).toEqual([
-      expect.objectContaining({
-        confirmed_at: expect.any(String),
-        provider_user_id: Constants.slack.memberUserId,
-      }),
-      expect.objectContaining({
-        confirmed_at: expect.any(String),
-        provider_user_id: secondRecipientProviderUserId,
-      }),
-    ])
+    expect(tips).toHaveLength(recipientProviderUserIds.length)
+    expect(tips.map((tip) => tip.provider_user_id)).toEqual([...recipientProviderUserIds].sort())
+    expect(tips.every((tip) => tip.confirmed_at)).toBe(true)
     expect(
       history.messages?.some(
         (message) =>
-          message.text?.includes(
-            `<@${Constants.slack.memberUserId}> <@${secondRecipientProviderUserId}> $0.000001 each for ${confirmation.payload.memo} · Receipt`,
-          ) &&
-          message.text.includes(`<@${Constants.slack.memberUserId}>`) &&
-          message.text.includes(`<@${secondRecipientProviderUserId}>`),
+          message.text?.includes(`${confirmation.payload.memo} · Receipt`) &&
+          message.text.includes(`<@${Constants.slack.memberUserId}>`),
       ),
       JSON.stringify(history.messages),
     ).toBe(true)

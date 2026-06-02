@@ -2092,7 +2092,14 @@ async function submitSignedTipBatch(
       workspace_id: input.workspace.id,
     })
     .execute()
-  await db.insertInto('tip').values(tipRows).execute()
+  for (let index = 0; index < tipRows.length; index += 4) {
+    // D1 has a low SQL variable limit; each tip row has many columns, so keep multi-row inserts
+    // small even when a group tip has up to 100 paid recipients.
+    await db
+      .insertInto('tip')
+      .values(tipRows.slice(index, index + 4))
+      .execute()
+  }
 
   try {
     await db
