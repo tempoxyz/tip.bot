@@ -1884,6 +1884,55 @@ test('/tip raffle cron retries stale ended raffle message update', async () => {
   await expectSlackMessage('Ended · No winner · 0 tickets')
 })
 
+test('/tip raffle cron skips stale ended raffle message that no longer exists', async () => {
+  await connectTipAccounts()
+  await postSlackInteraction(
+    createRaffleViewSubmissionPayload({ amount: '0.001', memo: 'missing' }),
+  )
+  await postSlackInteraction(
+    createRaffleViewSubmissionPayload({ amount: '0.001', memo: 'visible' }),
+  )
+  const tipRaffles = await db
+    .selectFrom('tip_raffle')
+    .selectAll()
+    .where('provider_id', '=', providerId)
+    .orderBy('created_at', 'asc')
+    .execute()
+  const missing = tipRaffles.find((row) => row.memo === 'missing')
+  const visible = tipRaffles.find((row) => row.memo === 'visible')
+  if (!missing || !visible) throw new Error('Expected tip raffles.')
+  const missingEndedAt = new Date(Date.now() - 2 * 60 * 1000).toISOString() // 2 minutes ago
+  const visibleEndedAt = new Date(Date.now() - 60 * 1000).toISOString() // 1 minute ago
+  await db
+    .updateTable('tip_raffle')
+    .set({
+      ended_at: missingEndedAt,
+      provider_message_ts: '1111111111.111111',
+      status: 'ended',
+      updated_at: missingEndedAt,
+    })
+    .where('id', '=', missing.id)
+    .execute()
+  await db
+    .updateTable('tip_raffle')
+    .set({ ended_at: visibleEndedAt, status: 'ended', updated_at: visibleEndedAt })
+    .where('id', '=', visible.id)
+    .execute()
+
+  const ctx = createExecutionContext()
+  entryServer.scheduled(createScheduledController({ cron: '* * * * *' }), env, ctx)
+  await waitOnExecutionContext(ctx)
+  const rows = await db
+    .selectFrom('tip_raffle')
+    .select(['ended_at', 'id', 'updated_at'])
+    .where('id', 'in', [missing.id, visible.id])
+    .execute()
+
+  expect(rows.find((row) => row.id === missing.id)?.updated_at).not.toBe(missingEndedAt)
+  expect(rows.find((row) => row.id === visible.id)?.updated_at).not.toBe(visibleEndedAt)
+  await expectSlackMessage('Ended · No winner · 0 tickets')
+})
+
 test('/tip raffle closes expired raffle and settles winner payout', async () => {
   const connected = await connectTipAccounts()
   if (!connected.recipientMember) throw new Error('Expected connected recipient.')

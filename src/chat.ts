@@ -3459,7 +3459,10 @@ export async function closeExpiredTipRaffles() {
     .orderBy('ends_at', 'asc')
     .limit(20)
     .execute()
-  for (const row of rows) await closeTipRaffle(db, row.id, row.provider_id)
+  for (const row of rows)
+    await closeTipRaffle(db, row.id, row.provider_id).catch((error) => {
+      console.error('Failed to close expired tip raffle:', row.id, error)
+    })
 
   const staleMessageRows = await db
     .selectFrom('tip_raffle')
@@ -3471,7 +3474,15 @@ export async function closeExpiredTipRaffles() {
     .limit(20)
     .execute()
   for (const row of staleMessageRows)
-    await updateTipRaffleMessage(row.provider_id, { tipRaffleId: row.id })
+    await updateTipRaffleMessage(row.provider_id, { tipRaffleId: row.id }).catch(async (error) => {
+      console.error('Failed to update ended tip raffle message:', row.id, error)
+      if ((error as { code?: unknown }).code !== 'message_not_found') return
+      await db
+        .updateTable('tip_raffle')
+        .set({ updated_at: new Date().toISOString() })
+        .where('id', '=', row.id)
+        .execute()
+    })
 }
 
 async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount: 1 | 5 }) {
