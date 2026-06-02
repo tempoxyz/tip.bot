@@ -4759,6 +4759,10 @@ test('reaction tipping aggregates sent and queued messages together', async () =
     thread_ts: parentTs,
   })
   if (!reply.ts) throw new Error('Expected Slack reply timestamp.')
+  await expectSlackThreadMessage(parentTs, 'unconnected recipient should queue tip', {
+    channelId,
+    wait: true,
+  })
 
   const sent = await postSlackReaction({
     channelId,
