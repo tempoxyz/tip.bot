@@ -2066,6 +2066,14 @@ test('/tip raffle closes expired raffle and settles winner payout', async () => 
     tipRaffle.provider_message_ts,
     `<@${Constants.slack.memberUserId}> paid raffle winner <@${Constants.slack.adminUserId}> $0.001 for team lunch · Receipt`,
   )
+  await db
+    .updateTable('tip_raffle')
+    .set({ settled_amount: 2000 })
+    .where('id', '=', tipRaffle.id)
+    .execute()
+  await Chat.updateTipRaffleMessage(providerId, { tipRaffleId: tipRaffle.id })
+  await expectSlackMessage('Paid out: $0.002')
+  await expectSlackMessageNotContaining('Paid out: $0.002 / $0.002')
 }, 20_000) // 20 seconds
 
 test('/tip raffle reports failed settlement payments', async () => {

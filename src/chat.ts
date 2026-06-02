@@ -3856,7 +3856,7 @@ async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
         ].join('\n')
       return [
         `Ended · Winner: <@${tipRaffle.winner_provider_user_id}>`,
-        `Paid out: ${formatTipRaffleAmount(tipRaffle.settled_amount)} / ${formatTipRaffleAmount(pledgedAmount)}`,
+        `Paid out: ${formatTipRaffleAmount(tipRaffle.settled_amount)}${tipRaffle.settled_amount === pledgedAmount ? '' : ` / ${formatTipRaffleAmount(pledgedAmount)}`}`,
         `Winning ticket: #${tipRaffle.winning_ticket_number}`,
         ticketContext,
         ...(entrants ? [entrants] : []),
