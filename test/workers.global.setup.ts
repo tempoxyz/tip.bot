@@ -35,19 +35,21 @@ export default async function (project: TestProject) {
     RPC_URL_TESTNET: `http://127.0.0.1:${rpcPort}/1`,
     SLACK_API_URL: `${slack.url}/api`,
   })
+  const client = createClient({
+    chain: Tempo.getChain(Tempo.chainLookup.localnet),
+    transport: http(env.RPC_URL_TESTNET),
+  })
 
   console.log('workers: minting fee payer')
-  await Actions.token.mintSync(
-    createClient({
-      chain: Tempo.getChain(Tempo.chainLookup.localnet),
-      transport: http(env.RPC_URL_TESTNET),
-    }),
-    {
-      account: Account.fromSecp256k1(env.FEE_PAYER_PRIVATE_KEY_TESTNET),
-      amount: parseUnits('1000', 6),
-      to: Account.fromSecp256k1(Constants.tip.senderRootPrivateKey).address,
-      token: Tempo.addressLookup.pathUsd,
-    },
+  await retryTempoSetup(
+    () =>
+      Actions.token.mintSync(client, {
+        account: Account.fromSecp256k1(env.FEE_PAYER_PRIVATE_KEY_TESTNET),
+        amount: parseUnits('1000', 6),
+        to: Account.fromSecp256k1(Constants.tip.senderRootPrivateKey).address,
+        token: Tempo.addressLookup.pathUsd,
+      }),
+    'mint fee payer',
   )
   console.log('workers: minted fee payer')
 
@@ -76,4 +78,20 @@ function getTempoImage() {
   if (process.env.VITE_TEMPO_IMAGE?.startsWith('sha256:'))
     return `ghcr.io/tempoxyz/tempo@${process.env.VITE_TEMPO_IMAGE}`
   return `ghcr.io/tempoxyz/tempo:${process.env.VITE_TEMPO_IMAGE || 'latest'}`
+}
+
+async function retryTempoSetup<T>(fn: () => Promise<T>, label: string) {
+  const retryTimeoutMs = 30_000 // 30 seconds
+  const retryDelayMs = 500 // 500 milliseconds
+  const deadline = Date.now() + retryTimeoutMs
+  let lastError: unknown
+  while (Date.now() < deadline) {
+    try {
+      return await fn()
+    } catch (error) {
+      lastError = error
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs))
+    }
+  }
+  throw new Error(`Timed out trying to ${label}.`, { cause: lastError })
 }

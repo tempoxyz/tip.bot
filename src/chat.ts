@@ -5040,13 +5040,16 @@ async function postTipResult(
       skippedLines.push(
         `…and ${skippedRecipients.length - skippedLines.length} more not connected yet`,
       )
+    const target = options.usergroupId
+      ? Slack.formatUsergroupMention(options.usergroupId, options.usergroupLabel)
+      : formatProviderUserMentionSummary(
+          result.recipients.map((recipient) => recipient.recipientProviderUserId),
+          (providerUserId) => event.channel.mentionUser(providerUserId),
+        )
     await postSlackReceiptMessage(
       event,
       ctx,
-      `${event.channel.mentionUser(result.senderProviderUserId)} ${result.memo ? 'sent' : 'tipped'} ${options.usergroupId ? `${Slack.formatUsergroupMention(options.usergroupId, options.usergroupLabel)} ` : ''}${formatProviderUserMentionSummary(
-        result.recipients.map((recipient) => recipient.recipientProviderUserId),
-        (providerUserId) => event.channel.mentionUser(providerUserId),
-      )} ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${[
+      `${event.channel.mentionUser(result.senderProviderUserId)} ${result.memo ? 'sent' : 'tipped'} ${target} ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${[
         ...result.recipients.map(
           (recipient) => `• ${event.channel.mentionUser(recipient.recipientProviderUserId)}`,
         ),

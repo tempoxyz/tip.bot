@@ -219,7 +219,7 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      `<@${Constants.slack.adminUserId}> sent <!subteam^SENGINEERING|@engineering> <@${Constants.slack.memberUserId}> $0.001 each for coffee · Receipt`,
+      `<@${Constants.slack.adminUserId}> sent <!subteam^SENGINEERING|@engineering> $0.001 each for coffee · Receipt`,
     )
     await expectSlackMessage(`• <@${Constants.slack.memberUserId}>`)
     await expectSlackMessage(`• <@${unconnectedProviderUserId}> (not connected yet)`)
@@ -248,7 +248,7 @@ describe('/tip @account', () => {
 
     expect(response.status).toBe(200)
     await expectSlackMessage(
-      `<@${Constants.slack.adminUserId}> tipped <!subteam^SSMALLTEAM|@smallteam> <@${Constants.slackBigUserIds[0]}> <@${Constants.slackBigUserIds[1]}> <@${Constants.slackBigUserIds[2]}> <@${Constants.slackBigUserIds[3]}> <@${Constants.slackBigUserIds[4]}> + 10 others $0.001 each · Receipt`,
+      `<@${Constants.slack.adminUserId}> tipped <!subteam^SSMALLTEAM|@smallteam> $0.001 each · Receipt`,
     )
     await expectSlackMessageNotContaining('D1_ERROR')
     expect(batch).toMatchObject({ recipient_count: 15, status: 'confirmed' })
@@ -1557,7 +1557,7 @@ test('@Tipbot mention sends small group tip in thread', async () => {
   expect(response.status).toBe(200)
   await expectSlackThreadMessage(
     messageTs,
-    `<@${Constants.slack.adminUserId}> tipped <!subteam^SENGINEERING> <@${Constants.slack.memberUserId}> $0.001 each · Receipt`,
+    `<@${Constants.slack.adminUserId}> tipped <!subteam^SENGINEERING> $0.001 each · Receipt`,
   )
   await expectSlackThreadMessage(messageTs, `• <@${Constants.slack.memberUserId}>`)
   await expectSlackThreadMessage(messageTs, `• <@${unconnectedProviderUserId}> (not connected yet)`)
