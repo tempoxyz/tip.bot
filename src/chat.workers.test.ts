@@ -1735,6 +1735,41 @@ test('/tip raffle buy button records tickets and updates message', async () => {
   expect(message?.text).toMatch(/Ends:[\s\S]*Entrants:[\s\S]*Ticket:/)
 })
 
+test('/tip raffle buy button offers refresh when reusable access key does not cover raffle', async () => {
+  await connectTipAccounts({ memoScope: false })
+  await postSlackInteraction(createRaffleViewSubmissionPayload({ amount: '0.001' }))
+  const tipRaffle = await db
+    .selectFrom('tip_raffle')
+    .selectAll()
+    .where('provider_id', '=', providerId)
+    .executeTakeFirstOrThrow()
+
+  const response = await postSlackInteraction({
+    actions: [
+      {
+        action_id: 'tip_raffle_buy_1',
+        type: 'button',
+        value: JSON.stringify({ nonce: 'buy-refresh', tipRaffleId: tipRaffle.id }),
+      },
+    ],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: tipRaffle.provider_message_ts,
+      type: 'message',
+    },
+    message: { ts: tipRaffle.provider_message_ts },
+    team: { id: providerId },
+    trigger_id: 'tip-raffle-buy-refresh-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.adminUserId, name: Constants.slack.adminUserName },
+  })
+
+  expect(response.status).toBe(200)
+  await expectSlackMessage('Link expires in 10 minutes')
+  await expectSlackMessageNotContaining('Already connected')
+})
+
 test('/tip raffle cron ends without winner when fewer than two buyers enter', async () => {
   const connected = await connectTipAccounts()
   await postSlackInteraction(createRaffleViewSubmissionPayload({ amount: '0.001' }))

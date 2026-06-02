@@ -2027,6 +2027,7 @@ type HandlerContext = {
   }
   db: DB.Type
   externalSlackConnect?: boolean
+  forceConnectRefresh?: boolean
   provider: ProviderContext
   settingsProviderId?: string
   text: string
@@ -3565,6 +3566,7 @@ async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount:
         { channel: getChat().channel(`slack:${tipRaffle.provider_channel_id}`), user: event.user },
         {
           db,
+          forceConnectRefresh: accessKey.code === 'missing_sender_access_key',
           provider: { id: tipRaffle.provider_id, type: 'slack' },
           text: '',
         },
@@ -4653,7 +4655,7 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
         row.token_address.toLowerCase() ===
           (workspace.default_token_address ?? Tempo.addressLookup.pathUsd).toLowerCase(),
     )
-    if (accessKey) {
+    if (accessKey && !ctx.forceConnectRefresh) {
       await postPrivateReply(event, event.user, 'Already connected', { threadTs: ctx.threadTs })
       return
     }
