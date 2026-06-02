@@ -450,6 +450,7 @@ const actions = {
       text: '',
     } satisfies HandlerContext
     const idempotencyKey = tipAskIdempotencyKey({
+      interactionId: slackActionInteractionId(event),
       nonce: payload.data.nonce,
       providerUserId: event.user.userId,
       reaction: payload.data.reaction,
@@ -3883,12 +3884,23 @@ export function getTipAskIdFromIdempotencyKey(value: string) {
 }
 
 function tipAskIdempotencyKey(input: {
+  interactionId?: string
   nonce?: string
   providerUserId: string
   reaction: TipAskReaction
   tipAskId: string
 }) {
-  return `${tipAskIdempotencyPrefix}${input.tipAskId}:${input.reaction}:${input.providerUserId}${input.nonce ? `:${input.nonce}` : ''}`
+  return `${tipAskIdempotencyPrefix}${input.tipAskId}:${input.reaction}:${input.providerUserId}${input.interactionId ? `:${input.interactionId}` : input.nonce ? `:${input.nonce}` : ''}`
+}
+
+function slackActionInteractionId(event: chat.ActionEvent) {
+  const raw = z
+    .looseObject({
+      actions: z.array(z.looseObject({ action_ts: z.string().min(1).optional() })).optional(),
+      trigger_id: z.string().min(1).optional(),
+    })
+    .safeParse(event.raw)
+  return event.triggerId ?? raw.data?.trigger_id ?? raw.data?.actions?.[0]?.action_ts
 }
 
 function tipAskAmount(

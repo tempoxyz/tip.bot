@@ -1408,7 +1408,7 @@ test('/tip jar opens a tip jar and updates totals when a preset is clicked', asy
       {
         action_id: 'tip_ask_option_dollar',
         type: 'button',
-        value: JSON.stringify({ ...dollarButtonPayload, nonce: 'second-click' }),
+        value: JSON.stringify(dollarButtonPayload),
       },
     ],
     channel: { id: Constants.slack.channelId },
