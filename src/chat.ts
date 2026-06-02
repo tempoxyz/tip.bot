@@ -3271,7 +3271,7 @@ async function tipAskMessage(db: DB.Type, tipAsk: TipAskMessageInput) {
     })
     .filter((line) => line !== null)
   const text = [
-    `<@${tipAsk.requester_provider_user_id}> opened a tip jar${tipAsk.memo ? ` for ${tipAsk.memo}` : ''}.`,
+    `<@${tipAsk.requester_provider_user_id}> opened a tip jar${tipAsk.memo ? ` for ${tipAsk.memo}` : ''}`,
     summary,
     '',
     tipAskReactions
@@ -3286,7 +3286,7 @@ async function tipAskMessage(db: DB.Type, tipAsk: TipAskMessageInput) {
     blocks: [
       {
         text: {
-          text: `<@${tipAsk.requester_provider_user_id}> opened a tip jar${tipAsk.memo ? ` for ${tipAsk.memo}` : ''}.\n${summary}`,
+          text: `<@${tipAsk.requester_provider_user_id}> opened a tip jar${tipAsk.memo ? ` for ${tipAsk.memo}` : ''}\n${summary}`,
           type: 'mrkdwn',
         },
         type: 'section',

@@ -1218,7 +1218,7 @@ test('/tip ask opens a tip jar and updates totals when a preset is clicked', asy
     provider_channel_id: Constants.slack.channelId,
     requester_member_id: expect.any(String),
   })
-  await expectSlackMessage(`<@${Constants.slack.adminUserId}> opened a tip jar for lunch.`)
+  await expectSlackMessage(`<@${Constants.slack.adminUserId}> opened a tip jar for lunch`)
   await expectSlackMessage('No tips yet')
   await expectSlackMessage('[💸 $0.001] [💵 $0.01] [💰 $0.10]')
   const tipAskPostMessageCall = fetchSpy.mock.calls.find((call) => {
@@ -1227,7 +1227,7 @@ test('/tip ask opens a tip jar and updates totals when a preset is clicked', asy
     const params = slackFetchBodyParams(call[1]?.body)
     return (
       url.endsWith('/chat.postMessage') &&
-      params.get('text')?.includes(`<@${Constants.slack.adminUserId}> opened a tip jar for lunch.`)
+      params.get('text')?.includes(`<@${Constants.slack.adminUserId}> opened a tip jar for lunch`)
     )
   })
   const blocks = JSON.parse(
@@ -1366,7 +1366,7 @@ test('/tip ask posts the tip jar in the source thread', async () => {
   expect(response.status).toBe(200)
   await expectSlackThreadMessage(
     threadTs,
-    `<@${Constants.slack.adminUserId}> opened a tip jar for lunch.`,
+    `<@${Constants.slack.adminUserId}> opened a tip jar for lunch`,
     {
       wait: true,
     },
@@ -1600,7 +1600,7 @@ test('@Tipbot mention supports ask command', async () => {
 
   expect(response.status).toBe(200)
   expect(tipAsk).toEqual({ memo: 'lunch', provider_user_id: Constants.slack.adminUserId })
-  await expectSlackMessage(`<@${Constants.slack.adminUserId}> opened a tip jar for lunch.`)
+  await expectSlackMessage(`<@${Constants.slack.adminUserId}> opened a tip jar for lunch`)
   await expectSlackMessage('[💸 $0.001] [💵 $0.01] [💰 $0.10]')
 })
 
@@ -1618,7 +1618,7 @@ test('@Tipbot thread mention posts ask tip jar in the source thread', async () =
   expect(response.status).toBe(200)
   await expectSlackThreadMessage(
     parentTs,
-    `<@${Constants.slack.adminUserId}> opened a tip jar for lunch.`,
+    `<@${Constants.slack.adminUserId}> opened a tip jar for lunch`,
     { wait: true },
   )
 })
