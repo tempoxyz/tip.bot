@@ -847,6 +847,42 @@ describe('/tip @account', () => {
     await expectSlackMessage('Run `/tip connect` to receive it')
   })
 
+  test('queues multi-recipient tip when recipients are not connected', async () => {
+    const connected = await connectTipAccounts({ recipient: false })
+
+    const response = await postSlashCommand(
+      `<@${Constants.slack.memberUserId}> <@${Constants.slack.unconnectedUserId}> for meeting`,
+    )
+    const pendingTips = await db
+      .selectFrom('pending_tip')
+      .select(['memo', 'recipient_provider_user_id', 'status'])
+      .where('sender_member_id', '=', connected.senderMember.id)
+      .orderBy('recipient_provider_user_id', 'asc')
+      .execute()
+
+    expect(response.status).toBe(200)
+    expect(pendingTips).toEqual([
+      {
+        memo: 'meeting',
+        recipient_provider_user_id: Constants.slack.memberUserId,
+        status: 'pending',
+      },
+      {
+        memo: 'meeting',
+        recipient_provider_user_id: Constants.slack.unconnectedUserId,
+        status: 'pending',
+      },
+    ])
+    await expectSlackMessage(
+      `<@${Constants.slack.adminUserId}> queued 2 accounts $0.001 each for meeting`,
+    )
+    await expectSlackMessage(`- <@${Constants.slack.memberUserId}>`)
+    await expectSlackMessage(`- <@${Constants.slack.unconnectedUserId}>`)
+    await expectSlackMessage('Run `/tip connect` to receive it')
+    const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+    expect(history.messages?.filter((message) => message.text?.includes('queued')).length).toBe(1)
+  })
+
   test('queues multiple tips for same unconnected recipient', async () => {
     const connected = await connectTipAccounts({ recipient: false })
 
@@ -4904,6 +4940,103 @@ test('reaction tipping queues unconnected recipient', async () => {
     wait: true,
   })
 })
+
+test('reaction tipping queued Slack Connect recipient uses mention connect when recipient workspace is uninstalled', async () => {
+  const connected = await connectTipAccounts({ recipient: false })
+  await deleteSlackConnectWorkspace()
+  const channelId = await getSlackConnectChannelId()
+  await expectSlackConnectEmulator(channelId)
+  const connectSlack = new WebClient(Constants.slackConnect.teamBotToken, {
+    slackApiUrl: env.SLACK_API_URL,
+  })
+  const message = await connectSlack.chat.postMessage({
+    channel: channelId,
+    text: 'uninstalled Slack Connect recipient should receive mention connect instruction',
+  })
+  if (!message.ts) throw new Error('Expected Slack message timestamp.')
+
+  const response = await postSlackReaction({
+    channelId,
+    itemUserId: Constants.slackConnect.userId,
+    messageTs: message.ts,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.adminUserId,
+  })
+
+  expect(response.status).toBe(200)
+  await expect
+    .poll(
+      async () =>
+        await db
+          .selectFrom('pending_tip')
+          .innerJoin('member', 'member.id', 'pending_tip.recipient_member_id')
+          .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+          .select([
+            'pending_tip.recipient_provider_user_id',
+            'pending_tip.sender_member_id',
+            'pending_tip.status',
+            'workspace.installed_at',
+            'workspace.provider_id',
+          ])
+          .where('pending_tip.sender_member_id', '=', connected.senderMember.id)
+          .where('pending_tip.recipient_provider_user_id', '=', Constants.slackConnect.userId)
+          .executeTakeFirst(),
+      { interval: 100, timeout: 5_000 }, // 100 milliseconds, 5 seconds
+    )
+    .toMatchObject({
+      installed_at: null,
+      provider_id: Constants.slackConnect.teamId,
+      recipient_provider_user_id: Constants.slackConnect.userId,
+      sender_member_id: connected.senderMember.id,
+      status: 'pending',
+    })
+  await expectSlackThreadMessage(message.ts, 'Run `@Tipbot connect` to receive it', {
+    channelId,
+    wait: true,
+  })
+}, 20_000) // 20 seconds
+
+test('reaction tipping queued Slack Connect recipient uses mention connect when another shared workspace is uninstalled', async () => {
+  const connected = await connectTipAccounts({ recipient: false })
+  await deleteSlackConnectWorkspace()
+  const channelId = await getSlackConnectChannelId()
+  await expectSlackConnectEmulator(channelId)
+  const message = await memberSlack.chat.postMessage({
+    channel: channelId,
+    text: 'local recipient should receive mention connect instruction in partially uninstalled Slack Connect channel',
+  })
+  if (!message.ts) throw new Error('Expected Slack message timestamp.')
+
+  const response = await postSlackReaction({
+    channelId,
+    itemUserId: Constants.slack.memberUserId,
+    messageTs: message.ts,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.adminUserId,
+  })
+
+  expect(response.status).toBe(200)
+  await expect
+    .poll(
+      async () =>
+        await db
+          .selectFrom('pending_tip')
+          .select(['recipient_provider_user_id', 'sender_member_id', 'status'])
+          .where('sender_member_id', '=', connected.senderMember.id)
+          .where('recipient_provider_user_id', '=', Constants.slack.memberUserId)
+          .executeTakeFirst(),
+      { interval: 100, timeout: 5_000 }, // 100 milliseconds, 5 seconds
+    )
+    .toMatchObject({
+      recipient_provider_user_id: Constants.slack.memberUserId,
+      sender_member_id: connected.senderMember.id,
+      status: 'pending',
+    })
+  await expectSlackThreadMessage(message.ts, 'Run `@Tipbot connect` to receive it', {
+    channelId,
+    wait: true,
+  })
+}, 20_000) // 20 seconds
 
 test('reaction tipping aggregates queued messages for unconnected recipient', async () => {
   await connectTipAccounts({ recipient: false })

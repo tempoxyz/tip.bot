@@ -74,6 +74,7 @@ export type TipBatchResult =
       isDefaultToken: boolean
       memo: string | null
       ok: true
+      queuedTips?: QueuedTipResult[]
       recipients: Array<{ recipientProviderLabel?: string; recipientProviderUserId: string }>
       senderProviderUserId: string
       skippedRecipients?: TipSkippedRecipient[]
@@ -82,7 +83,25 @@ export type TipBatchResult =
       tokenSymbol: string
       transactionHash: string
     }
+  | {
+      amount: string
+      chainId: number
+      isDefaultToken: boolean
+      memo: string | null
+      ok: true
+      queuedTips: QueuedTipResult[]
+      recipients: []
+      senderProviderUserId: string
+      skippedRecipients?: TipSkippedRecipient[]
+      status: 'queued'
+      tokenCurrency: string
+      tokenSymbol: string
+    }
   | Extract<TipResult, { ok: false }>
+
+export type QueuedTipResult = Extract<TipResult, { ok: true; status: 'queued' }> & {
+  recipientProviderWorkspaceId?: string
+}
 
 export type PendingTipClaimResult =
   | {
@@ -114,9 +133,11 @@ export type TipRecipientInput = {
 }
 
 export type TipSkippedRecipient = {
+  queueable?: boolean
   reason: 'not_connected' | 'you'
   recipientProviderLabel?: string
   recipientProviderUserId: string
+  recipientProviderWorkspaceId?: string
 }
 
 export type TipUsergroupInput = {
@@ -369,9 +390,13 @@ export async function handleTipBatchRequest(
     default_token_address: settingsWorkspace.default_token_address,
   }
   const recipients = input.recipients.slice(0, maxTipBatchRecipients)
-  if (input.recipients.length === 0)
+  const queueableSkippedRecipients = (input.skippedRecipients ?? []).filter(
+    (recipient) => recipient.reason === 'not_connected' && recipient.queueable,
+  )
+  const targetCount = input.recipients.length + queueableSkippedRecipients.length
+  if (targetCount === 0)
     return { code: 'failed', message: 'Payment must have at least one recipient.', ok: false }
-  if (input.recipients.length > maxTipBatchRecipients)
+  if (targetCount > maxTipBatchRecipients)
     return {
       code: 'failed',
       message: `Multi-tip supports up to ${maxTipBatchRecipients} recipients.`,
@@ -389,8 +414,9 @@ export async function handleTipBatchRequest(
     return { code: 'self_tip', ok: false }
 
   const amount = input.amount ?? executionWorkspace.default_amount
-  const totalAmount = amount * recipients.length
-  if (!Number.isSafeInteger(totalAmount) || totalAmount <= 0)
+  const connectedTotalAmount = amount * recipients.length
+  const authorizedTotalAmount = amount * targetCount
+  if (!Number.isSafeInteger(authorizedTotalAmount) || authorizedTotalAmount <= 0)
     return { code: 'failed', message: 'Payment amount is too large.', ok: false }
   const tokenAddress = Address.checksum(
     input.tokenAddress ?? executionWorkspace.default_token_address ?? Tempo.addressLookup.pathUsd,
@@ -433,13 +459,15 @@ export async function handleTipBatchRequest(
   let accessKey: Database.Selectable.access_key | undefined
   for (const row of accessKeys) {
     const authorization = KeyAuthorization.fromRpc(JSON.parse(row.authorization) as never)
-    if (!supportsTip(authorization, { amount: totalAmount, memo: input.memo, tokenAddress }))
+    if (
+      !supportsTip(authorization, { amount: authorizedTotalAmount, memo: input.memo, tokenAddress })
+    )
       continue
     if (
       !(await hasTrackedAccessKeyLimitRemaining(db, {
         accessKeyId: row.id,
         accountId: sender.account.id,
-        amount: totalAmount,
+        amount: authorizedTotalAmount,
         authorization,
         authorizationUsedAt: row.authorization_used_at,
         chainId: executionWorkspace.chain_id,
@@ -475,12 +503,53 @@ export async function handleTipBatchRequest(
       amount,
       tokenAddress,
       {
-        accessKeyLimit: BigInt(Math.max(AccountLink.reusableAccessKeyLimit, totalAmount)),
+        accessKeyLimit: BigInt(Math.max(AccountLink.reusableAccessKeyLimit, authorizedTotalAmount)),
         kind: 'onetime_payment',
       },
     )) as Extract<TipBatchResult, { ok: false }>
 
-  return await submitTipBatch(env, db, {
+  if (connectedTotalAmount === 0) {
+    const queuedTips = await createQueuedBatchTips(env, db, {
+      accessKey,
+      amount,
+      idempotencyKey: input.idempotencyKey,
+      memo: input.memo,
+      provider: input.provider,
+      providerChannelId: input.providerChannelId,
+      providerId: input.providerId,
+      providerThreadId: input.providerThreadId,
+      recipients: queueableSkippedRecipients,
+      sender,
+      senderProviderUserId: input.senderProviderUserId,
+      source: input.source,
+      tokenAddress,
+      workspace: executionWorkspace,
+    })
+    const tokenMetadata = await Tempo.getTokenMetadata(
+      env,
+      executionWorkspace.chain_id,
+      tokenAddress,
+    )
+    return {
+      amount: formatAmount(amount),
+      chainId: executionWorkspace.chain_id,
+      isDefaultToken: Address.isEqual(
+        Address.checksum(tokenAddress),
+        Address.checksum(executionWorkspace.default_token_address ?? Tempo.addressLookup.pathUsd),
+      ),
+      memo: input.memo,
+      ok: true,
+      queuedTips,
+      recipients: [],
+      senderProviderUserId: input.senderProviderUserId,
+      skippedRecipients: input.skippedRecipients,
+      status: 'queued',
+      tokenCurrency: tokenMetadata.currency,
+      tokenSymbol: tokenMetadata.symbol,
+    }
+  }
+
+  const result = await submitTipBatch(env, db, {
     accessKeyId: accessKey.id,
     accessKeyPrivateKey: await AccessKey.decrypt(env, accessKey.ciphertext),
     amount,
@@ -503,6 +572,26 @@ export async function handleTipBatchRequest(
     usergroupLabel: input.usergroupLabel,
     workspace: executionWorkspace,
   })
+  if (result.ok && queueableSkippedRecipients.length) {
+    const queuedTips = await createQueuedBatchTips(env, db, {
+      accessKey,
+      amount,
+      idempotencyKey: input.idempotencyKey,
+      memo: input.memo,
+      provider: input.provider,
+      providerChannelId: input.providerChannelId,
+      providerId: input.providerId,
+      providerThreadId: input.providerThreadId,
+      recipients: queueableSkippedRecipients,
+      sender,
+      senderProviderUserId: input.senderProviderUserId,
+      source: input.source,
+      tokenAddress,
+      workspace: executionWorkspace,
+    })
+    if (queuedTips.length) return { ...result, queuedTips }
+  }
+  return result
 }
 
 export async function checkReusableTipAccessKey(
@@ -1211,6 +1300,7 @@ async function createPendingTip(
     providerChannelId: string
     providerId: string
     providerThreadId?: string
+    recipientProviderLabel?: string
     recipientProviderUserId: string
     recipientProviderWorkspaceId?: string
     sender: ConnectedMember
@@ -1221,6 +1311,7 @@ async function createPendingTip(
   },
 ): Promise<TipResult> {
   const recipient = await getOrCreatePendingRecipientMember(db, input.workspace, input.provider, {
+    recipientProviderLabel: input.recipientProviderLabel,
     recipientProviderUserId: input.recipientProviderUserId,
     recipientProviderWorkspaceId: input.recipientProviderWorkspaceId,
   })
@@ -1278,6 +1369,68 @@ async function createPendingTip(
     tokenCurrency: tokenMetadata.currency,
     tokenSymbol: tokenMetadata.symbol,
   }
+}
+
+async function createQueuedBatchTips(
+  env: Env,
+  db: DB.Type,
+  input: {
+    accessKey: Database.Selectable.access_key
+    amount: number
+    idempotencyKey: string
+    memo: string | null
+    provider: Database.Selectable.workspace['provider']
+    providerChannelId: string
+    providerId: string
+    providerThreadId?: string
+    recipients: TipSkippedRecipient[]
+    sender: ConnectedMember
+    senderProviderUserId: string
+    source: 'command' | 'mention' | 'reaction'
+    tokenAddress: string
+    workspace: Database.Selectable.workspace
+  },
+) {
+  const queuedTips = [] as QueuedTipResult[]
+  for (const recipient of input.recipients) {
+    const idempotencyKey = `${input.idempotencyKey}:${recipient.recipientProviderUserId}:pending`
+    const existing = await getExistingPendingTipResult(
+      env,
+      db,
+      {
+        idempotencyKey,
+        recipientProviderUserId: recipient.recipientProviderUserId,
+        senderProviderUserId: input.senderProviderUserId,
+      },
+      Address.checksum(input.workspace.default_token_address ?? Tempo.addressLookup.pathUsd),
+    )
+    const result =
+      existing ??
+      (await createPendingTip(env, db, {
+        accessKey: input.accessKey,
+        amount: input.amount,
+        idempotencyKey,
+        memo: input.memo,
+        provider: input.provider,
+        providerChannelId: input.providerChannelId,
+        providerId: input.providerId,
+        providerThreadId: input.providerThreadId,
+        recipientProviderLabel: recipient.recipientProviderLabel,
+        recipientProviderUserId: recipient.recipientProviderUserId,
+        recipientProviderWorkspaceId: recipient.recipientProviderWorkspaceId,
+        sender: input.sender,
+        senderProviderUserId: input.senderProviderUserId,
+        source: input.source,
+        tokenAddress: input.tokenAddress,
+        workspace: input.workspace,
+      }))
+    if (result.ok && result.status === 'queued')
+      queuedTips.push({
+        ...result,
+        recipientProviderWorkspaceId: recipient.recipientProviderWorkspaceId,
+      })
+  }
+  return queuedTips
 }
 
 async function getOrCreatePendingRecipientMember(
@@ -1976,6 +2129,8 @@ async function submitTip(
     workspace: input.workspace,
   })
   if (!result.ok) return result
+  if (result.status === 'queued')
+    return { code: 'failed', message: 'Payment could not be sent.', ok: false }
   return {
     amount: result.amount,
     chainId: result.chainId,

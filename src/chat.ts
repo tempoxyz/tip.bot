@@ -1938,7 +1938,7 @@ const handlers = {
           }) satisfies Tip.TipResult,
       )
 
-      if (result.ok && result.status === 'sent' && 'recipients' in result) {
+      if (result.ok && 'recipients' in result) {
         await postTipResult(event, ctx, result, {
           skippedRecipients: plan.skippedRecipients,
           threadTs: options.threadTs,
@@ -2426,9 +2426,11 @@ async function resolveSlackTipPlan(
     if ('message' in recipient) return { message: recipient.message, ok: false }
     if (!recipient.value) {
       skippedRecipients.push({
+        queueable: target.source === 'explicit' && !conversation.isShared,
         reason: 'not_connected',
         recipientProviderLabel: target.recipient.recipientProviderLabel,
         recipientProviderUserId: target.recipient.recipientProviderUserId,
+        recipientProviderWorkspaceId: target.recipient.recipientProviderWorkspaceId,
       })
       continue
     }
@@ -2441,6 +2443,13 @@ async function resolveSlackTipPlan(
   }
 
   if (recipients.length === 0) {
+    if (skippedRecipients.some((recipient) => recipient.queueable))
+      return {
+        ok: true,
+        previewRequired: false,
+        recipients,
+        skippedRecipients,
+      }
     const usergroup = parsed.usergroups?.[0]
     return {
       message: usergroup
@@ -2505,7 +2514,9 @@ async function resolveSlackConnectRecipient(
       providerUserId: recipient.recipientProviderUserId,
       providerWorkspaceId,
     }))
-  for (const tokenTeamId of teamIds) {
+  for (const tokenTeamId of [...teamIds, ctx.channelProviderId, ctx.provider.id].filter(
+    (providerWorkspaceId) => providerWorkspaceId !== undefined,
+  )) {
     const tokenInstallation = await getSlack().getInstallation(tokenTeamId)
     if (!tokenInstallation) continue
     const info = await Slack.getUserInfo({
@@ -3062,9 +3073,12 @@ async function handleSlackReactionTip(event: Slack.ReactionEvent, context: React
     return
   }
   const resolvedRecipient = conversation.isShared
-    ? await resolveSlackConnectRecipient({ db, provider }, conversation.teamIds, {
-        recipientProviderUserId,
-      })
+    ? await resolveSlackConnectRecipient(
+        { db, provider },
+        conversation.teamIds,
+        { recipientProviderUserId },
+        { allowUnconnected: true },
+      )
     : { value: { recipientProviderUserId } }
   if ('message' in resolvedRecipient) {
     await postSlackEphemeral(
@@ -3120,6 +3134,10 @@ async function handleSlackReactionTip(event: Slack.ReactionEvent, context: React
         {
           channelId: `slack:${event.item.channel}`,
           mentionUser: (providerUserId) => `<@${providerUserId}>`,
+          recipientProviderWorkspaceId:
+            resolvedRecipient.value && 'recipientProviderWorkspaceId' in resolvedRecipient.value
+              ? resolvedRecipient.value.recipientProviderWorkspaceId
+              : undefined,
           threadTs: message.thread_ts ?? event.item.ts,
         },
       )
@@ -5025,6 +5043,10 @@ async function postTipResult(
     )
     return
   }
+  if (result.status === 'queued') {
+    await postQueuedTipResults(event, ctx, result.queuedTips, { threadTs })
+    return
+  }
   if (result.status === 'sent') {
     const amount = result.isDefaultToken
       ? formatCurrencyAmount(result.amount, result.tokenCurrency)
@@ -5040,12 +5062,15 @@ async function postTipResult(
       skippedLines.push(
         `…and ${skippedRecipients.length - skippedLines.length} more not connected yet`,
       )
+    const recipientSummary = formatProviderUserMentionSummary(
+      result.recipients.map((recipient) => recipient.recipientProviderUserId),
+      (providerUserId) => event.channel.mentionUser(providerUserId),
+    )
     const target = options.usergroupId
-      ? Slack.formatUsergroupMention(options.usergroupId, options.usergroupLabel)
-      : formatProviderUserMentionSummary(
-          result.recipients.map((recipient) => recipient.recipientProviderUserId),
-          (providerUserId) => event.channel.mentionUser(providerUserId),
-        )
+      ? ['channel', 'here'].includes(options.usergroupId)
+        ? `${Slack.formatUsergroupMention(options.usergroupId, options.usergroupLabel)} ${recipientSummary}`
+        : Slack.formatUsergroupMention(options.usergroupId, options.usergroupLabel)
+      : recipientSummary
     await postSlackReceiptMessage(
       event,
       ctx,
@@ -5064,9 +5089,104 @@ async function postTipResult(
       threadTs,
     )
     if (result.memo && threadTs) await postSlackMemoReply(event, ctx, result.memo, threadTs)
+    if (result.queuedTips?.length)
+      await postQueuedTipResults(event, ctx, result.queuedTips, { threadTs })
     return
   }
   await postPrivateReply(event, event.user, 'Payment already sent.')
+}
+
+async function postQueuedTipResults(
+  event: TipEvent,
+  ctx: HandlerContext,
+  queuedTips: Tip.QueuedTipResult[],
+  options: { threadTs?: string } = {},
+) {
+  if (queuedTips.length <= 1) {
+    const queuedTip = queuedTips[0]
+    if (!queuedTip) return
+    const messageTs = await postSlackQueuedTipMessage(ctx, queuedTip, {
+      channelId: event.channel.id,
+      mentionUser: (providerUserId) => event.channel.mentionUser(providerUserId),
+      recipientProviderWorkspaceId: queuedTip.recipientProviderWorkspaceId,
+      threadTs: options.threadTs,
+    })
+    await Tip.recordPendingTipMessage(env, {
+      pendingTipId: queuedTip.pendingTipId,
+      providerMessageTs: messageTs,
+    })
+    return
+  }
+
+  const installation = await getSlack().getInstallation(ctx.channelProviderId ?? ctx.provider.id)
+  if (!installation) throw new Error('Tibot app not installed for this workspace.')
+  const groups = new Map<string, Tip.QueuedTipResult[]>()
+  for (const queuedTip of queuedTips) {
+    const connectCommand = await getQueuedTipConnectCommand(ctx, installation, queuedTip, {
+      channelId: event.channel.id,
+      recipientProviderWorkspaceId: queuedTip.recipientProviderWorkspaceId,
+    })
+    groups.set(connectCommand, [...(groups.get(connectCommand) ?? []), queuedTip])
+  }
+  for (const [connectCommand, groupedQueuedTips] of groups) {
+    const messageTs = await (async () => {
+      // Aggregate queued multi-tip recipients into one visible Slack message while each
+      // pending_tip row keeps its own claim lifecycle.
+      const first = groupedQueuedTips[0]
+      if (!first) throw new Error('Expected queued tips.')
+      const amount = first.isDefaultToken
+        ? formatCurrencyAmount(first.amount, first.tokenCurrency)
+        : formatTipAmount(first.amount, first.tokenCurrency, first.tokenSymbol)
+      const text = [
+        `${event.channel.mentionUser(first.senderProviderUserId)} queued ${groupedQueuedTips.length} accounts ${amount} each${first.memo ? ` for ${first.memo}` : ''}`,
+        ...groupedQueuedTips.map(
+          (queuedTip) => `- ${event.channel.mentionUser(queuedTip.recipientProviderUserId)}`,
+        ),
+      ].join('\n')
+      const context = `Run \`${connectCommand}\` to receive it`
+      const body = new URLSearchParams()
+      body.set(
+        'blocks',
+        JSON.stringify([
+          {
+            text: { text, type: 'mrkdwn' },
+            type: 'section',
+          },
+          {
+            elements: [{ text: context, type: 'mrkdwn' }],
+            type: 'context',
+          },
+        ]),
+      )
+      body.set('channel', event.channel.id.replace(/^slack:/, ''))
+      body.set('text', `${text}. ${context}`)
+      if (options.threadTs) body.set('thread_ts', options.threadTs)
+      body.set('unfurl_links', 'false')
+      body.set('unfurl_media', 'false')
+      const response = await getSlack().withBotToken(installation.botToken, () =>
+        fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
+          body,
+          headers: { authorization: `Bearer ${installation.botToken}` },
+          method: 'POST',
+        }),
+      )
+      const json = z.parse(
+        z.object({
+          error: z.string().optional(),
+          ok: z.boolean().optional(),
+          ts: z.string().optional(),
+        }),
+        await response.json(),
+      )
+      if (!json.ok || !json.ts) throw Slack.slackApiError('chat.postMessage', json.error)
+      return json.ts
+    })()
+    for (const queuedTip of groupedQueuedTips)
+      await Tip.recordPendingTipMessage(env, {
+        pendingTipId: queuedTip.pendingTipId,
+        providerMessageTs: messageTs,
+      })
+  }
 }
 
 async function postSlackQueuedTipMessage(
@@ -5089,36 +5209,7 @@ async function postSlackQueuedTipMessage(
     result.source === 'reaction'
       ? `${options.mentionUser(result.senderProviderUserId)} queued a tip for ${options.mentionUser(result.recipientProviderUserId)}`
       : `${options.mentionUser(result.senderProviderUserId)} queued ${options.mentionUser(result.recipientProviderUserId)} ${amount}${result.memo ? ` for ${result.memo}` : ''}`
-  const connectCommand = await (async () => {
-    const recipientWorkspace = await (async () => {
-      if (
-        !options.recipientProviderWorkspaceId ||
-        options.recipientProviderWorkspaceId === ctx.provider.id
-      )
-        return null
-      return await ctx.db
-        .selectFrom('workspace')
-        .select('installed_at')
-        .where('provider', '=', 'slack')
-        .where('provider_id', '=', options.recipientProviderWorkspaceId)
-        .executeTakeFirst()
-    })()
-    if (recipientWorkspace?.installed_at) return `${getSlackCommand(env.HOST)} connect`
-    // Slack Connect users without an installed app and single-channel guests need mention commands because slash commands are unavailable.
-    if (recipientWorkspace || ctx.externalSlackConnect)
-      return `@${getSlackBotDisplayName(env.HOST)} connect`
-    if (ctx.channelProviderId && ctx.channelProviderId !== ctx.provider.id)
-      return `@${getSlackBotDisplayName(env.HOST)} connect`
-    const user = await Slack.getUserInfo({
-      apiUrl: env.SLACK_API_URL,
-      botToken: installation.botToken,
-      providerUserId: result.recipientProviderUserId,
-      withBotToken: (botToken, fn) => getSlack().withBotToken(botToken, fn),
-    }).catch(() => undefined)
-    if (user?.is_restricted || user?.is_ultra_restricted)
-      return `@${getSlackBotDisplayName(env.HOST)} connect`
-    return `${getSlackCommand(env.HOST)} connect`
-  })()
+  const connectCommand = await getQueuedTipConnectCommand(ctx, installation, result, options)
   const context = `Run \`${connectCommand}\` to receive it`
   if (result.source === 'reaction') {
     const messageTs = await updateSlackQueuedReactionTipMessage(
@@ -5183,6 +5274,72 @@ async function postSlackQueuedTipMessage(
     )
   }
   return json.ts
+}
+
+async function getQueuedTipConnectCommand(
+  ctx: HandlerContext,
+  installation: { botToken: string },
+  result: Pick<Tip.QueuedTipResult, 'recipientProviderUserId'>,
+  options: { channelId?: string; recipientProviderWorkspaceId?: string } = {},
+) {
+  const conversation = options.channelId
+    ? await Slack.getConversationInfo({
+        apiUrl: env.SLACK_API_URL,
+        botToken: installation.botToken,
+        channelId: options.channelId,
+        withBotToken: (botToken, fn) => getSlack().withBotToken(botToken, fn),
+      }).catch(() => undefined)
+    : undefined
+  if (conversation?.isShared) {
+    const providerIds = [...conversation.teamIds].filter(
+      (providerId) => providerId !== conversation.contextTeamId,
+    )
+    if (providerIds.length) {
+      const workspaces = await ctx.db
+        .selectFrom('workspace')
+        .select(['installed_at', 'provider_id'])
+        .where('provider', '=', 'slack')
+        .where('provider_id', 'in', providerIds)
+        .execute()
+      if (
+        providerIds.some(
+          (providerId) =>
+            !workspaces.some(
+              (workspace) => workspace.provider_id === providerId && workspace.installed_at,
+            ),
+        )
+      )
+        return `@${getSlackBotDisplayName(env.HOST)} connect`
+    }
+  }
+  const recipientWorkspace = await (async () => {
+    if (
+      !options.recipientProviderWorkspaceId ||
+      options.recipientProviderWorkspaceId === ctx.provider.id
+    )
+      return null
+    return await ctx.db
+      .selectFrom('workspace')
+      .select('installed_at')
+      .where('provider', '=', 'slack')
+      .where('provider_id', '=', options.recipientProviderWorkspaceId)
+      .executeTakeFirst()
+  })()
+  if (recipientWorkspace?.installed_at) return `${getSlackCommand(env.HOST)} connect`
+  // Slack Connect users without an installed app and single-channel guests need mention commands because slash commands are unavailable.
+  if (recipientWorkspace || ctx.externalSlackConnect)
+    return `@${getSlackBotDisplayName(env.HOST)} connect`
+  if (ctx.channelProviderId && ctx.channelProviderId !== ctx.provider.id)
+    return `@${getSlackBotDisplayName(env.HOST)} connect`
+  const user = await Slack.getUserInfo({
+    apiUrl: env.SLACK_API_URL,
+    botToken: installation.botToken,
+    providerUserId: result.recipientProviderUserId,
+    withBotToken: (botToken, fn) => getSlack().withBotToken(botToken, fn),
+  }).catch(() => undefined)
+  if (user?.is_restricted || user?.is_ultra_restricted)
+    return `@${getSlackBotDisplayName(env.HOST)} connect`
+  return `${getSlackCommand(env.HOST)} connect`
 }
 
 async function updateSlackQueuedReactionTipMessage(

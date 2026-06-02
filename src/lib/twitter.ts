@@ -590,6 +590,7 @@ async function handleTwitterBatchTip(
       await handleTwitterTipFailure(env, tweet, result)
       return
     }
+    if (result.status === 'queued') return
     sentRecipients.push(...recipientPlan.connected)
     amount = formatTwitterAmount(result)
     chainId = result.chainId
