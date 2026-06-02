@@ -1304,7 +1304,9 @@ test('/tip ask opens a tip jar and updates totals when a preset is clicked', asy
   expect(tip.confirmed_at).toEqual(expect.any(String))
   await expectSlackMessage('1 tip · $0.01 total')
   await expectSlackMessage(`💵 <@${Constants.slack.memberUserId}>`)
-  await expectSlackMessage(`You tipped <@${Constants.slack.adminUserId}> $0.01 for lunch.`)
+  await expectSlackMessageNotContaining(
+    `You tipped <@${Constants.slack.adminUserId}> $0.01 for lunch.`,
+  )
 
   const secondClickResponse = await postSlackInteraction({
     actions: [
@@ -1353,6 +1355,22 @@ test('/tip ask requires the asker to be connected', async () => {
   expect(response.status).toBe(200)
   expect(tipAsks).toEqual([])
   await expectSlackMessage('Connect to Tipbot before opening a tip jar.')
+})
+
+test('/tip ask posts the tip jar in the source thread', async () => {
+  await connectTipAccounts()
+  const threadTs = `1700000030.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlashCommand('ask for lunch', { threadTs })
+
+  expect(response.status).toBe(200)
+  await expectSlackThreadMessage(
+    threadTs,
+    `<@${Constants.slack.adminUserId}> opened a tip jar for lunch.`,
+    {
+      wait: true,
+    },
+  )
 })
 
 test('@Tipbot mention sends tip in thread', async () => {
@@ -1584,6 +1602,25 @@ test('@Tipbot mention supports ask command', async () => {
   expect(tipAsk).toEqual({ memo: 'lunch', provider_user_id: Constants.slack.adminUserId })
   await expectSlackMessage(`<@${Constants.slack.adminUserId}> opened a tip jar for lunch.`)
   await expectSlackMessage('[💸 $0.001] [💵 $0.01] [💰 $0.10]')
+})
+
+test('@Tipbot thread mention posts ask tip jar in the source thread', async () => {
+  await connectTipAccounts()
+  const parentTs = `1700000031.${Nanoid.generate().slice(0, 6)}`
+  const messageTs = `1700000032.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> ask for lunch`,
+    threadTs: parentTs,
+  })
+
+  expect(response.status).toBe(200)
+  await expectSlackThreadMessage(
+    parentTs,
+    `<@${Constants.slack.adminUserId}> opened a tip jar for lunch.`,
+    { wait: true },
+  )
 })
 
 test('@Tipbot mention connect link completion connects local workspace account', async () => {

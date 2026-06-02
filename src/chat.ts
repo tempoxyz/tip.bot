@@ -470,17 +470,6 @@ const actions = {
       await updateTipAskMessage(tipAsk.provider_id, { tipAskId: tipAsk.id }).catch((error) => {
         console.error('Failed to update Slack tip jar:', error)
       })
-      const amount = result.isDefaultToken
-        ? formatCurrencyAmount(result.amount, result.tokenCurrency)
-        : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
-      await postSlackEphemeral(
-        tipAsk.provider_id,
-        raw.channel.id,
-        event.user.userId,
-        result.status === 'duplicate'
-          ? `You already tipped <@${tipAsk.requester_provider_user_id}> ${amount}${tipAsk.memo ? ` for ${tipAsk.memo}` : ''}.`
-          : `You tipped <@${tipAsk.requester_provider_user_id}> ${amount}${tipAsk.memo ? ` for ${tipAsk.memo}` : ''}.`,
-      )
       return
     }
 
@@ -916,6 +905,7 @@ const handlers = {
     body.set('blocks', JSON.stringify(message.blocks))
     body.set('channel', Slack.getChannelId(event.channel.id))
     body.set('text', message.text)
+    if (ctx.threadTs) body.set('thread_ts', ctx.threadTs)
     body.set('unfurl_links', 'false')
     body.set('unfurl_media', 'false')
     const response = await getSlack().withBotToken(installation.botToken, () =>
