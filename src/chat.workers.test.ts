@@ -1201,6 +1201,7 @@ test('/tip ask opens a tip jar and updates totals when a preset is clicked', asy
     workspace_id: connected.workspace.id,
   })
 
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
   const response = await postSlashCommand('ask for lunch')
   const tipAsk = await db
     .selectFrom('tip_ask')
@@ -1220,11 +1221,32 @@ test('/tip ask opens a tip jar and updates totals when a preset is clicked', asy
   await expectSlackMessage(`<@${Constants.slack.adminUserId}> opened a tip jar for lunch.`)
   await expectSlackMessage('No tips yet')
   await expectSlackMessage('[💸 $0.001] [💵 $0.01] [💰 $0.10]')
+  const tipAskPostMessageCall = fetchSpy.mock.calls.find((call) => {
+    const input = call[0]
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    const params = slackFetchBodyParams(call[1]?.body)
+    return (
+      url.endsWith('/chat.postMessage') &&
+      params.get('text')?.includes(`<@${Constants.slack.adminUserId}> opened a tip jar for lunch.`)
+    )
+  })
+  const blocks = JSON.parse(
+    slackFetchBodyParams(tipAskPostMessageCall?.[1]?.body).get('blocks') ?? '[]',
+  )
+  const actionIds = (blocks as Array<{ elements?: Array<{ action_id?: string }> }>).flatMap(
+    (block) => block.elements?.map((element) => element.action_id).filter(Boolean) ?? [],
+  )
+  expect(actionIds).toEqual([
+    'tip_ask_option_money_with_wings',
+    'tip_ask_option_dollar',
+    'tip_ask_option_moneybag',
+  ])
+  expect(new Set(actionIds).size).toBe(actionIds.length)
 
   const clickResponse = await postSlackInteraction({
     actions: [
       {
-        action_id: 'tip_ask_option',
+        action_id: 'tip_ask_option_dollar',
         type: 'button',
         value: JSON.stringify({ reaction: 'dollar', tipAskId: tipAsk.id }),
       },

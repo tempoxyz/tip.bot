@@ -507,6 +507,15 @@ const actions = {
       })(),
     )
   },
+  async tip_ask_option_dollar(event) {
+    await actions.tip_ask_option(event)
+  },
+  async tip_ask_option_money_with_wings(event) {
+    await actions.tip_ask_option(event)
+  },
+  async tip_ask_option_moneybag(event) {
+    await actions.tip_ask_option(event)
+  },
   async config_edit(event) {
     const raw = z.parse(
       z.object({
@@ -1799,6 +1808,9 @@ const actionNames = [
   'confirm_cancel',
   'confirm_tip',
   'tip_ask_option',
+  'tip_ask_option_dollar',
+  'tip_ask_option_money_with_wings',
+  'tip_ask_option_moneybag',
 ] as const
 const modalSubmitNames = ['config_edit'] as const
 const tipAskIdempotencyPrefix = 'tip_ask:'
@@ -3273,7 +3285,7 @@ async function tipAskMessage(db: DB.Type, tipAsk: TipAskMessageInput) {
       },
       {
         elements: tipAskReactions.map((reaction) => ({
-          action_id: 'tip_ask_option',
+          action_id: `tip_ask_option_${reaction.name}`,
           text: {
             emoji: true,
             text: `${reaction.emoji} ${formatTipAskAmount(tipAskAmount(tipAsk, reaction.name))}`,
