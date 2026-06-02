@@ -7,7 +7,7 @@ import { formatAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import type { DB as Database } from '#db/types.gen.ts'
-import { AbiFunction, Address, Hex } from 'ox'
+import { AbiFunction, Address, Hash, Hex } from 'ox'
 import { TxEnvelopeTempo } from 'ox/tempo'
 import { KeyAuthorization } from 'ox/tempo'
 import { BaseError, InsufficientFundsError, createClient, http } from 'viem'
@@ -1761,6 +1761,7 @@ async function submitTipBatch(
         calls,
         chain: Tempo.getChain(input.workspace.chain_id),
         keyAuthorization: input.authorizationUsedAt ? undefined : input.keyAuthorization,
+        nonceKey: nonceKeyFromIdempotencyKey(input.idempotencyKey),
       }
       if (!feePayerPrivateKey)
         return [
@@ -1859,6 +1860,14 @@ async function submitTipBatch(
       .execute()
     return { chainId: input.workspace.chain_id, code, message, ok: false }
   }
+}
+
+export function nonceKeyFromIdempotencyKey(value: string) {
+  const expiringNonceKey = (1n << 256n) - 1n
+  const nonceKey = Hex.toBigInt(Hash.keccak256(Hex.fromString(value)))
+  if (nonceKey === 0n) return 1n
+  if (nonceKey === expiringNonceKey) return expiringNonceKey - 1n
+  return nonceKey
 }
 
 async function submitTip(
