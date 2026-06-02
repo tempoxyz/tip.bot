@@ -1658,7 +1658,11 @@ test('/tip raffle opens create modal', async () => {
       },
       { timeout: 10_000 }, // 10 seconds
     )
-    .toContain('Start raffle')
+    .toEqual(
+      expect.stringMatching(
+        /(?=.*Start raffle)(?=.*"initial_value":"0\.1")(?=.*"initial_option":\{"text":\{"type":"plain_text","text":"5 minutes")(?=.*"text":"90 seconds")(?=.*"value":"90s")/s,
+      ),
+    )
 })
 
 test('/tip raffle create modal posts raffle message', async () => {
@@ -1768,6 +1772,34 @@ test('/tip raffle cron ends without winner when fewer than two buyers enter', as
     winning_ticket_number: null,
   })
   await expectSlackMessage('Ended · No winner · 5 tickets')
+})
+
+test('/tip raffle cron retries stale ended raffle message update', async () => {
+  await connectTipAccounts()
+  await postSlackInteraction(createRaffleViewSubmissionPayload({ amount: '0.001' }))
+  const tipRaffle = await db
+    .selectFrom('tip_raffle')
+    .selectAll()
+    .where('provider_id', '=', providerId)
+    .executeTakeFirstOrThrow()
+  const endedAt = new Date(Date.now() - 60 * 1000).toISOString() // 1 minute ago
+  await db
+    .updateTable('tip_raffle')
+    .set({ ended_at: endedAt, status: 'ended', updated_at: endedAt })
+    .where('id', '=', tipRaffle.id)
+    .execute()
+
+  const ctx = createExecutionContext()
+  entryServer.scheduled(createScheduledController({ cron: '* * * * *' }), env, ctx)
+  await waitOnExecutionContext(ctx)
+  const updated = await db
+    .selectFrom('tip_raffle')
+    .select(['ended_at', 'updated_at'])
+    .where('id', '=', tipRaffle.id)
+    .executeTakeFirstOrThrow()
+
+  expect(updated.updated_at).not.toBe(updated.ended_at)
+  await expectSlackMessage('Ended · No winner · 0 tickets')
 })
 
 test('/tip raffle closes expired raffle and settles winner payout', async () => {
@@ -7597,8 +7629,8 @@ function createRaffleViewSubmissionPayload(
           duration: {
             duration: {
               selected_option: {
-                text: { text: input.duration ?? '10 minutes', type: 'plain_text' },
-                value: input.duration ?? '10m',
+                text: { text: input.duration ?? '5 minutes', type: 'plain_text' },
+                value: input.duration ?? '5m',
               },
               type: 'static_select',
             },
@@ -7612,7 +7644,7 @@ function createRaffleViewSubmissionPayload(
           ticket_amount: {
             ticket_amount: {
               type: 'plain_text_input',
-              value: input.amount ?? '0.10',
+              value: input.amount ?? '0.1',
             },
           },
         },

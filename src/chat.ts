@@ -959,12 +959,13 @@ const handlers = {
           }),
           chat.TextInput({
             id: 'ticket_amount',
+            initialValue: '0.1',
             label: `Ticket price (${token.symbol})`,
             placeholder: '0.10',
           }),
           chat.Select({
             id: 'duration',
-            initialOption: '24h',
+            initialOption: '5m',
             label: 'Duration',
             options: tipRaffleDurationOptions.map((option) =>
               chat.SelectOption({ label: option.label, value: option.value }),
@@ -1993,6 +1994,7 @@ const tipAskReactions = [
   { emoji: '💰', name: 'moneybag' },
 ] as const satisfies Array<{ emoji: string; name: TipAskReaction }>
 const tipRaffleDurationOptions = [
+  { label: '90 seconds', ms: 90 * 1000, value: '90s' }, // 90 seconds
   { label: '5 minutes', ms: 5 * 60 * 1000, value: '5m' }, // 5 minutes
   { label: '10 minutes', ms: 10 * 60 * 1000, value: '10m' }, // 10 minutes
   { label: '15 minutes', ms: 15 * 60 * 1000, value: '15m' }, // 15 minutes
@@ -3452,6 +3454,18 @@ export async function closeExpiredTipRaffles() {
     .limit(20)
     .execute()
   for (const row of rows) await closeTipRaffle(db, row.id, row.provider_id)
+
+  const staleMessageRows = await db
+    .selectFrom('tip_raffle')
+    .select(['id', 'provider_id'])
+    .where('status', '=', 'ended')
+    .where('ended_at', 'is not', null)
+    .whereRef('updated_at', '=', 'ended_at')
+    .orderBy('ended_at', 'asc')
+    .limit(20)
+    .execute()
+  for (const row of staleMessageRows)
+    await updateTipRaffleMessage(row.provider_id, { tipRaffleId: row.id })
 }
 
 async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount: 1 | 5 }) {
