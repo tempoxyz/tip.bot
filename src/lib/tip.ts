@@ -1758,10 +1758,16 @@ async function submitTipBatch(
     const [receipt, feePayer] = await (async () => {
       const parameters = {
         account,
+        accessList: [
+          {
+            address: input.sender.account.address as Address.Address,
+            storageKeys: [Hash.keccak256(Hex.fromString(input.idempotencyKey))],
+          },
+        ],
         calls,
         chain: Tempo.getChain(input.workspace.chain_id),
         keyAuthorization: input.authorizationUsedAt ? undefined : input.keyAuthorization,
-        nonceKey: nonceKeyFromIdempotencyKey(input.idempotencyKey),
+        nonceKey: 'expiring' as const,
       }
       if (!feePayerPrivateKey)
         return [
@@ -1860,14 +1866,6 @@ async function submitTipBatch(
       .execute()
     return { chainId: input.workspace.chain_id, code, message, ok: false }
   }
-}
-
-export function nonceKeyFromIdempotencyKey(value: string) {
-  const expiringNonceKey = (1n << 256n) - 1n
-  const nonceKey = Hex.toBigInt(Hash.keccak256(Hex.fromString(value)))
-  if (nonceKey === 0n) return 1n
-  if (nonceKey === expiringNonceKey) return expiringNonceKey - 1n
-  return nonceKey
 }
 
 async function submitTip(

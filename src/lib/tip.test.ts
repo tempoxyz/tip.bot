@@ -2,16 +2,6 @@ import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
 import { expect, test } from 'vitest'
 
-test('derives deterministic non-reserved 2d nonce keys from idempotency keys', () => {
-  const first = Tip.nonceKeyFromIdempotencyKey('tip_ask:jar:dollar:sender:nonce')
-  const second = Tip.nonceKeyFromIdempotencyKey('tip_ask:jar:dollar:sender:other')
-
-  expect(first).toBe(Tip.nonceKeyFromIdempotencyKey('tip_ask:jar:dollar:sender:nonce'))
-  expect(first).not.toBe(second)
-  expect(first).not.toBe(0n)
-  expect(first).not.toBe((1n << 256n) - 1n)
-})
-
 test('parses positive decimal amounts', () => {
   expect(Tip.parseAmount('1')).toBe(1_000_000)
   expect(Tip.parseAmount('$1')).toBe(1_000_000)
