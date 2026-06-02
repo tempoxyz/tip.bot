@@ -3791,11 +3791,17 @@ async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
   const summary = (() => {
     if (tipRaffle.status === 'ended') {
       if (!tipRaffle.winner_provider_user_id)
-        return `Ended · No winner · ${ticketCount} ${ticketCount === 1 ? 'ticket' : 'tickets'}`
+        return [
+          `Ended · No winner · ${ticketCount} ${ticketCount === 1 ? 'ticket' : 'tickets'}`,
+          ticketContext,
+          ...(entrants ? [entrants] : []),
+        ].join('\n')
       return [
         `Ended · Winner: <@${tipRaffle.winner_provider_user_id}>`,
         `Paid out: ${formatTipRaffleAmount(tipRaffle.settled_amount)} / ${formatTipRaffleAmount(pledgedAmount)}`,
         `Winning ticket: #${tipRaffle.winning_ticket_number}`,
+        ticketContext,
+        ...(entrants ? [entrants] : []),
         ...(tipRaffle.failed_ticket_count
           ? [
               `${tipRaffle.failed_ticket_count} ${tipRaffle.failed_ticket_count === 1 ? 'ticket' : 'tickets'} failed payment`,

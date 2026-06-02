@@ -1812,6 +1812,8 @@ test('/tip raffle cron ends without winner when fewer than two buyers enter', as
   })
   expect(initializeSpy).toHaveBeenCalled()
   await expectSlackMessage('Ended · No winner · 5 tickets')
+  await expectSlackMessage('Ticket: $0.001 · Tickets: 5')
+  await expectSlackMessage(`Entrants: <@${Constants.slack.adminUserId}> x5`)
 })
 
 test('/tip raffle cron retries stale settling raffle', async () => {
@@ -2056,6 +2058,9 @@ test('/tip raffle closes expired raffle and settles winner payout', async () => 
   })
   await expectSlackMessage(`Ended · Winner: <@${Constants.slack.adminUserId}>`)
   await expectSlackMessage('Paid out: $0.001 / $0.002')
+  await expectSlackMessage('Ticket: $0.001 · Tickets: 2')
+  await expectSlackMessage(`<@${Constants.slack.adminUserId}> x1`)
+  await expectSlackMessage(`<@${Constants.slack.memberUserId}> x1`)
 }, 20_000) // 20 seconds
 
 test('/tip raffle reports failed settlement payments', async () => {
