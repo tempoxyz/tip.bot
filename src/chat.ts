@@ -379,6 +379,134 @@ export function getSlack() {
 }
 
 const actions = {
+  async tip_ask_option(event) {
+    const payload = z
+      .object({
+        reaction: z.enum(tipAskReactionNames),
+        tipAskId: z.string().min(1),
+      })
+      .safeParse(
+        (() => {
+          try {
+            return JSON.parse(event.value ?? 'null')
+          } catch {
+            return null
+          }
+        })(),
+      )
+    if (!payload.success) return
+
+    const raw = z.parse(
+      z.object({
+        channel: z.object({ id: z.string().min(1) }),
+        team: z.object({ id: z.string().min(1) }),
+      }),
+      event.raw,
+    )
+    const db = DB.create(env.DB)
+    const tipAsk = await db
+      .selectFrom('tip_ask')
+      .innerJoin('workspace', 'workspace.id', 'tip_ask.workspace_id')
+      .innerJoin('member as requester', 'requester.id', 'tip_ask.requester_member_id')
+      .select([
+        'requester.provider_user_id as requester_provider_user_id',
+        'tip_ask.chain_id',
+        'tip_ask.dollar_amount',
+        'tip_ask.id',
+        'tip_ask.memo',
+        'tip_ask.money_with_wings_amount',
+        'tip_ask.moneybag_amount',
+        'tip_ask.provider_channel_id',
+        'tip_ask.provider_id',
+        'tip_ask.provider_message_ts',
+        'tip_ask.token_address',
+        'workspace.default_token_address',
+        'workspace.id as workspace_id',
+        'workspace.provider_id as workspace_provider_id',
+      ])
+      .where('tip_ask.id', '=', payload.data.tipAskId)
+      .where('tip_ask.provider_id', '=', raw.team.id)
+      .executeTakeFirst()
+    if (!tipAsk) return
+
+    const tipEvent = {
+      channel: getChat().channel(`slack:${tipAsk.provider_channel_id}`),
+      user: event.user,
+    } satisfies TipEvent
+    const ctx = {
+      db,
+      provider: { id: tipAsk.provider_id, type: 'slack' },
+      text: '',
+    } satisfies HandlerContext
+    const idempotencyKey = tipAskIdempotencyKey({
+      providerUserId: event.user.userId,
+      reaction: payload.data.reaction,
+      tipAskId: tipAsk.id,
+    })
+    const result = await Tip.handleTipRequest(env, {
+      amount: tipAskAmount(tipAsk, payload.data.reaction),
+      idempotencyKey,
+      memo: tipAsk.memo,
+      provider: 'slack',
+      providerChannelId: tipAsk.provider_channel_id,
+      providerId: tipAsk.provider_id,
+      recipientProviderUserId: tipAsk.requester_provider_user_id,
+      senderProviderUserId: event.user.userId,
+      source: 'command',
+      tokenAddress: tipAsk.token_address,
+      workspaceProviderId: tipAsk.workspace_provider_id,
+    }).catch(
+      (error) =>
+        ({
+          code: 'failed',
+          message: error instanceof Error ? error.message : 'Tip jar payment failed.',
+          ok: false,
+        }) satisfies Tip.TipResult,
+    )
+
+    if (result.ok) {
+      await updateTipAskMessage(tipAsk.provider_id, { tipAskId: tipAsk.id }).catch((error) => {
+        console.error('Failed to update Slack tip jar:', error)
+      })
+      const amount = result.isDefaultToken
+        ? formatCurrencyAmount(result.amount, result.tokenCurrency)
+        : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
+      await postSlackEphemeral(
+        tipAsk.provider_id,
+        raw.channel.id,
+        event.user.userId,
+        result.status === 'duplicate'
+          ? `You already tipped <@${tipAsk.requester_provider_user_id}> ${amount}${tipAsk.memo ? ` for ${tipAsk.memo}` : ''}.`
+          : `You tipped <@${tipAsk.requester_provider_user_id}> ${amount}${tipAsk.memo ? ` for ${tipAsk.memo}` : ''}.`,
+      )
+      return
+    }
+
+    if (result.code === 'confirmation_required' && result.confirmUrl) {
+      await postSlackPaymentConfirmation(tipEvent, ctx, result.confirmUrl, {
+        label: 'Confirm payment',
+        message: 'Tipbot needs your approval to send this payment.',
+      })
+      return
+    }
+    if (result.code === 'sender_unconnected' || result.code === 'missing_sender_access_key') {
+      await postConnectLink(tipEvent, ctx)
+      return
+    }
+    await postSlackEphemeral(
+      tipAsk.provider_id,
+      raw.channel.id,
+      event.user.userId,
+      (() => {
+        if (result.code === 'self_tip')
+          return 'Payment not sent. Cannot send a payment to yourself.'
+        if (result.code === 'insufficient_funds')
+          return 'Payment not sent. Your wallet has insufficient funds.'
+        if (result.code === 'pending') return 'Payment still sending.'
+        return result.message ?? 'Payment failed.'
+      })(),
+    )
+  },
   async config_edit(event) {
     const raw = z.parse(
       z.object({
@@ -685,6 +813,114 @@ const modalSubmits = {
 >
 
 const handlers = {
+  async ask(event, ctx) {
+    const memo = ctx.text.replace(/^for\s+/i, '').trim() || null
+    if (Slack.isDMChannelId(event.channel.id)) {
+      await postPrivateReply(event, event.user, 'Tip jars can only be opened in channels.')
+      return
+    }
+    if (memo && Tip.isTransferMemoTooLong(memo)) {
+      await postPrivateReply(
+        event,
+        event.user,
+        'Tip jar not opened. Memo must be at most 32 bytes; shorten the text after `ask`.',
+      )
+      return
+    }
+
+    const workspace = await ctx.db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', ctx.provider.type)
+      .where('provider_id', '=', ctx.provider.id)
+      .executeTakeFirst()
+    if (!workspace) {
+      await postPrivateReply(
+        event,
+        event.user,
+        'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+      )
+      return
+    }
+
+    const requester = await getConnectedSlackMember(ctx.db, workspace.id, event.user.userId)
+    if (!requester) {
+      await postPrivateReply(
+        event,
+        event.user,
+        `Connect to Tipbot before opening a tip jar. Run \`${getSlackCommand(env.HOST)} connect\` first.`,
+      )
+      return
+    }
+
+    const configs = await getReactionTipConfigs(ctx.db, workspace.id)
+    const configByReaction = new Map(configs.map((config) => [config.emoji, config.amount]))
+    const amounts = {
+      dollar: configByReaction.get('dollar'),
+      money_with_wings: configByReaction.get('money_with_wings'),
+      moneybag: configByReaction.get('moneybag'),
+    }
+    if (!amounts.dollar || !amounts.money_with_wings || !amounts.moneybag) {
+      await postPrivateReply(
+        event,
+        event.user,
+        'Tip jar not opened. Configure money_with_wings, dollar, and moneybag reaction tip amounts first.',
+      )
+      return
+    }
+
+    const installation = await getSlack().getInstallation(ctx.provider.id)
+    if (!installation) return
+    const now = new Date().toISOString()
+    const tipAskId = Nanoid.generate()
+    const tipAsk = {
+      chain_id: workspace.chain_id,
+      created_at: now,
+      dollar_amount: amounts.dollar,
+      id: tipAskId,
+      memo,
+      money_with_wings_amount: amounts.money_with_wings,
+      moneybag_amount: amounts.moneybag,
+      provider_channel_id: Slack.getChannelId(event.channel.id),
+      provider_id: ctx.provider.id,
+      provider_message_ts: 'pending',
+      requester_member_id: requester.memberId,
+      token_address: workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+      updated_at: now,
+      workspace_id: workspace.id,
+    } satisfies DB_gen.Insertable.tip_ask
+    const message = await tipAskMessage(ctx.db, {
+      ...tipAsk,
+      requester_provider_user_id: event.user.userId,
+      workspace_default_token_address: workspace.default_token_address,
+    })
+    const body = new URLSearchParams()
+    body.set('blocks', JSON.stringify(message.blocks))
+    body.set('channel', Slack.getChannelId(event.channel.id))
+    body.set('text', message.text)
+    body.set('unfurl_links', 'false')
+    body.set('unfurl_media', 'false')
+    const response = await getSlack().withBotToken(installation.botToken, () =>
+      fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
+        body,
+        headers: { authorization: `Bearer ${installation.botToken}` },
+        method: 'POST',
+      }),
+    )
+    const json = z.parse(
+      z.object({
+        error: z.string().optional(),
+        ok: z.boolean().optional(),
+        ts: z.string().optional(),
+      }),
+      await response.json(),
+    )
+    if (!json.ok || !json.ts) throw Slack.slackApiError('chat.postMessage', json.error)
+    await ctx.db
+      .insertInto('tip_ask')
+      .values({ ...tipAsk, provider_message_ts: json.ts })
+      .execute()
+  },
   async balance(event, ctx) {
     if (ctx.text) {
       await postInvalidUsage(event, ctx)
@@ -861,6 +1097,7 @@ const handlers = {
 
     const commandRows = [
       [`${getSlackCommand(env.HOST)} @account [amount] [token] [for memo]`, 'Send payment'],
+      [`${getSlackCommand(env.HOST)} ask [memo]`, 'Open a tip jar'],
       [`${getSlackCommand(env.HOST)} balance`, 'Show wallet balance'],
       [`${getSlackCommand(env.HOST)} config`, 'Manage workspace configuration'],
       [`${getSlackCommand(env.HOST)} connect`, 'Connect to Tipbot'],
@@ -884,6 +1121,7 @@ const handlers = {
     const reactionTipConfigs = await getReactionTipConfigs(ctx.db, workspace?.id)
     const mentionExampleRows = [
       [`@${getSlackBotDisplayName(env.HOST)} @account`, 'Send default amount'],
+      [`@${getSlackBotDisplayName(env.HOST)} ask [memo]`, 'Open a tip jar'],
       [`@${getSlackBotDisplayName(env.HOST)} balance`, 'Show wallet balance'],
       [`@${getSlackBotDisplayName(env.HOST)} connect`, 'Connect to Tipbot'],
       [`@${getSlackBotDisplayName(env.HOST)} disconnect`, 'Disconnect from Tipbot'],
@@ -1544,6 +1782,7 @@ const handlers = {
 >
 
 const commandNames = [
+  'ask',
   'balance',
   'config',
   'connect',
@@ -1554,8 +1793,21 @@ const commandNames = [
   'status',
 ] as const
 const commandPattern = new RegExp(`^(${commandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
-const actionNames = ['config_edit', 'connect_cancel', 'confirm_cancel', 'confirm_tip'] as const
+const actionNames = [
+  'config_edit',
+  'connect_cancel',
+  'confirm_cancel',
+  'confirm_tip',
+  'tip_ask_option',
+] as const
 const modalSubmitNames = ['config_edit'] as const
+const tipAskIdempotencyPrefix = 'tip_ask:'
+const tipAskReactionNames = ['money_with_wings', 'dollar', 'moneybag'] as const
+const tipAskReactions = [
+  { emoji: '💸', name: 'money_with_wings' },
+  { emoji: '💵', name: 'dollar' },
+  { emoji: '💰', name: 'moneybag' },
+] as const satisfies Array<{ emoji: string; name: TipAskReaction }>
 const tokenOptions = [
   { address: Tempo.addressLookup.pathUsd, label: 'PathUSD', value: 'pathUSD' },
   { address: Tempo.addressLookup.usdcE, label: 'USDC.e', value: 'USDC.e' },
@@ -1602,6 +1854,22 @@ type ReactionHandlerContext = {
 
 type ReactionTipConfig = Pick<DB_gen.Selectable.reaction_tip_config, 'amount' | 'emoji'>
 
+type TipAskReaction = (typeof tipAskReactionNames)[number]
+
+type TipAskMessageInput = Pick<
+  DB_gen.Selectable.tip_ask,
+  | 'dollar_amount'
+  | 'id'
+  | 'memo'
+  | 'money_with_wings_amount'
+  | 'moneybag_amount'
+  | 'token_address'
+  | 'chain_id'
+> & {
+  requester_provider_user_id: string
+  workspace_default_token_address: string | null
+}
+
 type LeaderboardRow = {
   providerUserId: string
   tipCount: number
@@ -1630,6 +1898,10 @@ type ParsedTipBatch = NonNullable<ReturnType<typeof Tip.parseTipBatchText>>
 export const reactionTipIdempotencyPrefix = 'reaction:'
 export const receiptBoostIdempotencyPrefix = 'boost:'
 const receiptBoostReaction = getReceiptBoostReaction(env.HOST)
+
+export function isTipAskIdempotencyKey(value: string) {
+  return value.startsWith(tipAskIdempotencyPrefix)
+}
 
 export function isReactionTipIdempotencyKey(value: string) {
   return value.startsWith(reactionTipIdempotencyPrefix)
@@ -2858,6 +3130,171 @@ async function getConnectedSlackRecipient(
   )
   if (!member) return null
   return { ...member, input: recipient }
+}
+
+export async function updateTipAskMessage(providerId: string, options: { tipAskId: string }) {
+  const db = DB.create(env.DB)
+  const tipAsk = await db
+    .selectFrom('tip_ask')
+    .innerJoin('workspace', 'workspace.id', 'tip_ask.workspace_id')
+    .innerJoin('member as requester', 'requester.id', 'tip_ask.requester_member_id')
+    .select([
+      'requester.provider_user_id as requester_provider_user_id',
+      'tip_ask.chain_id',
+      'tip_ask.dollar_amount',
+      'tip_ask.id',
+      'tip_ask.memo',
+      'tip_ask.money_with_wings_amount',
+      'tip_ask.moneybag_amount',
+      'tip_ask.provider_channel_id',
+      'tip_ask.provider_message_ts',
+      'tip_ask.token_address',
+      'workspace.default_token_address as workspace_default_token_address',
+    ])
+    .where('tip_ask.id', '=', options.tipAskId)
+    .executeTakeFirst()
+  if (!tipAsk) return
+
+  const installation = await getSlack().getInstallation(providerId)
+  if (!installation) return
+
+  const message = await tipAskMessage(db, tipAsk)
+  const body = new URLSearchParams()
+  body.set('blocks', JSON.stringify(message.blocks))
+  body.set('channel', tipAsk.provider_channel_id)
+  body.set('text', message.text)
+  body.set('ts', tipAsk.provider_message_ts)
+  body.set('unfurl_links', 'false')
+  body.set('unfurl_media', 'false')
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.update`, {
+      body,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok) throw Slack.slackApiError('chat.update', json.error)
+  await db
+    .updateTable('tip_ask')
+    .set({ updated_at: new Date().toISOString() })
+    .where('id', '=', tipAsk.id)
+    .execute()
+}
+
+export function getTipAskIdFromIdempotencyKey(value: string) {
+  const parts = value.split(':')
+  return parts[0] === 'tip_ask' && parts[1] ? parts[1] : null
+}
+
+function tipAskIdempotencyKey(input: {
+  providerUserId: string
+  reaction: TipAskReaction
+  tipAskId: string
+}) {
+  return `${tipAskIdempotencyPrefix}${input.tipAskId}:${input.reaction}:${input.providerUserId}`
+}
+
+function tipAskAmount(
+  tipAsk: Pick<
+    DB_gen.Selectable.tip_ask,
+    'dollar_amount' | 'money_with_wings_amount' | 'moneybag_amount'
+  >,
+  reaction: TipAskReaction,
+) {
+  if (reaction === 'dollar') return tipAsk.dollar_amount
+  if (reaction === 'moneybag') return tipAsk.moneybag_amount
+  return tipAsk.money_with_wings_amount
+}
+
+async function tipAskMessage(db: DB.Type, tipAsk: TipAskMessageInput) {
+  const token = await Tempo.getTokenMetadata(env, tipAsk.chain_id, tipAsk.token_address)
+  const formatTipAskAmount = (amount: number) => {
+    const value = formatAmount(amount)
+    return Address.isEqual(
+      Address.checksum(tipAsk.token_address),
+      Address.checksum(tipAsk.workspace_default_token_address ?? Tempo.addressLookup.pathUsd),
+    )
+      ? formatCurrencyAmount(value, token.currency)
+      : formatTipAmount(value, token.currency, token.symbol)
+  }
+  const rows = await db
+    .selectFrom('tip')
+    .innerJoin('member as sender', 'sender.id', 'tip.sender_member_id')
+    .select([
+      'sender.provider_user_id as sender_provider_user_id',
+      'tip.amount',
+      'tip.idempotency_key',
+    ])
+    .where('tip.idempotency_key', 'like', `${tipAskIdempotencyPrefix}${tipAsk.id}:%`)
+    .where('tip.confirmed_at', 'is not', null)
+    .orderBy('tip.created_at', 'asc')
+    .execute()
+  const tipCount = rows.length
+  const total = rows.reduce((total, row) => total + row.amount, 0)
+  const summary = tipCount
+    ? `${tipCount} ${tipCount === 1 ? 'tip' : 'tips'} · ${formatTipAskAmount(total)} total`
+    : 'No tips yet'
+  const reactionLines = tipAskReactions
+    .map((reaction) => {
+      const tippers = rows
+        .filter((row) => row.idempotency_key.split(':')[2] === reaction.name)
+        .map((row) => `<@${row.sender_provider_user_id}>`)
+      if (!tippers.length) return null
+      return `${reaction.emoji} ${tippers.join(' ')}`
+    })
+    .filter((line) => line !== null)
+  const text = [
+    `<@${tipAsk.requester_provider_user_id}> opened a tip jar${tipAsk.memo ? ` for ${tipAsk.memo}` : ''}.`,
+    summary,
+    '',
+    tipAskReactions
+      .map(
+        (reaction) =>
+          `[${reaction.emoji} ${formatTipAskAmount(tipAskAmount(tipAsk, reaction.name))}]`,
+      )
+      .join(' '),
+    ...(reactionLines.length ? ['', ...reactionLines] : []),
+  ].join('\n')
+  return {
+    blocks: [
+      {
+        text: {
+          text: `<@${tipAsk.requester_provider_user_id}> opened a tip jar${tipAsk.memo ? ` for ${tipAsk.memo}` : ''}.\n${summary}`,
+          type: 'mrkdwn',
+        },
+        type: 'section',
+      },
+      {
+        elements: tipAskReactions.map((reaction) => ({
+          action_id: 'tip_ask_option',
+          text: {
+            emoji: true,
+            text: `${reaction.emoji} ${formatTipAskAmount(tipAskAmount(tipAsk, reaction.name))}`,
+            type: 'plain_text',
+          },
+          type: 'button',
+          value: JSON.stringify({ reaction: reaction.name, tipAskId: tipAsk.id }),
+        })),
+        type: 'actions',
+      },
+      ...(reactionLines.length
+        ? [
+            {
+              text: { text: reactionLines.join('\n'), type: 'mrkdwn' },
+              type: 'section',
+            },
+          ]
+        : []),
+    ],
+    text,
+  }
 }
 
 export async function updateReactionTipAggregate(

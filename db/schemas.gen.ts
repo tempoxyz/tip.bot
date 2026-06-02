@@ -194,6 +194,23 @@ export const tip = z.object({
   workspace_id: z.string(),
 })
 
+export const tip_ask = z.object({
+  chain_id: z.number(),
+  created_at: z.string(),
+  dollar_amount: z.number(),
+  id: z.string(),
+  memo: z.string().nullable(),
+  money_with_wings_amount: z.number(),
+  moneybag_amount: z.number(),
+  provider_channel_id: z.string(),
+  provider_id: z.string(),
+  provider_message_ts: z.string(),
+  requester_member_id: z.string(),
+  token_address: z.string(),
+  updated_at: z.string(),
+  workspace_id: z.string(),
+})
+
 export const tip_batch = z.object({
   amount_each: z.number(),
   created_at: z.string(),
@@ -262,6 +279,7 @@ export const db = {
   reaction_tip_thread: reaction_tip_thread,
   receipt_boost_thread: receipt_boost_thread,
   tip: tip,
+  tip_ask: tip_ask,
   tip_batch: tip_batch,
   tip_receipt_message: tip_receipt_message,
   workspace: workspace,

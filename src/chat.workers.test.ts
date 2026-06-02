@@ -1190,6 +1190,102 @@ describe('/tip @account', () => {
   })
 })
 
+test('/tip ask opens a tip jar and updates totals when a preset is clicked', async () => {
+  const connected = await connectTipAccounts({
+    recipient: false,
+    senderProviderUserId: Constants.slack.memberUserId,
+  })
+  await insertMember({
+    account_id: connected.recipientAccount.id,
+    provider_user_id: Constants.slack.adminUserId,
+    workspace_id: connected.workspace.id,
+  })
+
+  const response = await postSlashCommand('ask for lunch')
+  const tipAsk = await db
+    .selectFrom('tip_ask')
+    .selectAll()
+    .where('workspace_id', '=', connected.workspace.id)
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(tipAsk).toMatchObject({
+    dollar_amount: 10_000,
+    memo: 'lunch',
+    money_with_wings_amount: 1000,
+    moneybag_amount: 100_000,
+    provider_channel_id: Constants.slack.channelId,
+    requester_member_id: expect.any(String),
+  })
+  await expectSlackMessage(`<@${Constants.slack.adminUserId}> opened a tip jar for lunch.`)
+  await expectSlackMessage('No tips yet')
+  await expectSlackMessage('[💸 $0.001] [💵 $0.01] [💰 $0.10]')
+
+  const clickResponse = await postSlackInteraction({
+    actions: [
+      {
+        action_id: 'tip_ask_option',
+        type: 'button',
+        value: JSON.stringify({ reaction: 'dollar', tipAskId: tipAsk.id }),
+      },
+    ],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: tipAsk.provider_message_ts,
+      type: 'message',
+    },
+    message: { ts: tipAsk.provider_message_ts },
+    team: { id: providerId },
+    trigger_id: 'tip-ask-dollar-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.memberUserId, name: Constants.slack.memberUserName },
+  })
+  const tip = await db
+    .selectFrom('tip')
+    .innerJoin('member as sender', 'sender.id', 'tip.sender_member_id')
+    .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
+    .select([
+      'recipient.provider_user_id as recipient_provider_user_id',
+      'sender.provider_user_id as sender_provider_user_id',
+      'tip.amount',
+      'tip.confirmed_at',
+      'tip.idempotency_key',
+      'tip.memo',
+    ])
+    .where(
+      'tip.idempotency_key',
+      '=',
+      `tip_ask:${tipAsk.id}:dollar:${Constants.slack.memberUserId}`,
+    )
+    .executeTakeFirstOrThrow()
+
+  expect(clickResponse.status).toBe(200)
+  expect(tip).toMatchObject({
+    amount: 10_000,
+    memo: 'lunch',
+    recipient_provider_user_id: Constants.slack.adminUserId,
+    sender_provider_user_id: Constants.slack.memberUserId,
+  })
+  expect(tip.confirmed_at).toEqual(expect.any(String))
+  await expectSlackMessage('1 tip · $0.01 total')
+  await expectSlackMessage(`💵 <@${Constants.slack.memberUserId}>`)
+  await expectSlackMessage(`You tipped <@${Constants.slack.adminUserId}> $0.01 for lunch.`)
+}, 20_000) // 20 seconds
+
+test('/tip ask requires the asker to be connected', async () => {
+  const response = await postSlashCommand('ask for lunch')
+  const tipAsks = await db
+    .selectFrom('tip_ask')
+    .selectAll()
+    .where('provider_id', '=', providerId)
+    .execute()
+
+  expect(response.status).toBe(200)
+  expect(tipAsks).toEqual([])
+  await expectSlackMessage('Connect to Tipbot before opening a tip jar.')
+})
+
 test('@Tipbot mention sends tip in thread', async () => {
   const fetchSpy = vi.spyOn(globalThis, 'fetch')
   await connectTipAccounts()
@@ -1400,6 +1496,27 @@ test('@Tipbot mention supports connect command for single channel guests', async
   await expectSlackThreadMessageNotContaining(messageTs, 'Link expires in 10 minutes.')
 }, 20_000) // 20 seconds
 
+test('@Tipbot mention supports ask command', async () => {
+  await connectTipAccounts()
+  const messageTs = `1700000029.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> ask for lunch`,
+  })
+  const tipAsk = await db
+    .selectFrom('tip_ask')
+    .innerJoin('member', 'member.id', 'tip_ask.requester_member_id')
+    .select(['member.provider_user_id', 'tip_ask.memo'])
+    .where('tip_ask.provider_id', '=', providerId)
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(tipAsk).toEqual({ memo: 'lunch', provider_user_id: Constants.slack.adminUserId })
+  await expectSlackMessage(`<@${Constants.slack.adminUserId}> opened a tip jar for lunch.`)
+  await expectSlackMessage('[💸 $0.001] [💵 $0.01] [💰 $0.10]')
+})
+
 test('@Tipbot mention connect link completion connects local workspace account', async () => {
   const messageTs = `1700000016.${Nanoid.generate().slice(0, 6)}`
 
@@ -1470,6 +1587,7 @@ test('@Tipbot mention supports help command', async () => {
   const params = await getSlackPostEphemeralParams(fetchSpy, '@Tipbot balance')
   expect(params.get('blocks')).toContain('@Tipbot connect')
   expect(params.get('blocks')).toContain('@Tipbot disconnect')
+  expect(params.get('blocks')).toContain('@Tipbot ask [memo]')
   expect(params.get('blocks')).toContain('@Tipbot leaderboard')
   expect(params.get('blocks')).toContain('@Tipbot stats')
   expect(params.get('blocks')).toContain('@Tipbot status')
