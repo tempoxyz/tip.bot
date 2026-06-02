@@ -2061,6 +2061,11 @@ test('/tip raffle closes expired raffle and settles winner payout', async () => 
   await expectSlackMessage('Ticket: $0.001 · Tickets: 2')
   await expectSlackMessage(`<@${Constants.slack.adminUserId}> x1`)
   await expectSlackMessage(`<@${Constants.slack.memberUserId}> x1`)
+  if (!tipRaffle.provider_message_ts) throw new Error('Expected raffle message timestamp.')
+  await expectSlackThreadMessage(
+    tipRaffle.provider_message_ts,
+    `<@${Constants.slack.memberUserId}> paid raffle winner <@${Constants.slack.adminUserId}> $0.001 for team lunch · Receipt`,
+  )
 }, 20_000) // 20 seconds
 
 test('/tip raffle reports failed settlement payments', async () => {

@@ -3661,6 +3661,7 @@ async function closeTipRaffle(db: DB.Type, tipRaffleId: string, providerId: stri
 
   let settledAmount = 0
   let failedTicketCount = 0
+  const receipts: Array<Extract<Tip.TipResult, { ok: true; status: 'duplicate' | 'sent' }>> = []
   for (const row of rows) {
     if (row.buyer_member_id === winner.buyer_member_id) continue
     const amount = Number(row.ticket_count) * tipRaffle.ticket_amount
@@ -3684,8 +3685,10 @@ async function closeTipRaffle(db: DB.Type, tipRaffleId: string, providerId: stri
           ok: false,
         }) satisfies Tip.TipResult,
     )
-    if (result.ok) settledAmount += amount
-    else failedTicketCount += Number(row.ticket_count)
+    if (result.ok) {
+      settledAmount += amount
+      if (result.status !== 'queued') receipts.push(result)
+    } else failedTicketCount += Number(row.ticket_count)
   }
 
   await db
@@ -3701,7 +3704,62 @@ async function closeTipRaffle(db: DB.Type, tipRaffleId: string, providerId: stri
     })
     .where('id', '=', tipRaffle.id)
     .execute()
-  await updateTipRaffleMessage(providerId, { tipRaffleId: tipRaffle.id })
+  await updateTipRaffleMessage(providerId, { tipRaffleId: tipRaffle.id }).catch((error) => {
+    console.error('Failed to update ended tip raffle message:', tipRaffle.id, error)
+  })
+  if (!tipRaffle.provider_message_ts) return
+  for (const receipt of receipts)
+    await postTipRaffleReceiptMessage(db, {
+      channelId: tipRaffle.provider_channel_id,
+      providerId,
+      receipt,
+      threadTs: tipRaffle.provider_message_ts,
+    }).catch((error) => {
+      console.error('Failed to post tip raffle receipt:', tipRaffle.id, error)
+    })
+}
+
+async function postTipRaffleReceiptMessage(
+  db: DB.Type,
+  options: {
+    channelId: string
+    providerId: string
+    receipt: Extract<Tip.TipResult, { ok: true; status: 'duplicate' | 'sent' }>
+    threadTs: string
+  },
+) {
+  const existing = await db
+    .selectFrom('tip_receipt_message')
+    .innerJoin('tip_batch', 'tip_batch.id', 'tip_receipt_message.tip_batch_id')
+    .select('tip_receipt_message.id')
+    .where('tip_batch.transaction_hash', '=', options.receipt.transactionHash)
+    .executeTakeFirst()
+  if (existing) return
+
+  const amount = options.receipt.isDefaultToken
+    ? formatCurrencyAmount(options.receipt.amount, options.receipt.tokenCurrency)
+    : formatTipAmount(
+        options.receipt.amount,
+        options.receipt.tokenCurrency,
+        options.receipt.tokenSymbol,
+      )
+  await postSlackReceiptMessage(
+    {
+      channel: getChat().channel(`slack:${options.channelId}`),
+      user: { userId: options.receipt.senderProviderUserId } as chat.Author,
+    },
+    {
+      db,
+      provider: { id: options.providerId, type: 'slack' },
+      text: '',
+    },
+    `<@${options.receipt.senderProviderUserId}> paid raffle winner <@${options.receipt.recipientProviderUserId}> ${amount}${options.receipt.memo ? ` for ${options.receipt.memo}` : ''}.`,
+    options.receipt.chainId,
+    options.receipt.transactionHash,
+    undefined,
+    undefined,
+    options.threadTs,
+  )
 }
 
 export function getTipAskIdFromIdempotencyKey(value: string) {
