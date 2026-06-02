@@ -202,6 +202,7 @@ export const tip_ask = z.object({
   memo: z.string().nullable(),
   money_with_wings_amount: z.number(),
   moneybag_amount: z.number(),
+  preset_options: z.string().nullable(),
   provider_channel_id: z.string(),
   provider_id: z.string(),
   provider_message_ts: z.string(),

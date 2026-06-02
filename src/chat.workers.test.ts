@@ -1351,6 +1351,113 @@ test('/tip ask opens a tip jar and updates totals when a preset is clicked', asy
   await expectSlackMessage(`💵 <@${Constants.slack.memberUserId}> x2`)
 }, 20_000) // 20 seconds
 
+test('/tip ask supports custom presets', async () => {
+  const connected = await connectTipAccounts({
+    recipient: false,
+    senderProviderUserId: Constants.slack.memberUserId,
+  })
+  await insertMember({
+    account_id: connected.recipientAccount.id,
+    provider_user_id: Constants.slack.adminUserId,
+    workspace_id: connected.workspace.id,
+  })
+  await db
+    .insertInto('reaction_tip_config')
+    .values({
+      amount: 25_000,
+      emoji: 'rocket',
+      id: Nanoid.generate(),
+      workspace_id: connected.workspace.id,
+    })
+    .execute()
+
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  const response = await postSlashCommand('ask :moneybag: :rocket: for launch.')
+  const tipAsk = await db
+    .selectFrom('tip_ask')
+    .selectAll()
+    .where('workspace_id', '=', connected.workspace.id)
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(tipAsk.memo).toBe('launch')
+  expect(JSON.parse(tipAsk.preset_options ?? '[]')).toEqual([
+    { amount: 100_000, emoji: '💰', name: 'moneybag' },
+    { amount: 25_000, emoji: ':rocket:', name: 'rocket' },
+  ])
+  await expectSlackMessage('[💰 $0.10] [:rocket: $0.025]')
+
+  const tipAskPostMessageCall = fetchSpy.mock.calls.find((call) => {
+    const input = call[0]
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    const params = slackFetchBodyParams(call[1]?.body)
+    return (
+      url.endsWith('/chat.postMessage') &&
+      params.get('text')?.includes(`<@${Constants.slack.adminUserId}> opened a tip jar for launch`)
+    )
+  })
+  const blocks = JSON.parse(
+    slackFetchBodyParams(tipAskPostMessageCall?.[1]?.body).get('blocks') ?? '[]',
+  )
+  const buttons = (
+    blocks as Array<{
+      elements?: Array<{ action_id?: string; text?: { text?: string }; value?: string }>
+    }>
+  ).flatMap((block) => block.elements ?? [])
+  expect(buttons.map((button) => button.action_id)).toEqual([
+    'tip_ask_option_moneybag',
+    'tip_ask_option',
+  ])
+  expect(buttons.map((button) => button.text?.text)).toEqual(['💰 $0.10', ':rocket: $0.025'])
+  const rocketButtonPayload = JSON.parse(
+    buttons.find((button) => button.text?.text === ':rocket: $0.025')?.value ?? 'null',
+  ) as {
+    nonce: string
+    reaction: 'rocket'
+    tipAskId: string
+  }
+
+  const clickResponse = await postSlackInteraction({
+    actions: [
+      {
+        action_id: 'tip_ask_option',
+        type: 'button',
+        value: JSON.stringify(rocketButtonPayload),
+      },
+    ],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: tipAsk.provider_message_ts,
+      type: 'message',
+    },
+    message: { ts: tipAsk.provider_message_ts },
+    team: { id: providerId },
+    trigger_id: 'tip-ask-rocket-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.memberUserId, name: Constants.slack.memberUserName },
+  })
+  const tip = await db
+    .selectFrom('tip')
+    .innerJoin('member as sender', 'sender.id', 'tip.sender_member_id')
+    .select(['sender.provider_user_id as sender_provider_user_id', 'tip.amount', 'tip.memo'])
+    .where(
+      'tip.idempotency_key',
+      'like',
+      `tip_ask:${tipAsk.id}:rocket:${Constants.slack.memberUserId}:%`,
+    )
+    .executeTakeFirstOrThrow()
+
+  expect(clickResponse.status).toBe(200)
+  expect(tip).toMatchObject({
+    amount: 25_000,
+    memo: 'launch',
+    sender_provider_user_id: Constants.slack.memberUserId,
+  })
+  await expectSlackMessage('1 tip · $0.025 total')
+  await expectSlackMessage(`:rocket: <@${Constants.slack.memberUserId}>`)
+}, 20_000) // 20 seconds
+
 test('/tip ask requires the asker to be connected', async () => {
   const response = await postSlashCommand('ask for lunch')
   const tipAsks = await db

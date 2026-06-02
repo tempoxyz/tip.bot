@@ -224,6 +224,7 @@ type tip_ask = {
   memo: string | null
   money_with_wings_amount: number
   moneybag_amount: number
+  preset_options: string | null
   provider_channel_id: string
   provider_id: string
   provider_message_ts: string

@@ -383,7 +383,7 @@ const actions = {
     const payload = z
       .object({
         nonce: z.string().min(1).optional(),
-        reaction: z.enum(tipAskReactionNames),
+        reaction: z.string().min(1),
         tipAskId: z.string().min(1),
       })
       .safeParse(
@@ -417,6 +417,7 @@ const actions = {
         'tip_ask.memo',
         'tip_ask.money_with_wings_amount',
         'tip_ask.moneybag_amount',
+        'tip_ask.preset_options',
         'tip_ask.provider_channel_id',
         'tip_ask.provider_id',
         'tip_ask.provider_message_ts',
@@ -445,8 +446,10 @@ const actions = {
       reaction: payload.data.reaction,
       tipAskId: tipAsk.id,
     })
+    const amount = tipAskAmount(tipAsk, payload.data.reaction)
+    if (!amount) return
     const result = await Tip.handleTipRequest(env, {
-      amount: tipAskAmount(tipAsk, payload.data.reaction),
+      amount,
       idempotencyKey,
       memo: tipAsk.memo,
       provider: 'slack',
@@ -983,14 +986,8 @@ const handlers = {
     )
   },
   async ask(event, ctx) {
-    const memo = (() => {
-      const value = ctx.text
-        .replace(/^for\s+/i, '')
-        .trim()
-        .replace(/\.+$/, '')
-        .trim()
-      return value || null
-    })()
+    const input = parseTipAskInput(ctx.text)
+    const memo = input.memo
     if (Slack.isDMChannelId(event.channel.id)) {
       await postPrivateReply(event, event.user, 'Tip jars can only be opened in channels.')
       return
@@ -1031,12 +1028,31 @@ const handlers = {
 
     const configs = await getReactionTipConfigs(ctx.db, workspace.id)
     const configByReaction = new Map(configs.map((config) => [config.emoji, config.amount]))
-    const amounts = {
-      dollar: configByReaction.get('dollar'),
-      money_with_wings: configByReaction.get('money_with_wings'),
-      moneybag: configByReaction.get('moneybag'),
+    const defaultPresetOptions = defaultTipAskReactions.reduce<TipAskPresetOption[]>(
+      (options, reaction) => {
+        const amount = configByReaction.get(reaction.name)
+        if (amount) options.push({ amount, emoji: reaction.emoji, name: reaction.name })
+        return options
+      },
+      [],
+    )
+    const missingPreset = input.presetNames.find((name) => !configByReaction.has(name))
+    if (missingPreset) {
+      await postPrivateReply(
+        event,
+        event.user,
+        `Tip jar not opened. Configure ${missingPreset} as a reaction tip amount first.`,
+      )
+      return
     }
-    if (!amounts.dollar || !amounts.money_with_wings || !amounts.moneybag) {
+    const presetOptions = input.presetNames.length
+      ? input.presetNames.map((name) => ({
+          amount: configByReaction.get(name) ?? 1,
+          emoji: formatSlackEmoji(name),
+          name,
+        }))
+      : defaultPresetOptions
+    if (presetOptions.length === 0) {
       await postPrivateReply(
         event,
         event.user,
@@ -1044,6 +1060,7 @@ const handlers = {
       )
       return
     }
+    const amountByPreset = new Map(presetOptions.map((option) => [option.name, option.amount]))
 
     const installation = await getSlack().getInstallation(ctx.provider.id)
     if (!installation) return
@@ -1052,11 +1069,13 @@ const handlers = {
     const tipAsk = {
       chain_id: workspace.chain_id,
       created_at: now,
-      dollar_amount: amounts.dollar,
+      dollar_amount: amountByPreset.get('dollar') ?? configByReaction.get('dollar') ?? 1,
       id: tipAskId,
       memo,
-      money_with_wings_amount: amounts.money_with_wings,
-      moneybag_amount: amounts.moneybag,
+      money_with_wings_amount:
+        amountByPreset.get('money_with_wings') ?? configByReaction.get('money_with_wings') ?? 1,
+      moneybag_amount: amountByPreset.get('moneybag') ?? configByReaction.get('moneybag') ?? 1,
+      preset_options: JSON.stringify(presetOptions),
       provider_channel_id: Slack.getChannelId(event.channel.id),
       provider_id: ctx.provider.id,
       provider_message_ts: 'pending',
@@ -1988,7 +2007,7 @@ const modalSubmitNames = ['config_edit', 'tip_raffle_create'] as const
 const tipAskIdempotencyPrefix = 'tip_ask:'
 const tipRaffleIdempotencyPrefix = 'tip_raffle:'
 const tipAskReactionNames = ['money_with_wings', 'dollar', 'moneybag'] as const
-const tipAskReactions = [
+const defaultTipAskReactions = [
   { emoji: '💸', name: 'money_with_wings' },
   { emoji: '💵', name: 'dollar' },
   { emoji: '💰', name: 'moneybag' },
@@ -2051,6 +2070,7 @@ type ReactionHandlerContext = {
 type ReactionTipConfig = Pick<DB_gen.Selectable.reaction_tip_config, 'amount' | 'emoji'>
 
 type TipAskReaction = (typeof tipAskReactionNames)[number]
+type TipAskPresetOption = { amount: number; emoji: string; name: string }
 
 type TipAskMessageInput = Pick<
   DB_gen.Selectable.tip_ask,
@@ -2059,6 +2079,7 @@ type TipAskMessageInput = Pick<
   | 'memo'
   | 'money_with_wings_amount'
   | 'moneybag_amount'
+  | 'preset_options'
   | 'token_address'
   | 'chain_id'
 > & {
@@ -3363,6 +3384,7 @@ export async function updateTipAskMessage(providerId: string, options: { tipAskI
       'tip_ask.memo',
       'tip_ask.money_with_wings_amount',
       'tip_ask.moneybag_amount',
+      'tip_ask.preset_options',
       'tip_ask.provider_channel_id',
       'tip_ask.provider_message_ts',
       'tip_ask.token_address',
@@ -3693,7 +3715,7 @@ export function getTipAskIdFromIdempotencyKey(value: string) {
 function tipAskIdempotencyKey(input: {
   nonce?: string
   providerUserId: string
-  reaction: TipAskReaction
+  reaction: string
   tipAskId: string
 }) {
   return `${tipAskIdempotencyPrefix}${input.tipAskId}:${input.reaction}:${input.providerUserId}${input.nonce ? `:${input.nonce}` : ''}`
@@ -3702,13 +3724,69 @@ function tipAskIdempotencyKey(input: {
 function tipAskAmount(
   tipAsk: Pick<
     DB_gen.Selectable.tip_ask,
-    'dollar_amount' | 'money_with_wings_amount' | 'moneybag_amount'
+    'dollar_amount' | 'money_with_wings_amount' | 'moneybag_amount' | 'preset_options'
   >,
-  reaction: TipAskReaction,
+  reaction: string,
 ) {
+  const preset = tipAskPresetOptions(tipAsk).find((option) => option.name === reaction)
+  if (preset) return preset.amount
   if (reaction === 'dollar') return tipAsk.dollar_amount
   if (reaction === 'moneybag') return tipAsk.moneybag_amount
-  return tipAsk.money_with_wings_amount
+  if (reaction === 'money_with_wings') return tipAsk.money_with_wings_amount
+  return null
+}
+
+function tipAskPresetOptions(
+  tipAsk: Pick<
+    DB_gen.Selectable.tip_ask,
+    'dollar_amount' | 'money_with_wings_amount' | 'moneybag_amount' | 'preset_options'
+  >,
+): TipAskPresetOption[] {
+  if (tipAsk.preset_options) {
+    let rawPresetOptions: unknown
+    try {
+      rawPresetOptions = JSON.parse(tipAsk.preset_options)
+    } catch {
+      rawPresetOptions = null
+    }
+    const presetOptions = z
+      .array(
+        z.object({
+          amount: z.number().int().positive(),
+          emoji: z.string().min(1),
+          name: z.string().min(1),
+        }),
+      )
+      .safeParse(rawPresetOptions)
+    if (presetOptions.success && presetOptions.data.length) return presetOptions.data
+  }
+  return defaultTipAskReactions.map((reaction) => ({
+    amount:
+      reaction.name === 'dollar'
+        ? tipAsk.dollar_amount
+        : reaction.name === 'moneybag'
+          ? tipAsk.moneybag_amount
+          : tipAsk.money_with_wings_amount,
+    emoji: reaction.emoji,
+    name: reaction.name,
+  }))
+}
+
+function parseTipAskInput(text: string) {
+  const match = text.match(/\sfor\s/i)
+  const emojiOnly = /^(:[A-Za-z0-9_+-]+:\s*)+$/.test(text.trim())
+  const presetText = (match ? text.slice(0, match.index) : emojiOnly ? text : '').trim()
+  const memoText = (match ? text.slice((match.index ?? 0) + match[0].length) : text)
+    .replace(/^for\s+/i, '')
+    .trim()
+    .replace(/\.+$/, '')
+    .trim()
+  const presetNames = [...presetText.matchAll(/:([A-Za-z0-9_+-]+):/g)].map((match) => match[1])
+  return { memo: emojiOnly && !match ? null : memoText || null, presetNames }
+}
+
+function formatSlackEmoji(name: string) {
+  return defaultTipAskReactions.find((reaction) => reaction.name === name)?.emoji ?? `:${name}:`
 }
 
 async function selectTipRaffleMessageInput(db: DB.Type, tipRaffleId: string) {
@@ -3862,7 +3940,8 @@ async function tipAskMessage(db: DB.Type, tipAsk: TipAskMessageInput) {
   const summary = tipCount
     ? `${tipCount} ${tipCount === 1 ? 'tip' : 'tips'} · ${formatTipAskAmount(total)} total`
     : 'No tips yet'
-  const reactionLines = tipAskReactions
+  const presetOptions = tipAskPresetOptions(tipAsk)
+  const reactionLines = presetOptions
     .map((reaction) => {
       const tipperCounts = new Map<string, number>()
       for (const row of rows) {
@@ -3883,11 +3962,8 @@ async function tipAskMessage(db: DB.Type, tipAsk: TipAskMessageInput) {
     `<@${tipAsk.requester_provider_user_id}> opened a tip jar${tipAsk.memo ? ` for ${tipAsk.memo}` : ''}`,
     summary,
     '',
-    tipAskReactions
-      .map(
-        (reaction) =>
-          `[${reaction.emoji} ${formatTipAskAmount(tipAskAmount(tipAsk, reaction.name))}]`,
-      )
+    presetOptions
+      .map((reaction) => `[${reaction.emoji} ${formatTipAskAmount(reaction.amount)}]`)
       .join(' '),
     ...(reactionLines.length ? ['', ...reactionLines] : []),
   ].join('\n')
@@ -3901,11 +3977,13 @@ async function tipAskMessage(db: DB.Type, tipAsk: TipAskMessageInput) {
         type: 'section',
       },
       {
-        elements: tipAskReactions.map((reaction) => ({
-          action_id: `tip_ask_option_${reaction.name}`,
+        elements: presetOptions.map((reaction) => ({
+          action_id: tipAskReactionNames.includes(reaction.name as TipAskReaction)
+            ? `tip_ask_option_${reaction.name}`
+            : 'tip_ask_option',
           text: {
             emoji: true,
-            text: `${reaction.emoji} ${formatTipAskAmount(tipAskAmount(tipAsk, reaction.name))}`,
+            text: `${reaction.emoji} ${formatTipAskAmount(reaction.amount)}`,
             type: 'plain_text',
           },
           type: 'button',
