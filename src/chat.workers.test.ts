@@ -1777,6 +1777,83 @@ test('/tip raffle cron ends without winner when fewer than two buyers enter', as
   await expectSlackMessage('Ended · No winner · 5 tickets')
 })
 
+test('/tip raffle cron retries stale settling raffle', async () => {
+  const connected = await connectTipAccounts()
+  await postSlackInteraction(createRaffleViewSubmissionPayload({ amount: '0.001' }))
+  const tipRaffle = await db
+    .selectFrom('tip_raffle')
+    .selectAll()
+    .where('provider_id', '=', providerId)
+    .executeTakeFirstOrThrow()
+  await db
+    .insertInto('tip_raffle_ticket')
+    .values({
+      buyer_member_id: connected.senderMember.id,
+      id: Nanoid.generate(),
+      idempotency_key: `test-raffle-ticket:${Nanoid.generate()}`,
+      raffle_id: tipRaffle.id,
+      ticket_count: 5,
+    })
+    .execute()
+  const staleAt = new Date(Date.now() - 11 * 60 * 1000).toISOString() // 11 minutes ago
+  await db
+    .updateTable('tip_raffle')
+    .set({
+      ends_at: new Date(Date.now() - 60 * 1000).toISOString(), // 1 minute ago
+      status: 'settling',
+      updated_at: staleAt,
+    })
+    .where('id', '=', tipRaffle.id)
+    .execute()
+
+  const ctx = createExecutionContext()
+  entryServer.scheduled(createScheduledController({ cron: '* * * * *' }), env, ctx)
+  await waitOnExecutionContext(ctx)
+  const ended = await db
+    .selectFrom('tip_raffle')
+    .select(['settled_amount', 'status', 'winner_member_id', 'winning_ticket_number'])
+    .where('id', '=', tipRaffle.id)
+    .executeTakeFirstOrThrow()
+
+  expect(ended).toEqual({
+    settled_amount: 0,
+    status: 'ended',
+    winner_member_id: null,
+    winning_ticket_number: null,
+  })
+  await expectSlackMessage('Ended · No winner · 5 tickets')
+})
+
+test('/tip raffle cron leaves fresh settling raffle in progress', async () => {
+  await connectTipAccounts()
+  await postSlackInteraction(createRaffleViewSubmissionPayload({ amount: '0.001' }))
+  const tipRaffle = await db
+    .selectFrom('tip_raffle')
+    .selectAll()
+    .where('provider_id', '=', providerId)
+    .executeTakeFirstOrThrow()
+  await db
+    .updateTable('tip_raffle')
+    .set({
+      ends_at: new Date(Date.now() - 60 * 1000).toISOString(), // 1 minute ago
+      status: 'settling',
+      updated_at: new Date().toISOString(),
+    })
+    .where('id', '=', tipRaffle.id)
+    .execute()
+
+  const ctx = createExecutionContext()
+  entryServer.scheduled(createScheduledController({ cron: '* * * * *' }), env, ctx)
+  await waitOnExecutionContext(ctx)
+  const row = await db
+    .selectFrom('tip_raffle')
+    .select(['status', 'winner_member_id'])
+    .where('id', '=', tipRaffle.id)
+    .executeTakeFirstOrThrow()
+
+  expect(row).toEqual({ status: 'settling', winner_member_id: null })
+})
+
 test('/tip raffle cron retries stale ended raffle message update', async () => {
   await connectTipAccounts()
   await postSlackInteraction(createRaffleViewSubmissionPayload({ amount: '0.001' }))

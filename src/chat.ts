@@ -3445,10 +3445,16 @@ export async function updateTipRaffleMessage(providerId: string, options: { tipR
 
 export async function closeExpiredTipRaffles() {
   const db = DB.create(env.DB)
+  const staleSettlingTipRaffleAt = new Date(Date.now() - 10 * 60 * 1000).toISOString() // 10 minutes
   const rows = await db
     .selectFrom('tip_raffle')
     .select(['id', 'provider_id'])
-    .where('status', '=', 'open')
+    .where((eb) =>
+      eb.or([
+        eb('status', '=', 'open'),
+        eb.and([eb('status', '=', 'settling'), eb('updated_at', '<=', staleSettlingTipRaffleAt)]),
+      ]),
+    )
     .where('ends_at', '<=', new Date().toISOString())
     .orderBy('ends_at', 'asc')
     .limit(20)
