@@ -1759,6 +1759,7 @@ test('/tip raffle cron ends without winner when fewer than two buyers enter', as
     .where('id', '=', tipRaffle.id)
     .execute()
 
+  const initializeSpy = vi.spyOn(Chat.getChat(), 'initialize')
   const ctx = createExecutionContext()
   entryServer.scheduled(createScheduledController({ cron: '* * * * *' }), env, ctx)
   await waitOnExecutionContext(ctx)
@@ -1774,6 +1775,7 @@ test('/tip raffle cron ends without winner when fewer than two buyers enter', as
     winner_member_id: null,
     winning_ticket_number: null,
   })
+  expect(initializeSpy).toHaveBeenCalled()
   await expectSlackMessage('Ended · No winner · 5 tickets')
 })
 
