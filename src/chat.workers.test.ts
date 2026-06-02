@@ -1202,7 +1202,7 @@ test('/tip ask opens a tip jar and updates totals when a preset is clicked', asy
   })
 
   const fetchSpy = vi.spyOn(globalThis, 'fetch')
-  const response = await postSlashCommand('ask for lunch')
+  const response = await postSlashCommand('ask for lunch.')
   const tipAsk = await db
     .selectFrom('tip_ask')
     .selectAll()
@@ -1242,13 +1242,25 @@ test('/tip ask opens a tip jar and updates totals when a preset is clicked', asy
     'tip_ask_option_moneybag',
   ])
   expect(new Set(actionIds).size).toBe(actionIds.length)
+  const dollarButton = blocks
+    .flatMap(
+      (block: { elements?: Array<{ action_id?: string; value?: string }> }) => block.elements ?? [],
+    )
+    .find((element: { action_id?: string }) => element.action_id === 'tip_ask_option_dollar')
+  const dollarButtonPayload = JSON.parse(dollarButton?.value ?? 'null') as {
+    nonce: string
+    reaction: 'dollar'
+    tipAskId: string
+  }
+  expect(dollarButtonPayload).toMatchObject({ reaction: 'dollar', tipAskId: tipAsk.id })
+  expect(dollarButtonPayload.nonce).toEqual(expect.any(String))
 
   const clickResponse = await postSlackInteraction({
     actions: [
       {
         action_id: 'tip_ask_option_dollar',
         type: 'button',
-        value: JSON.stringify({ reaction: 'dollar', tipAskId: tipAsk.id }),
+        value: JSON.stringify(dollarButtonPayload),
       },
     ],
     channel: { id: Constants.slack.channelId },
@@ -1277,8 +1289,8 @@ test('/tip ask opens a tip jar and updates totals when a preset is clicked', asy
     ])
     .where(
       'tip.idempotency_key',
-      '=',
-      `tip_ask:${tipAsk.id}:dollar:${Constants.slack.memberUserId}`,
+      'like',
+      `tip_ask:${tipAsk.id}:dollar:${Constants.slack.memberUserId}:%`,
     )
     .executeTakeFirstOrThrow()
 
@@ -1293,6 +1305,41 @@ test('/tip ask opens a tip jar and updates totals when a preset is clicked', asy
   await expectSlackMessage('1 tip · $0.01 total')
   await expectSlackMessage(`💵 <@${Constants.slack.memberUserId}>`)
   await expectSlackMessage(`You tipped <@${Constants.slack.adminUserId}> $0.01 for lunch.`)
+
+  const secondClickResponse = await postSlackInteraction({
+    actions: [
+      {
+        action_id: 'tip_ask_option_dollar',
+        type: 'button',
+        value: JSON.stringify({ ...dollarButtonPayload, nonce: 'second-click' }),
+      },
+    ],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: tipAsk.provider_message_ts,
+      type: 'message',
+    },
+    message: { ts: tipAsk.provider_message_ts },
+    team: { id: providerId },
+    trigger_id: 'tip-ask-dollar-trigger-2',
+    type: 'block_actions',
+    user: { id: Constants.slack.memberUserId, name: Constants.slack.memberUserName },
+  })
+  const tipCount = await db
+    .selectFrom('tip')
+    .select(({ fn }) => fn.countAll<number>().as('count'))
+    .where(
+      'tip.idempotency_key',
+      'like',
+      `tip_ask:${tipAsk.id}:dollar:${Constants.slack.memberUserId}:%`,
+    )
+    .executeTakeFirstOrThrow()
+
+  expect(secondClickResponse.status).toBe(200)
+  expect(tipCount.count).toBe(2)
+  await expectSlackMessage('2 tips · $0.02 total')
+  await expectSlackMessage(`💵 <@${Constants.slack.memberUserId}> x2`)
 }, 20_000) // 20 seconds
 
 test('/tip ask requires the asker to be connected', async () => {

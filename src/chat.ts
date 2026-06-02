@@ -382,6 +382,7 @@ const actions = {
   async tip_ask_option(event) {
     const payload = z
       .object({
+        nonce: z.string().min(1).optional(),
         reaction: z.enum(tipAskReactionNames),
         tipAskId: z.string().min(1),
       })
@@ -439,6 +440,7 @@ const actions = {
       text: '',
     } satisfies HandlerContext
     const idempotencyKey = tipAskIdempotencyKey({
+      nonce: payload.data.nonce,
       providerUserId: event.user.userId,
       reaction: payload.data.reaction,
       tipAskId: tipAsk.id,
@@ -823,7 +825,14 @@ const modalSubmits = {
 
 const handlers = {
   async ask(event, ctx) {
-    const memo = ctx.text.replace(/^for\s+/i, '').trim() || null
+    const memo = (() => {
+      const value = ctx.text
+        .replace(/^for\s+/i, '')
+        .trim()
+        .replace(/\.+$/, '')
+        .trim()
+      return value || null
+    })()
     if (Slack.isDMChannelId(event.channel.id)) {
       await postPrivateReply(event, event.user, 'Tip jars can only be opened in channels.')
       return
@@ -3206,11 +3215,12 @@ export function getTipAskIdFromIdempotencyKey(value: string) {
 }
 
 function tipAskIdempotencyKey(input: {
+  nonce?: string
   providerUserId: string
   reaction: TipAskReaction
   tipAskId: string
 }) {
-  return `${tipAskIdempotencyPrefix}${input.tipAskId}:${input.reaction}:${input.providerUserId}`
+  return `${tipAskIdempotencyPrefix}${input.tipAskId}:${input.reaction}:${input.providerUserId}${input.nonce ? `:${input.nonce}` : ''}`
 }
 
 function tipAskAmount(
@@ -3255,9 +3265,17 @@ async function tipAskMessage(db: DB.Type, tipAsk: TipAskMessageInput) {
     : 'No tips yet'
   const reactionLines = tipAskReactions
     .map((reaction) => {
-      const tippers = rows
-        .filter((row) => row.idempotency_key.split(':')[2] === reaction.name)
-        .map((row) => `<@${row.sender_provider_user_id}>`)
+      const tipperCounts = new Map<string, number>()
+      for (const row of rows) {
+        if (row.idempotency_key.split(':')[2] !== reaction.name) continue
+        tipperCounts.set(
+          row.sender_provider_user_id,
+          (tipperCounts.get(row.sender_provider_user_id) ?? 0) + 1,
+        )
+      }
+      const tippers = [...tipperCounts].map(
+        ([providerUserId, count]) => `<@${providerUserId}>${count > 1 ? ` x${count}` : ''}`,
+      )
       if (!tippers.length) return null
       return `${reaction.emoji} ${tippers.join(' ')}`
     })
@@ -3292,7 +3310,11 @@ async function tipAskMessage(db: DB.Type, tipAsk: TipAskMessageInput) {
             type: 'plain_text',
           },
           type: 'button',
-          value: JSON.stringify({ reaction: reaction.name, tipAskId: tipAsk.id }),
+          value: JSON.stringify({
+            nonce: Nanoid.generate(),
+            reaction: reaction.name,
+            tipAskId: tipAsk.id,
+          }),
         })),
         type: 'actions',
       },
