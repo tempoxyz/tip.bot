@@ -3529,23 +3529,43 @@ function parseCountdownDuration(text: string) {
   if (!match) return null
   const amount = Number(match[1])
   const unit = (match[2] ?? 's').toLowerCase()
-  const ms = amount * getCountdownUnitMs(unit)
+  const ms =
+    amount *
+    (() => {
+      // Keep unit parsing local to countdown validation.
+      if (unit.startsWith('d')) return countdownDayMs
+      if (unit.startsWith('h')) return countdownHourMs
+      if (unit.startsWith('m')) return countdownMinuteMs
+      return countdownSecondMs
+    })()
   if (!Number.isSafeInteger(ms) || ms < countdownSecondMs || ms > countdownMaxDurationMs)
     return null
   return { ms }
 }
 
-function getCountdownUnitMs(unit: string) {
-  if (unit.startsWith('d')) return countdownDayMs
-  if (unit.startsWith('h')) return countdownHourMs
-  if (unit.startsWith('m')) return countdownMinuteMs
-  return countdownSecondMs
-}
-
 function countdownMessage(countdown: CountdownState) {
   const remainingMs = Math.max(0, countdown.endsAt - Date.now())
   const remainingSeconds = Math.ceil(remainingMs / 1000)
-  const text = formatCountdownRemaining(countdown.durationMs, remainingSeconds)
+  const text = (() => {
+    // Seconds-only timers are easiest to scan as a bare number.
+    if (countdown.durationMs < countdownMinuteMs) return String(remainingSeconds)
+
+    // Hour/day timers use a stable-width days:hours:minutes:seconds display.
+    if (countdown.durationMs >= countdownHourMs) {
+      const days = Math.floor(remainingSeconds / (24 * 60 * 60))
+      const hours = Math.floor((remainingSeconds % (24 * 60 * 60)) / (60 * 60))
+      const minutes = Math.floor((remainingSeconds % (60 * 60)) / 60)
+      const seconds = remainingSeconds % 60
+      return `${String(days).padStart(2, '0')}:${String(hours).padStart(2, '0')}:${String(
+        minutes,
+      ).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+    }
+
+    // Minute timers omit the leading day/hour fields for readability.
+    return `${String(Math.floor(remainingSeconds / 60)).padStart(2, '0')}:${String(
+      remainingSeconds % 60,
+    ).padStart(2, '0')}`
+  })()
   return {
     blocks: [
       {
@@ -3555,22 +3575,6 @@ function countdownMessage(countdown: CountdownState) {
     ],
     text,
   }
-}
-
-function formatCountdownRemaining(durationMs: number, remainingSeconds: number) {
-  if (durationMs < countdownMinuteMs) return String(remainingSeconds)
-  if (durationMs >= countdownHourMs) {
-    const days = Math.floor(remainingSeconds / (24 * 60 * 60))
-    const hours = Math.floor((remainingSeconds % (24 * 60 * 60)) / (60 * 60))
-    const minutes = Math.floor((remainingSeconds % (60 * 60)) / 60)
-    const seconds = remainingSeconds % 60
-    return `${String(days).padStart(2, '0')}:${String(hours).padStart(2, '0')}:${String(
-      minutes,
-    ).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
-  }
-  return `${String(Math.floor(remainingSeconds / 60)).padStart(2, '0')}:${String(
-    remainingSeconds % 60,
-  ).padStart(2, '0')}`
 }
 
 async function postSlackCountdownMessage(
