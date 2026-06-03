@@ -603,6 +603,9 @@ const actions = {
   async tip_raffle_buy_5(event) {
     await handleTipRaffleBuy(event, { ticketCount: 5 })
   },
+  async tip_raffle_buy_25(event) {
+    await handleTipRaffleBuy(event, { ticketCount: 25 })
+  },
   async tip_raffle_buy_100(event) {
     await handleTipRaffleBuy(event, { ticketCount: 100 })
   },
@@ -2123,6 +2126,7 @@ const actionNames = [
   'tip_ask_option_moneybag',
   'tip_raffle_buy_1',
   'tip_raffle_buy_5',
+  'tip_raffle_buy_25',
   'tip_raffle_buy_100',
 ] as const
 const modalSubmitNames = ['config_edit', 'tip_raffle_create'] as const
@@ -3651,7 +3655,10 @@ export async function closeExpiredTipRaffles() {
     })
 }
 
-async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount: 1 | 5 | 100 }) {
+async function handleTipRaffleBuy(
+  event: chat.ActionEvent,
+  input: { ticketCount: 1 | 5 | 25 | 100 },
+) {
   const payload = z
     .object({
       nonce: z.string().min(1),
@@ -4071,7 +4078,7 @@ async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
       ...(tipRaffle.status === 'open'
         ? [
             {
-              elements: [1, 5, 100].map((ticketCount) => ({
+              elements: [1, 5, 25, 100].map((ticketCount) => ({
                 action_id: `tip_raffle_buy_${ticketCount}`,
                 text: {
                   emoji: true,

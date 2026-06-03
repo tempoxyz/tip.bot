@@ -2059,6 +2059,7 @@ test('/tip raffle opens create modal', async () => {
 
 test('/tip raffle create modal posts raffle message', async () => {
   await connectTipAccounts()
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
   const response = await postSlackInteraction(createRaffleViewSubmissionPayload())
   const tipRaffle = await db
@@ -2077,12 +2078,30 @@ test('/tip raffle create modal posts raffle message', async () => {
   await expectSlackMessage(`<@${Constants.slack.adminUserId}> opened a raffle: team lunch`)
   await expectSlackMessage('Ticket: $0.01')
   await expectSlackMessage('Tickets: 0')
-  const history = await slack.conversations.history({ channel: Constants.slack.channelId })
-  const message = history.messages?.find((message) =>
-    message.text?.includes('opened a raffle: team lunch'),
+  await expectSlackPostMessageCall(
+    fetchSpy,
+    Constants.slack.channelId,
+    '"action_id":"tip_raffle_buy_1"',
   )
-  expect(JSON.stringify(message?.blocks)).toContain('"action_id":"tip_raffle_buy_100"')
-  expect(JSON.stringify(message?.blocks)).toContain('"text":"Buy 100"')
+  await expectSlackPostMessageCall(
+    fetchSpy,
+    Constants.slack.channelId,
+    '"action_id":"tip_raffle_buy_5"',
+  )
+  await expectSlackPostMessageCall(
+    fetchSpy,
+    Constants.slack.channelId,
+    '"action_id":"tip_raffle_buy_25"',
+  )
+  await expectSlackPostMessageCall(
+    fetchSpy,
+    Constants.slack.channelId,
+    '"action_id":"tip_raffle_buy_100"',
+  )
+  await expectSlackPostMessageCall(fetchSpy, Constants.slack.channelId, '"text":"Buy 1"')
+  await expectSlackPostMessageCall(fetchSpy, Constants.slack.channelId, '"text":"Buy 5"')
+  await expectSlackPostMessageCall(fetchSpy, Constants.slack.channelId, '"text":"Buy 25"')
+  await expectSlackPostMessageCall(fetchSpy, Constants.slack.channelId, '"text":"Buy 100"')
 })
 
 test('/tip raffle buy button records tickets and updates message', async () => {
