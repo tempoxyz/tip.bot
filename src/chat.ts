@@ -3675,6 +3675,10 @@ export class CountdownDO extends DurableObject<Env> {
     try {
       await updateSlackCountdownMessage(countdown.botToken, countdown, this.env.SLACK_API_URL)
     } catch (error) {
+      if ((error as { code?: unknown }).code === 'message_not_found') {
+        await this.stop()
+        return
+      }
       console.error('CountdownDO: failed to update Slack countdown:', error)
       if (Date.now() < countdown.endsAt + countdownRetryWindowMs) {
         // Retry briefly so transient Slack failures do not strand an active countdown.
