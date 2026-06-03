@@ -1782,6 +1782,29 @@ test('@Tipbot thread mention posts jar in the source thread', async () => {
   )
 })
 
+test('/tip countdown posts and updates a real-time countdown message', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+  const response = await postSlashCommand('countdown 2s')
+
+  expect(response.status).toBe(200)
+  await expectSlackMessage(`<@${Constants.slack.adminUserId}> started a countdown: ended`)
+  expect(
+    fetchSpy.mock.calls.some((call) => {
+      const input = call[0]
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      return url.endsWith('/chat.update')
+    }),
+  ).toBe(true)
+})
+
+test('/tip countdown validates duration', async () => {
+  const response = await postSlashCommand('countdown 30m')
+
+  expect(response.status).toBe(200)
+  await expectSlackMessage('Usage: `/tip countdown [duration]`')
+})
+
 test('/tip raffle opens create modal', async () => {
   await connectTipAccounts()
   const fetchOriginal = globalThis.fetch

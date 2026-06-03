@@ -979,6 +979,44 @@ const modalSubmits = {
 >
 
 const handlers = {
+  async countdown(event, ctx) {
+    if (Slack.isDMChannelId(event.channel.id)) {
+      await postPrivateReply(event, event.user, 'Countdowns can only be started in channels.')
+      return
+    }
+
+    const duration = parseCountdownDuration(ctx.text)
+    if (!duration) {
+      await postPrivateReply(
+        event,
+        event.user,
+        `Usage: \`${getSlackCommand(env.HOST)} countdown [duration]\` with a duration from 1s to 10m. Example: \`${getSlackCommand(env.HOST)} countdown 30s\`.`,
+      )
+      return
+    }
+
+    const installation = await getSlack().getInstallation(ctx.provider.id)
+    if (!installation) return
+
+    const channelId = Slack.getChannelId(event.channel.id)
+    const countdown = {
+      channelId,
+      durationMs: duration.ms,
+      endsAt: Date.now() + duration.ms,
+      providerId: ctx.provider.id,
+      requesterUserId: event.user.userId,
+      threadTs: ctx.threadTs,
+    }
+    const message = countdownMessage(countdown)
+    const messageTs = await postSlackCountdownMessage(installation.botToken, {
+      ...message,
+      channelId,
+      threadTs: ctx.threadTs,
+    })
+    const tick = tickSlackCountdown(installation.botToken, { ...countdown, messageTs })
+    if ('waitUntil' in event && typeof event.waitUntil === 'function') event.waitUntil(tick)
+    else void tick
+  },
   async raffle(event, ctx) {
     if (Slack.isDMChannelId(event.channel.id)) {
       await postPrivateReply(event, event.user, 'Raffles can only be opened in channels.')
@@ -1372,6 +1410,7 @@ const handlers = {
       [`${getSlackCommand(env.HOST)} balance`, 'Show wallet balance'],
       [`${getSlackCommand(env.HOST)} config`, 'Manage workspace configuration'],
       [`${getSlackCommand(env.HOST)} connect`, 'Connect to Tipbot'],
+      [`${getSlackCommand(env.HOST)} countdown [duration]`, 'Start a real-time countdown POC'],
       [`${getSlackCommand(env.HOST)} disconnect`, 'Disconnect from Tipbot'],
       [`${getSlackCommand(env.HOST)} help`, 'Show help message'],
       [`${getSlackCommand(env.HOST)} jar [memo]`, 'Open a tip jar'],
@@ -2058,6 +2097,7 @@ const commandNames = [
   'balance',
   'config',
   'connect',
+  'countdown',
   'disconnect',
   'help',
   'jar',
@@ -2100,6 +2140,8 @@ const tipRaffleDurationOptions = [
   { label: '3 days', ms: 3 * 24 * 60 * 60 * 1000, value: '3d' }, // 3 days
   { label: '7 days', ms: 7 * 24 * 60 * 60 * 1000, value: '7d' }, // 7 days
 ] as const
+const countdownDurationPattern = /^(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes)?$/i
+const countdownMaxDurationMs = 10 * 60 * 1000 // 10 minutes
 const tokenOptions = [
   { address: Tempo.addressLookup.pathUsd, label: 'PathUSD', value: 'pathUSD' },
   { address: Tempo.addressLookup.usdcE, label: 'USDC.e', value: 'USDC.e' },
@@ -2136,6 +2178,16 @@ type TipEvent = {
   channel: chat.Channel
   threadTs?: string
   user: chat.Author
+}
+
+type CountdownState = {
+  channelId: string
+  durationMs: number
+  endsAt: number
+  messageTs?: string
+  providerId: string
+  requesterUserId: string
+  threadTs?: string
 }
 
 type ReactionHandlerContext = {
@@ -3463,6 +3515,116 @@ async function getConnectedSlackRecipient(
   )
   if (!member) return null
   return { ...member, input: recipient }
+}
+
+function parseCountdownDuration(text: string) {
+  const match = text.trim().match(countdownDurationPattern)
+  if (!match) return null
+  const amount = Number(match[1])
+  const unit = (match[2] ?? 's').toLowerCase()
+  const ms = amount * (unit.startsWith('m') ? 60 * 1000 : 1000)
+  if (!Number.isSafeInteger(ms) || ms < 1000 || ms > countdownMaxDurationMs) return null
+  return { ms }
+}
+
+function countdownMessage(countdown: CountdownState) {
+  const remainingMs = Math.max(0, countdown.endsAt - Date.now())
+  const remainingSeconds = Math.ceil(remainingMs / 1000)
+  const text =
+    remainingSeconds > 0
+      ? `<@${countdown.requesterUserId}> started a countdown: ${remainingSeconds}s remaining`
+      : `<@${countdown.requesterUserId}> started a countdown: ended`
+  const context =
+    remainingSeconds > 0
+      ? `POC timer. Ends at <!date^${Math.floor(countdown.endsAt / 1000)}^{time_secs}|${new Date(countdown.endsAt).toISOString()}>.`
+      : 'POC timer ended.'
+  return {
+    blocks: [
+      {
+        text: { text, type: 'mrkdwn' },
+        type: 'section',
+      },
+      {
+        elements: [{ text: context, type: 'mrkdwn' }],
+        type: 'context',
+      },
+    ],
+    text: `${text}. ${context}`,
+  }
+}
+
+async function postSlackCountdownMessage(
+  botToken: string,
+  options: {
+    blocks: unknown[]
+    channelId: string
+    text: string
+    threadTs?: string
+  },
+) {
+  const body = new URLSearchParams()
+  body.set('blocks', JSON.stringify(options.blocks))
+  body.set('channel', options.channelId)
+  body.set('text', options.text)
+  if (options.threadTs) body.set('thread_ts', options.threadTs)
+  body.set('unfurl_links', 'false')
+  body.set('unfurl_media', 'false')
+  const response = await getSlack().withBotToken(botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
+      body,
+      headers: { authorization: `Bearer ${botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+      ts: z.string().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok || !json.ts) throw Slack.slackApiError('chat.postMessage', json.error)
+  return json.ts
+}
+
+async function tickSlackCountdown(
+  botToken: string,
+  countdown: CountdownState & { messageTs: string },
+) {
+  while (Date.now() < countdown.endsAt) {
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    await updateSlackCountdownMessage(botToken, countdown)
+  }
+}
+
+async function updateSlackCountdownMessage(
+  botToken: string,
+  countdown: CountdownState & { messageTs: string },
+) {
+  const message = countdownMessage(countdown)
+  const body = new URLSearchParams()
+  body.set('blocks', JSON.stringify(message.blocks))
+  body.set('channel', countdown.channelId)
+  body.set('text', message.text)
+  body.set('ts', countdown.messageTs)
+  body.set('unfurl_links', 'false')
+  body.set('unfurl_media', 'false')
+  const response = await getSlack().withBotToken(botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.update`, {
+      body,
+      headers: { authorization: `Bearer ${botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok) throw Slack.slackApiError('chat.update', json.error)
 }
 
 export async function updateTipAskMessage(providerId: string, options: { tipAskId: string }) {
