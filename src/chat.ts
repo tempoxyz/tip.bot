@@ -3565,9 +3565,7 @@ function countdownMessage(countdown: CountdownState) {
       remainingSeconds % 60,
     ).padStart(2, '0')}`
   })()
-  const text = `⏲️ ${remainingText}${
-    remainingSeconds === 0 ? ` (${remainingText} timer ended)` : ''
-  }`
+  const text = remainingSeconds === 0 ? `${remainingText} countdown ended` : remainingText
   return {
     blocks: [
       {

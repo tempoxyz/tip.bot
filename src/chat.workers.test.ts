@@ -1786,8 +1786,8 @@ test('/tip countdown starts a durable countdown message', async () => {
   const response = await postSlashCommand('countdown 2s')
 
   expect(response.status).toBe(200)
-  await expectSlackMessage('⏲️ 2')
-  const messageTs = await findSlackMessageTs('⏲️ 2')
+  await expectSlackMessage('2')
+  const messageTs = await findSlackMessageTs('2')
   await env.COUNTDOWN.get(
     env.COUNTDOWN.idFromName(`${providerId}:${Constants.slack.channelId}:${messageTs}`),
   ).stop()
@@ -1797,8 +1797,8 @@ test('/tip countdown formats minute countdowns as clock time', async () => {
   const response = await postSlashCommand('countdown 1m')
 
   expect(response.status).toBe(200)
-  await expectSlackMessage('⏲️ 01:00')
-  const messageTs = await findSlackMessageTs('⏲️ 01:00')
+  await expectSlackMessage('01:00')
+  const messageTs = await findSlackMessageTs('01:00')
   await env.COUNTDOWN.get(
     env.COUNTDOWN.idFromName(`${providerId}:${Constants.slack.channelId}:${messageTs}`),
   ).stop()
@@ -1808,8 +1808,8 @@ test('/tip countdown formats hour and day countdowns with days', async () => {
   const hourResponse = await postSlashCommand('countdown 1h')
 
   expect(hourResponse.status).toBe(200)
-  await expectSlackMessage('⏲️ 00:01:00:00')
-  const hourMessageTs = await findSlackMessageTs('⏲️ 00:01:00:00')
+  await expectSlackMessage('00:01:00:00')
+  const hourMessageTs = await findSlackMessageTs('00:01:00:00')
   await env.COUNTDOWN.get(
     env.COUNTDOWN.idFromName(`${providerId}:${Constants.slack.channelId}:${hourMessageTs}`),
   ).stop()
@@ -1817,8 +1817,8 @@ test('/tip countdown formats hour and day countdowns with days', async () => {
   const dayResponse = await postSlashCommand('countdown 1d')
 
   expect(dayResponse.status).toBe(200)
-  await expectSlackMessage('⏲️ 01:00:00:00')
-  const dayMessageTs = await findSlackMessageTs('⏲️ 01:00:00:00')
+  await expectSlackMessage('01:00:00:00')
+  const dayMessageTs = await findSlackMessageTs('01:00:00:00')
   await env.COUNTDOWN.get(
     env.COUNTDOWN.idFromName(`${providerId}:${Constants.slack.channelId}:${dayMessageTs}`),
   ).stop()
