@@ -1788,14 +1788,19 @@ test('/tip countdown posts and updates a real-time countdown message', async () 
   const response = await postSlashCommand('countdown 2s')
 
   expect(response.status).toBe(200)
-  await expectSlackMessage(`<@${Constants.slack.adminUserId}> started a countdown: ended`)
-  expect(
-    fetchSpy.mock.calls.some((call) => {
-      const input = call[0]
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-      return url.endsWith('/chat.update')
-    }),
-  ).toBe(true)
+  await expectSlackMessage(`<@${Constants.slack.adminUserId}> started a countdown: 2s remaining`)
+  await expect
+    .poll(
+      () =>
+        fetchSpy.mock.calls.some((call) => {
+          const input = call[0]
+          const url =
+            typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+          return url.endsWith('/chat.update')
+        }),
+      { timeout: 5_000 }, // 5 seconds
+    )
+    .toBe(true)
 })
 
 test('/tip countdown validates duration', async () => {

@@ -3594,7 +3594,12 @@ async function tickSlackCountdown(
 ) {
   while (Date.now() < countdown.endsAt) {
     await new Promise((resolve) => setTimeout(resolve, 1000))
-    await updateSlackCountdownMessage(botToken, countdown)
+    try {
+      await updateSlackCountdownMessage(botToken, countdown)
+    } catch (error) {
+      console.error('Failed to update Slack countdown:', error)
+      return
+    }
   }
 }
 
