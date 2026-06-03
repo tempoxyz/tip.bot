@@ -493,10 +493,7 @@ const actions = {
       tokenAddress: tipAirdrop.token_address,
       workspaceProviderId: raw.team.id,
     })
-    if (result.ok && result.status === 'duplicate') {
-      await postPrivateReply(tipEvent, event.user, 'Already claimed!', { threadTs: ctx.threadTs })
-      return
-    }
+    if (result.ok && result.status === 'duplicate') return
     if (!result.ok) {
       await postPrivateReply(tipEvent, event.user, 'Not eligible for airdrop. Sorry :(', {
         threadTs: ctx.threadTs,
@@ -5346,7 +5343,7 @@ function airdropBlocks(tipAirdrop: TipAirdropMessageInput) {
   return [
     {
       text: {
-        text: `You qualified for the ${escapeSlackMrkdwn(tipAirdrop.name)} airdrop\nClaim while supplies last!`,
+        text: `🚨 ${escapeSlackMrkdwn(tipAirdrop.name)} airdrop time 🚨`,
         type: 'mrkdwn',
       },
       type: 'section',
@@ -5374,6 +5371,10 @@ function airdropBlocks(tipAirdrop: TipAirdropMessageInput) {
               },
             ],
             type: 'actions',
+          },
+          {
+            elements: [{ text: 'Claim while supplies last!', type: 'mrkdwn' }],
+            type: 'context',
           },
         ]
       : []),
@@ -5405,8 +5406,8 @@ function airdropClaimedText(claimedProviderUserIds: string[]) {
 
 function airdropText(tipAirdrop: TipAirdropMessageInput) {
   return tipAirdrop.status === 'ended'
-    ? `You qualified for the ${escapeSlackMrkdwn(tipAirdrop.name)} airdrop\nClaim while supplies last!\nEnded · Pot: ${airdropPotText(tipAirdrop)}\n${airdropClaimedText(tipAirdrop.claimed_provider_user_ids)}`
-    : `You qualified for the ${escapeSlackMrkdwn(tipAirdrop.name)} airdrop\nClaim while supplies last!\nPot: ${airdropPotText(tipAirdrop)}\nEnds: ${airdropCountdownText(tipAirdrop.ends_at)}\n${airdropClaimedText(tipAirdrop.claimed_provider_user_ids)}\nClaim with Tipbot.`
+    ? `🚨 ${escapeSlackMrkdwn(tipAirdrop.name)} airdrop time 🚨\nEnded · Pot: ${airdropPotText(tipAirdrop)}\n${airdropClaimedText(tipAirdrop.claimed_provider_user_ids)}`
+    : `🚨 ${escapeSlackMrkdwn(tipAirdrop.name)} airdrop time 🚨\nPot: ${airdropPotText(tipAirdrop)}\nEnds: ${airdropCountdownText(tipAirdrop.ends_at)}\n${airdropClaimedText(tipAirdrop.claimed_provider_user_ids)}\nClaim with Tipbot. Claim while supplies last!`
 }
 
 function escapeSlackMrkdwn(value: string) {

@@ -130,7 +130,7 @@ test('/tip airdrop create modal posts funded pot message', async () => {
     provider_user_id: Constants.slack.adminUserId,
     total_amount: 20_000,
   })
-  await expectSlackMessage('You qualified for the Tempo Launch airdrop')
+  await expectSlackMessage('🚨 Tempo Launch airdrop time 🚨')
   await expectSlackMessage('Claim while supplies last!')
   await expectSlackMessage('Pot: $0.02 left of $0.02')
   await expectSlackMessage('Ends: <!date^')
@@ -365,11 +365,13 @@ test('/tip airdrop cron closes expired airdrop and updates message', async () =>
   const actionBlocks = (message?.blocks ?? []).filter(
     (block) => (block as { type?: unknown }).type === 'actions',
   )
+  const messageJson = JSON.stringify(message)
 
   expect(updatedAirdrop.status).toBe('ended')
   expect(updatedAirdrop.ended_at).toEqual(expect.any(String))
   expect(updatedAirdrop.updated_at).not.toBe(updatedAirdrop.ended_at)
   expect(actionBlocks).toEqual([])
+  expect(messageJson).not.toContain('Claim while supplies last!')
   await expectSlackMessage('Ended · Pot: $0.02 left of $0.02')
 })
 
