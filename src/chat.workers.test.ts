@@ -1503,7 +1503,7 @@ test('/tip jar opens a tip jar and updates totals when a preset is clicked', asy
   await expectSlackMessage('Tip jar is closed.')
 }, 20_000) // 20 seconds
 
-test('/tip open tipjar for account sends beneficiary tip and creator fee', async () => {
+test('/tip jar for account sends beneficiary tip and creator fee', async () => {
   const connected = await connectTipAccounts({
     senderProviderUserId: Constants.slack.unconnectedUserId,
   })
@@ -1517,9 +1517,7 @@ test('/tip open tipjar for account sends beneficiary tip and creator fee', async
   })
   const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
-  const response = await postSlashCommand(
-    `open tipjar for <@${Constants.slack.memberUserId}> rehab`,
-  )
+  const response = await postSlashCommand(`jar for <@${Constants.slack.memberUserId}> rehab`)
   const tipAsk = await db
     .selectFrom('tip_ask')
     .selectAll()
@@ -1616,7 +1614,7 @@ test('/tip open tipjar for account sends beneficiary tip and creator fee', async
   await expectSlackMessage(`💵 <@${Constants.slack.unconnectedUserId}>`)
 })
 
-test('/tip open tipjar for unconnected account queues beneficiary tip and pays creator fee', async () => {
+test('/tip jar for unconnected account queues beneficiary tip and pays creator fee', async () => {
   const connected = await connectTipAccounts({
     recipient: false,
     senderProviderUserId: Constants.slack.memberUserId,
@@ -1631,9 +1629,7 @@ test('/tip open tipjar for unconnected account queues beneficiary tip and pays c
   })
   const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
-  const response = await postSlashCommand(
-    `open tipjar for <@${Constants.slack.unconnectedUserId}> rehab`,
-  )
+  const response = await postSlashCommand(`jar for <@${Constants.slack.unconnectedUserId}> rehab`)
   const tipAsk = await db
     .selectFrom('tip_ask')
     .selectAll()
@@ -1970,6 +1966,38 @@ test('@Tipbot mention supports jar command', async () => {
   expect(tipAsk).toEqual({ memo: 'lunch', provider_user_id: Constants.slack.adminUserId })
   await expectSlackMessage(`<@${Constants.slack.adminUserId}> opened a tip jar for lunch`)
   await expectSlackMessage('[💸 $0.001] [💵 $0.01] [💰 $0.10]')
+})
+
+test('@Tipbot mention supports jar for account command', async () => {
+  const connected = await connectTipAccounts()
+  const messageTs = `1700000030.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> jar for <@${Constants.slack.memberUserId}> rehab`,
+  })
+  const tipAsk = await db
+    .selectFrom('tip_ask')
+    .innerJoin('member', 'member.id', 'tip_ask.requester_member_id')
+    .select([
+      'member.provider_user_id',
+      'tip_ask.beneficiary_provider_user_id',
+      'tip_ask.creator_fee_basis_points',
+      'tip_ask.memo',
+    ])
+    .where('tip_ask.workspace_id', '=', connected.workspace.id)
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(tipAsk).toEqual({
+    beneficiary_provider_user_id: Constants.slack.memberUserId,
+    creator_fee_basis_points: 100,
+    memo: 'rehab',
+    provider_user_id: Constants.slack.adminUserId,
+  })
+  await expectSlackMessage(
+    `<@${Constants.slack.adminUserId}> opened a tip jar for <@${Constants.slack.memberUserId}>'s rehab`,
+  )
 })
 
 test('@Tipbot thread mention posts jar in the source thread', async () => {

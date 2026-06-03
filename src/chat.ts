@@ -1001,17 +1001,6 @@ const modalSubmits = {
 >
 
 const handlers = {
-  async open(event, ctx) {
-    const match = ctx.text.match(/^tipjar\s+for\s+<@([A-Z0-9_]+)(?:\|[^>]+)?>\s*([\s\S]*)$/i)
-    if (!match) {
-      await postInvalidUsage(event, ctx)
-      return
-    }
-    await openTipJar(event, ctx, {
-      beneficiaryProviderUserId: match[1]!,
-      memo: match[2]?.replace(/^for\s+/i, '').trim() || null,
-    })
-  },
   async raffle(event, ctx) {
     if (Slack.isDMChannelId(event.channel.id)) {
       await postPrivateReply(event, event.user, 'Raffles can only be opened in channels.')
@@ -1081,7 +1070,9 @@ const handlers = {
     )
   },
   async jar(event, ctx) {
+    const beneficiary = ctx.text.match(/^for\s+<@([A-Z0-9_]+)(?:\|[^>]+)?>\s*([\s\S]*)$/i)
     const memo = (() => {
+      if (beneficiary) return beneficiary[2]?.replace(/^for\s+/i, '').trim() || null
       const value = ctx.text
         .replace(/^for\s+/i, '')
         .trim()
@@ -1089,7 +1080,10 @@ const handlers = {
         .trim()
       return value || null
     })()
-    await openTipJar(event, ctx, { memo })
+    await openTipJar(event, ctx, {
+      ...(beneficiary ? { beneficiaryProviderUserId: beneficiary[1]! } : {}),
+      memo,
+    })
   },
   async balance(event, ctx) {
     if (ctx.text) {
@@ -1273,11 +1267,8 @@ const handlers = {
       [`${getSlackCommand(env.HOST)} disconnect`, 'Disconnect from Tipbot'],
       [`${getSlackCommand(env.HOST)} help`, 'Show help message'],
       [`${getSlackCommand(env.HOST)} jar [memo]`, 'Open a tip jar'],
+      [`${getSlackCommand(env.HOST)} jar for @account [memo]`, 'Open a tip jar for someone'],
       [`${getSlackCommand(env.HOST)} leaderboard`, 'Show top tippers and recipients'],
-      [
-        `${getSlackCommand(env.HOST)} open tipjar for @account [memo]`,
-        'Open a tip jar for someone',
-      ],
       [`${getSlackCommand(env.HOST)} raffle`, 'Start a raffle'],
       [`${getSlackCommand(env.HOST)} stats`, 'Show your tip stats'],
       [`${getSlackCommand(env.HOST)} status`, 'Check connection status'],
@@ -1301,11 +1292,11 @@ const handlers = {
       [`@${getSlackBotDisplayName(env.HOST)} disconnect`, 'Disconnect from Tipbot'],
       [`@${getSlackBotDisplayName(env.HOST)} help`, 'Show help message'],
       [`@${getSlackBotDisplayName(env.HOST)} jar [memo]`, 'Open a tip jar'],
-      [`@${getSlackBotDisplayName(env.HOST)} leaderboard`, 'Show top tippers and recipients'],
       [
-        `@${getSlackBotDisplayName(env.HOST)} open tipjar for @account [memo]`,
+        `@${getSlackBotDisplayName(env.HOST)} jar for @account [memo]`,
         'Open a tip jar for someone',
       ],
+      [`@${getSlackBotDisplayName(env.HOST)} leaderboard`, 'Show top tippers and recipients'],
       [`@${getSlackBotDisplayName(env.HOST)} stats`, 'Show your tip stats'],
       [`@${getSlackBotDisplayName(env.HOST)} status`, 'Check connection status'],
       [`@${getSlackBotDisplayName(env.HOST)} @account for coffee`, 'Send default amount with memo'],
@@ -1968,7 +1959,6 @@ const commandNames = [
   'help',
   'jar',
   'leaderboard',
-  'open',
   'raffle',
   'stats',
   'status',
