@@ -5170,15 +5170,17 @@ const airdropClaimAmount = 10_000 // $0.01
 function airdropBlocks(claimedProviderUserIds: string[], name: string, expiresAt: string) {
   return [
     {
-      text: { text: `You qualified for the ${escapeSlackMrkdwn(name)} airdrop!`, type: 'mrkdwn' },
+      text: {
+        text: `You qualified for the ${escapeSlackMrkdwn(name)} airdrop!\nClaim while supplies last!`,
+        type: 'mrkdwn',
+      },
       type: 'section',
     },
     {
-      text: { text: `*Ends:* ${airdropCountdownText(expiresAt)}`, type: 'mrkdwn' },
-      type: 'section',
-    },
-    {
-      text: { text: airdropClaimedText(claimedProviderUserIds), type: 'mrkdwn' },
+      text: {
+        text: `Ends: ${airdropCountdownText(expiresAt)}\n${airdropClaimedText(claimedProviderUserIds)}`,
+        type: 'mrkdwn',
+      },
       type: 'section',
     },
     {
@@ -5203,12 +5205,12 @@ function airdropCountdownText(expiresAt: string) {
 
 function airdropClaimedText(claimedProviderUserIds: string[]) {
   return claimedProviderUserIds.length
-    ? `*Claimed:* ${claimedProviderUserIds.map((providerUserId) => `<@${providerUserId}>`).join(' ')}`
-    : '*Claimed:* No one yet'
+    ? `Claimed: ${claimedProviderUserIds.map((providerUserId) => `<@${providerUserId}>`).join(' ')}`
+    : 'Claimed: No one yet'
 }
 
 function airdropText(claimedProviderUserIds: string[], name: string, expiresAt: string) {
-  return `You qualified for the ${escapeSlackMrkdwn(name)} airdrop!\nEnds: ${airdropCountdownText(expiresAt)}\n${airdropClaimedText(claimedProviderUserIds)}\nClaim with Tipbot.`
+  return `You qualified for the ${escapeSlackMrkdwn(name)} airdrop!\nClaim while supplies last!\nEnds: ${airdropCountdownText(expiresAt)}\n${airdropClaimedText(claimedProviderUserIds)}\nClaim with Tipbot.`
 }
 
 function escapeSlackMrkdwn(value: string) {

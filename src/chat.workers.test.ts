@@ -83,9 +83,10 @@ test('/tip airdrop posts a claim message and unconnected claim opens connect lin
 
   expect(response.status).toBe(200)
   await expectSlackMessage('You qualified for the Tempo Launch airdrop!')
+  await expectSlackMessage('Claim while supplies last!')
   await expectSlackMessage('Claim with Tipbot')
   await expectSlackMessage('Ends: <!date^')
-  await expectSlackMessage('*Claimed:* No one yet')
+  await expectSlackMessage('Claimed: No one yet')
   const messageTs = await findSlackMessageTs('You qualified for the Tempo Launch airdrop!')
   const history = await slack.conversations.history({ channel: Constants.slack.channelId })
   const message = history.messages?.find((message) => message.ts === messageTs)
@@ -109,7 +110,7 @@ test('/tip airdrop posts a claim message and unconnected claim opens connect lin
   })
 
   expect(clickResponse.status).toBe(200)
-  await expectSlackMessageNotContaining(`*Claimed:* <@${Constants.slack.memberUserId}>`)
+  await expectSlackMessageNotContaining(`Claimed: <@${Constants.slack.memberUserId}>`)
   await expectSlackMessage('Link expires in 10 minutes.')
 })
 
@@ -155,7 +156,7 @@ test('/tip airdrop claim sends $0.01 to Tipbot and updates claimed accounts', as
     recipient_provider_user_id: Constants.slack.botUserId,
     sender_provider_user_id: Constants.slack.adminUserId,
   })
-  await expectSlackMessage(`*Claimed:* <@${Constants.slack.adminUserId}>`)
+  await expectSlackMessage(`Claimed: <@${Constants.slack.adminUserId}>`)
   await expectSlackMessageNotContaining('Claim sent $0.01 to Tipbot.')
 
   const updatedHistory = await slack.conversations.history({ channel: Constants.slack.channelId })
@@ -206,7 +207,7 @@ test('/tip airdrop claim fails after the airdrop ends', async () => {
       type: 'message',
     },
     message: {
-      text: 'You qualified for the Tempo Launch airdrop!\n*Claimed:* No one yet',
+      text: 'You qualified for the Tempo Launch airdrop!\nClaimed: No one yet',
       ts: '1700000031.000000',
     },
     team: { id: providerId },
@@ -292,7 +293,7 @@ test('/tip airdrop claim sends available balance when below $0.01', async () => 
     recipient_provider_user_id: Constants.slack.botUserId,
     sender_provider_user_id: Constants.slack.memberUserId,
   })
-  await expectSlackMessage(`*Claimed:* <@${Constants.slack.memberUserId}>`)
+  await expectSlackMessage(`Claimed: <@${Constants.slack.memberUserId}>`)
   await expectSlackMessageNotContaining('Claim sent $0.005 to Tipbot.')
 })
 
@@ -339,7 +340,7 @@ test('/tip airdrop claim rejects zero-balance accounts as ineligible', async () 
 
   expect(clickResponse.status).toBe(200)
   expect(tips).toEqual([])
-  await expectSlackMessageNotContaining(`*Claimed:* <@${Constants.slack.memberUserId}>`)
+  await expectSlackMessageNotContaining(`Claimed: <@${Constants.slack.memberUserId}>`)
   await expectSlackMessageNotContaining(
     'Claim recorded. No payment sent because your wallet has no balance.',
   )
@@ -2249,9 +2250,10 @@ test('@Tipbot mention supports airdrop command', async () => {
 
   expect(response.status).toBe(200)
   await expectSlackMessage('You qualified for the Tipbot airdrop!')
+  await expectSlackMessage('Claim while supplies last!')
   await expectSlackMessage('Claim with Tipbot')
   await expectSlackMessage('Ends: <!date^')
-  await expectSlackMessage('*Claimed:* No one yet')
+  await expectSlackMessage('Claimed: No one yet')
 })
 
 test('@Tipbot mention supports custom airdrop name', async () => {
