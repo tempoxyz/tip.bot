@@ -3569,8 +3569,8 @@ function countdownMessage(countdown: CountdownState) {
   return {
     blocks: [
       {
-        text: { text, type: 'mrkdwn' },
-        type: 'section',
+        text: { text, type: 'plain_text' },
+        type: 'header',
       },
     ],
     text,
