@@ -458,9 +458,12 @@ const actions = {
       reaction: payload.data.reaction,
       tipAskId: tipAsk.id,
     })
+    const beneficiaryIdempotencyKey = tipAsk.beneficiary_provider_user_id
+      ? `${idempotencyKey}:beneficiary`
+      : idempotencyKey
     const result = await Tip.handleTipRequest(env, {
       amount: tipAskAmount(tipAsk, payload.data.reaction),
-      idempotencyKey: `${idempotencyKey}:beneficiary`,
+      idempotencyKey: beneficiaryIdempotencyKey,
       memo: tipAsk.memo,
       provider: 'slack',
       providerChannelId: tipAsk.provider_channel_id,
@@ -1070,19 +1073,160 @@ const handlers = {
     )
   },
   async jar(event, ctx) {
-    const beneficiary = ctx.text.match(/^for\s+<@([A-Z0-9_]+)(?:\|[^>]+)?>\s*([\s\S]*)$/i)
-    const memo = (() => {
-      if (beneficiary) return beneficiary[2]?.replace(/^for\s+/i, '').trim() || null
+    const parsed = (() => {
+      const beneficiary = ctx.text.match(/^<@([A-Z0-9_]+)(?:\|[^>]+)?>\s*(?:for\s+([\s\S]*))?$/i)
+      if (beneficiary)
+        return {
+          beneficiaryProviderUserId: beneficiary[1]!,
+          memo: beneficiary[2]?.trim() || null,
+        }
       const value = ctx.text
         .replace(/^for\s+/i, '')
         .trim()
         .replace(/\.+$/, '')
         .trim()
-      return value || null
+      return { beneficiaryProviderUserId: event.user.userId, memo: value || null }
     })()
-    await openTipJar(event, ctx, {
-      ...(beneficiary ? { beneficiaryProviderUserId: beneficiary[1]! } : {}),
-      memo,
+    if (Slack.isDMChannelId(event.channel.id)) {
+      await postPrivateReply(event, event.user, 'Tip jars can only be opened in channels.')
+      return
+    }
+    if (parsed.memo && Tip.isTransferMemoTooLong(parsed.memo)) {
+      await postPrivateReply(
+        event,
+        event.user,
+        'Tip jar not opened. Memo must be at most 32 bytes; shorten the text after `jar`.',
+      )
+      return
+    }
+
+    const workspace = await ctx.db
+      .selectFrom('workspace')
+      .selectAll()
+      .where('provider', '=', ctx.provider.type)
+      .where('provider_id', '=', ctx.provider.id)
+      .executeTakeFirst()
+    if (!workspace) {
+      await postPrivateReply(
+        event,
+        event.user,
+        'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+      )
+      return
+    }
+
+    const requester = await getConnectedSlackMember(ctx.db, workspace.id, event.user.userId)
+    if (!requester) {
+      await postPrivateReply(
+        event,
+        event.user,
+        `Connect to Tipbot before opening a tip jar. Run \`${getSlackCommand(env.HOST)} connect\` first.`,
+      )
+      return
+    }
+
+    const configs = await getReactionTipConfigs(ctx.db, workspace.id)
+    const configByReaction = new Map(configs.map((config) => [config.emoji, config.amount]))
+    const amounts = {
+      dollar: configByReaction.get('dollar'),
+      money_with_wings: configByReaction.get('money_with_wings'),
+      moneybag: configByReaction.get('moneybag'),
+    }
+    if (!amounts.dollar || !amounts.money_with_wings || !amounts.moneybag) {
+      await postPrivateReply(
+        event,
+        event.user,
+        'Tip jar not opened. Configure money_with_wings, dollar, and moneybag reaction tip amounts first.',
+      )
+      return
+    }
+
+    const installation = await getSlack().getInstallation(ctx.provider.id)
+    if (!installation) return
+    const now = new Date().toISOString()
+    const tipAskId = Nanoid.generate()
+    const tipAsk = {
+      beneficiary_provider_user_id:
+        parsed.beneficiaryProviderUserId === event.user.userId
+          ? null
+          : parsed.beneficiaryProviderUserId,
+      chain_id: workspace.chain_id,
+      closed_at: null,
+      created_at: now,
+      creator_fee_basis_points: parsed.beneficiaryProviderUserId === event.user.userId ? 0 : 100,
+      dollar_amount: amounts.dollar,
+      id: tipAskId,
+      memo: parsed.memo,
+      money_with_wings_amount: amounts.money_with_wings,
+      moneybag_amount: amounts.moneybag,
+      provider_channel_id: Slack.getChannelId(event.channel.id),
+      provider_id: ctx.provider.id,
+      provider_message_ts: 'pending',
+      requester_member_id: requester.memberId,
+      token_address: workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+      updated_at: now,
+      workspace_id: workspace.id,
+    } satisfies DB_gen.Insertable.tip_ask
+    const message = await tipAskMessage(ctx.db, {
+      ...tipAsk,
+      requester_provider_user_id: event.user.userId,
+      workspace_default_token_address: workspace.default_token_address,
+    })
+    const body = new URLSearchParams()
+    body.set('blocks', JSON.stringify(message.blocks))
+    body.set('channel', Slack.getChannelId(event.channel.id))
+    body.set('text', message.text)
+    if (ctx.threadTs) body.set('thread_ts', ctx.threadTs)
+    body.set('unfurl_links', 'false')
+    body.set('unfurl_media', 'false')
+    const response = await getSlack().withBotToken(installation.botToken, () =>
+      fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
+        body,
+        headers: { authorization: `Bearer ${installation.botToken}` },
+        method: 'POST',
+      }),
+    )
+    const json = z.parse(
+      z.object({
+        error: z.string().optional(),
+        ok: z.boolean().optional(),
+        ts: z.string().optional(),
+      }),
+      await response.json(),
+    )
+    if (!json.ok || !json.ts) throw Slack.slackApiError('chat.postMessage', json.error)
+    await ctx.db
+      .insertInto('tip_ask')
+      .values({ ...tipAsk, provider_message_ts: json.ts })
+      .execute()
+    await postSlackEphemeral(
+      ctx.provider.id,
+      Slack.getChannelId(event.channel.id),
+      event.user.userId,
+      'Manage your tip jar.',
+      {
+        blocks: [
+          {
+            text: { text: 'Manage your tip jar.', type: 'mrkdwn' },
+            type: 'section',
+          },
+          {
+            elements: [
+              {
+                action_id: 'tip_ask_close',
+                style: 'danger',
+                text: { emoji: true, text: 'Close tip jar', type: 'plain_text' },
+                type: 'button',
+                value: JSON.stringify({ tipAskId }),
+              },
+            ],
+            type: 'actions',
+          },
+        ],
+        threadTs: ctx.threadTs,
+      },
+    ).catch((error) => {
+      console.error('Failed to post Slack tip jar controls:', error)
     })
   },
   async balance(event, ctx) {
@@ -1267,7 +1411,7 @@ const handlers = {
       [`${getSlackCommand(env.HOST)} disconnect`, 'Disconnect from Tipbot'],
       [`${getSlackCommand(env.HOST)} help`, 'Show help message'],
       [`${getSlackCommand(env.HOST)} jar [memo]`, 'Open a tip jar'],
-      [`${getSlackCommand(env.HOST)} jar for @account [memo]`, 'Open a tip jar for someone'],
+      [`${getSlackCommand(env.HOST)} jar @account for [memo]`, 'Open a tip jar for someone'],
       [`${getSlackCommand(env.HOST)} leaderboard`, 'Show top tippers and recipients'],
       [`${getSlackCommand(env.HOST)} raffle`, 'Start a raffle'],
       [`${getSlackCommand(env.HOST)} stats`, 'Show your tip stats'],
@@ -1293,7 +1437,7 @@ const handlers = {
       [`@${getSlackBotDisplayName(env.HOST)} help`, 'Show help message'],
       [`@${getSlackBotDisplayName(env.HOST)} jar [memo]`, 'Open a tip jar'],
       [
-        `@${getSlackBotDisplayName(env.HOST)} jar for @account [memo]`,
+        `@${getSlackBotDisplayName(env.HOST)} jar @account for [memo]`,
         'Open a tip jar for someone',
       ],
       [`@${getSlackBotDisplayName(env.HOST)} leaderboard`, 'Show top tippers and recipients'],
@@ -2108,153 +2252,6 @@ type PendingSlackTip = {
 }
 
 type ParsedTipBatch = NonNullable<ReturnType<typeof Tip.parseTipBatchText>>
-
-async function openTipJar(
-  event: chat.SlashCommandEvent | TipEvent,
-  ctx: HandlerContext,
-  input: { beneficiaryProviderUserId?: string; memo: string | null },
-) {
-  if (Slack.isDMChannelId(event.channel.id)) {
-    await postPrivateReply(event, event.user, 'Tip jars can only be opened in channels.')
-    return
-  }
-  if (input.memo && Tip.isTransferMemoTooLong(input.memo)) {
-    await postPrivateReply(
-      event,
-      event.user,
-      'Tip jar not opened. Memo must be at most 32 bytes; shorten the text after `jar`.',
-    )
-    return
-  }
-
-  const workspace = await ctx.db
-    .selectFrom('workspace')
-    .selectAll()
-    .where('provider', '=', ctx.provider.type)
-    .where('provider_id', '=', ctx.provider.id)
-    .executeTakeFirst()
-  if (!workspace) {
-    await postPrivateReply(
-      event,
-      event.user,
-      'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
-    )
-    return
-  }
-
-  const requester = await getConnectedSlackMember(ctx.db, workspace.id, event.user.userId)
-  if (!requester) {
-    await postPrivateReply(
-      event,
-      event.user,
-      `Connect to Tipbot before opening a tip jar. Run \`${getSlackCommand(env.HOST)} connect\` first.`,
-    )
-    return
-  }
-
-  const configs = await getReactionTipConfigs(ctx.db, workspace.id)
-  const configByReaction = new Map(configs.map((config) => [config.emoji, config.amount]))
-  const amounts = {
-    dollar: configByReaction.get('dollar'),
-    money_with_wings: configByReaction.get('money_with_wings'),
-    moneybag: configByReaction.get('moneybag'),
-  }
-  if (!amounts.dollar || !amounts.money_with_wings || !amounts.moneybag) {
-    await postPrivateReply(
-      event,
-      event.user,
-      'Tip jar not opened. Configure money_with_wings, dollar, and moneybag reaction tip amounts first.',
-    )
-    return
-  }
-
-  const installation = await getSlack().getInstallation(ctx.provider.id)
-  if (!installation) return
-  const now = new Date().toISOString()
-  const tipAskId = Nanoid.generate()
-  const beneficiaryProviderUserId = input.beneficiaryProviderUserId ?? event.user.userId
-  const tipAsk = {
-    beneficiary_provider_user_id:
-      beneficiaryProviderUserId === event.user.userId ? null : beneficiaryProviderUserId,
-    chain_id: workspace.chain_id,
-    closed_at: null,
-    created_at: now,
-    creator_fee_basis_points: beneficiaryProviderUserId === event.user.userId ? 0 : 100,
-    dollar_amount: amounts.dollar,
-    id: tipAskId,
-    memo: input.memo,
-    money_with_wings_amount: amounts.money_with_wings,
-    moneybag_amount: amounts.moneybag,
-    provider_channel_id: Slack.getChannelId(event.channel.id),
-    provider_id: ctx.provider.id,
-    provider_message_ts: 'pending',
-    requester_member_id: requester.memberId,
-    token_address: workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
-    updated_at: now,
-    workspace_id: workspace.id,
-  } satisfies DB_gen.Insertable.tip_ask
-  const message = await tipAskMessage(ctx.db, {
-    ...tipAsk,
-    requester_provider_user_id: event.user.userId,
-    workspace_default_token_address: workspace.default_token_address,
-  })
-  const body = new URLSearchParams()
-  body.set('blocks', JSON.stringify(message.blocks))
-  body.set('channel', Slack.getChannelId(event.channel.id))
-  body.set('text', message.text)
-  if (ctx.threadTs) body.set('thread_ts', ctx.threadTs)
-  body.set('unfurl_links', 'false')
-  body.set('unfurl_media', 'false')
-  const response = await getSlack().withBotToken(installation.botToken, () =>
-    fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
-      body,
-      headers: { authorization: `Bearer ${installation.botToken}` },
-      method: 'POST',
-    }),
-  )
-  const json = z.parse(
-    z.object({
-      error: z.string().optional(),
-      ok: z.boolean().optional(),
-      ts: z.string().optional(),
-    }),
-    await response.json(),
-  )
-  if (!json.ok || !json.ts) throw Slack.slackApiError('chat.postMessage', json.error)
-  await ctx.db
-    .insertInto('tip_ask')
-    .values({ ...tipAsk, provider_message_ts: json.ts })
-    .execute()
-  await postSlackEphemeral(
-    ctx.provider.id,
-    Slack.getChannelId(event.channel.id),
-    event.user.userId,
-    'Manage your tip jar.',
-    {
-      blocks: [
-        {
-          text: { text: 'Manage your tip jar.', type: 'mrkdwn' },
-          type: 'section',
-        },
-        {
-          elements: [
-            {
-              action_id: 'tip_ask_close',
-              style: 'danger',
-              text: { emoji: true, text: 'Close tip jar', type: 'plain_text' },
-              type: 'button',
-              value: JSON.stringify({ tipAskId }),
-            },
-          ],
-          type: 'actions',
-        },
-      ],
-      threadTs: ctx.threadTs,
-    },
-  ).catch((error) => {
-    console.error('Failed to post Slack tip jar controls:', error)
-  })
-}
 
 export const reactionTipIdempotencyPrefix = 'reaction:'
 export const receiptBoostIdempotencyPrefix = 'boost:'

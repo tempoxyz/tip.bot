@@ -1254,7 +1254,9 @@ test('/tip jar opens a tip jar and updates totals when a preset is clicked', asy
 
   expect(response.status).toBe(200)
   expect(tipAsk).toMatchObject({
+    beneficiary_provider_user_id: null,
     closed_at: null,
+    creator_fee_basis_points: 0,
     dollar_amount: 10_000,
     memo: 'lunch',
     money_with_wings_amount: 1000,
@@ -1397,6 +1399,7 @@ test('/tip jar opens a tip jar and updates totals when a preset is clicked', asy
     sender_provider_user_id: Constants.slack.memberUserId,
   })
   expect(tip.confirmed_at).toEqual(expect.any(String))
+  expect(tip.idempotency_key).not.toMatch(/:beneficiary$/)
   await expectSlackMessage('1 tip · $0.01 total')
   await expectSlackMessage(`💵 <@${Constants.slack.memberUserId}>`)
   await expectSlackMessageNotContaining(
@@ -1517,7 +1520,7 @@ test('/tip jar for account sends beneficiary tip and creator fee', async () => {
   })
   const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
-  const response = await postSlashCommand(`jar for <@${Constants.slack.memberUserId}> rehab`)
+  const response = await postSlashCommand(`jar <@${Constants.slack.memberUserId}> for rehab`)
   const tipAsk = await db
     .selectFrom('tip_ask')
     .selectAll()
@@ -1629,7 +1632,7 @@ test('/tip jar for unconnected account queues beneficiary tip and pays creator f
   })
   const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
-  const response = await postSlashCommand(`jar for <@${Constants.slack.unconnectedUserId}> rehab`)
+  const response = await postSlashCommand(`jar <@${Constants.slack.unconnectedUserId}> for rehab`)
   const tipAsk = await db
     .selectFrom('tip_ask')
     .selectAll()
@@ -1974,7 +1977,7 @@ test('@Tipbot mention supports jar for account command', async () => {
 
   const response = await postSlackAppMention({
     messageTs,
-    text: `<@${Constants.slack.botUserId}> jar for <@${Constants.slack.memberUserId}> rehab`,
+    text: `<@${Constants.slack.botUserId}> jar <@${Constants.slack.memberUserId}> for rehab`,
   })
   const tipAsk = await db
     .selectFrom('tip_ask')
