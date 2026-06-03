@@ -2133,7 +2133,6 @@ const tipAskReactions = [
 const countdownDayMs = 24 * 60 * 60 * 1000 // 1 day
 const countdownHourMs = 60 * 60 * 1000 // 1 hour
 const countdownMinuteMs = 60 * 1000 // 1 minute
-const countdownRetryWindowMs = 30 * 1000 // 30 seconds
 const countdownSecondMs = 1000 // 1 second
 const tipRaffleDurationOptions = [
   { label: '90 seconds', ms: 90 * 1000, value: '90s' }, // 90 seconds
@@ -3632,14 +3631,27 @@ async function updateSlackCountdownMessage(
       method: 'POST',
     }),
   )
-  const json = z.parse(
-    z.object({
+  const json = z
+    .object({
       error: z.string().optional(),
       ok: z.boolean().optional(),
-    }),
-    await response.json(),
-  )
-  if (!json.ok) throw Slack.slackApiError('chat.update', json.error)
+    })
+    .catch({ error: response.status === 429 ? 'rate_limited' : undefined, ok: false })
+    .parse(await response.json().catch(() => null))
+  if (!json.ok) {
+    const error = Slack.slackApiError(
+      'chat.update',
+      json.error ?? (response.status === 429 ? 'rate_limited' : undefined),
+    )
+    Object.assign(error, {
+      response: {
+        data: json,
+        headers: { retry_after: response.headers.get('retry-after') },
+        status: response.status,
+      },
+    })
+    throw error
+  }
 }
 
 async function startSlackCountdown(input: {
@@ -3683,12 +3695,25 @@ export class CountdownDO extends DurableObject<Env> {
         await this.stop()
         return
       }
-      console.error('CountdownDO: failed to update Slack countdown:', error)
-      if (Date.now() < countdown.endsAt + countdownRetryWindowMs) {
-        // Retry briefly so transient Slack failures do not strand an active countdown.
-        await this.ctx.storage.setAlarm(Date.now() + countdownSecondMs)
+
+      const slackError = Slack.classifySlackError(error)
+      if (
+        [
+          'duplicate_or_conflict',
+          'invalid_destination',
+          'invalid_payload',
+          'restricted_destination',
+        ].includes(slackError.errorClass)
+      ) {
+        console.error('CountdownDO: stopping countdown after terminal Slack error:', error)
+        await this.stop()
         return
       }
+
+      if (slackError.errorClass !== 'rate_limited')
+        console.error('CountdownDO: failed to update Slack countdown:', error)
+      await this.ctx.storage.setAlarm(Date.now() + getSlackRetryDelayMs(error))
+      return
     }
 
     if (Date.now() < countdown.endsAt) {
@@ -3697,6 +3722,21 @@ export class CountdownDO extends DurableObject<Env> {
     }
     await this.ctx.storage.delete('countdown')
   }
+}
+
+function getSlackRetryDelayMs(error: unknown) {
+  const response =
+    error &&
+    typeof error === 'object' &&
+    'response' in error &&
+    error.response &&
+    typeof error.response === 'object'
+      ? (error.response as { headers?: { retry_after?: unknown } })
+      : null
+  const retryAfterSeconds = Number(response?.headers?.retry_after)
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0)
+    return Math.max(countdownSecondMs, retryAfterSeconds * 1000) // Slack Retry-After seconds
+  return countdownSecondMs
 }
 
 type CountdownDurableState = CountdownState & {
