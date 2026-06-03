@@ -76,4 +76,5 @@ declare module '@tanstack/react-router' {
 }
 
 export { TipbotChatStateDO } from '#/objects/chatState.ts'
+export { CountdownDO } from '#/chat.ts'
 export class NonceStorage extends AccountsKv.NonceStorage {}

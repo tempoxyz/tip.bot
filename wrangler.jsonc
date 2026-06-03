@@ -30,6 +30,10 @@
         "name": "AUTH_NONCE",
         "class_name": "NonceStorage",
       },
+      {
+        "name": "COUNTDOWN",
+        "class_name": "CountdownDO",
+      },
     ],
   },
   "queues": {
@@ -59,6 +63,10 @@
     {
       "tag": "auth_nonce_v1",
       "new_classes": ["NonceStorage"],
+    },
+    {
+      "tag": "countdown_v1",
+      "new_classes": ["CountdownDO"],
     },
   ],
   "secrets": {
@@ -104,6 +112,10 @@
           {
             "name": "AUTH_NONCE",
             "class_name": "NonceStorage",
+          },
+          {
+            "name": "COUNTDOWN",
+            "class_name": "CountdownDO",
           },
         ],
       },
@@ -185,6 +197,10 @@
           {
             "name": "AUTH_NONCE",
             "class_name": "NonceStorage",
+          },
+          {
+            "name": "COUNTDOWN",
+            "class_name": "CountdownDO",
           },
         ],
       },

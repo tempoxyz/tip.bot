@@ -1782,29 +1782,50 @@ test('@Tipbot thread mention posts jar in the source thread', async () => {
   )
 })
 
-test('/tip countdown posts and updates a real-time countdown message', async () => {
-  const fetchSpy = vi.spyOn(globalThis, 'fetch')
-
+test('/tip countdown starts a durable countdown message', async () => {
   const response = await postSlashCommand('countdown 2s')
 
   expect(response.status).toBe(200)
-  await expectSlackMessage(`<@${Constants.slack.adminUserId}> started a countdown: 2s remaining`)
-  await expect
-    .poll(
-      () =>
-        fetchSpy.mock.calls.some((call) => {
-          const input = call[0]
-          const url =
-            typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-          return url.endsWith('/chat.update')
-        }),
-      { timeout: 5_000 }, // 5 seconds
-    )
-    .toBe(true)
+  await expectSlackMessage('2')
+  const messageTs = await findSlackMessageTs('2')
+  await env.COUNTDOWN.get(
+    env.COUNTDOWN.idFromName(`${providerId}:${Constants.slack.channelId}:${messageTs}`),
+  ).stop()
+})
+
+test('/tip countdown formats minute countdowns as clock time', async () => {
+  const response = await postSlashCommand('countdown 1m')
+
+  expect(response.status).toBe(200)
+  await expectSlackMessage('01:00')
+  const messageTs = await findSlackMessageTs('01:00')
+  await env.COUNTDOWN.get(
+    env.COUNTDOWN.idFromName(`${providerId}:${Constants.slack.channelId}:${messageTs}`),
+  ).stop()
+})
+
+test('/tip countdown formats hour and day countdowns with days', async () => {
+  const hourResponse = await postSlashCommand('countdown 1h')
+
+  expect(hourResponse.status).toBe(200)
+  await expectSlackMessage('00:01:00:00')
+  const hourMessageTs = await findSlackMessageTs('00:01:00:00')
+  await env.COUNTDOWN.get(
+    env.COUNTDOWN.idFromName(`${providerId}:${Constants.slack.channelId}:${hourMessageTs}`),
+  ).stop()
+
+  const dayResponse = await postSlashCommand('countdown 1d')
+
+  expect(dayResponse.status).toBe(200)
+  await expectSlackMessage('01:00:00:00')
+  const dayMessageTs = await findSlackMessageTs('01:00:00:00')
+  await env.COUNTDOWN.get(
+    env.COUNTDOWN.idFromName(`${providerId}:${Constants.slack.channelId}:${dayMessageTs}`),
+  ).stop()
 })
 
 test('/tip countdown validates duration', async () => {
-  const response = await postSlashCommand('countdown 30m')
+  const response = await postSlashCommand('countdown 8d')
 
   expect(response.status).toBe(200)
   await expectSlackMessage('Usage: `/tip countdown [duration]`')

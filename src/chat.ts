@@ -12,7 +12,7 @@ import * as Tip from '#/lib/tip.ts'
 import { createCloudflareState } from '#/vendor/chatStateCloudflareDO.ts'
 import { createSlackAdapter } from '@chat-adapter/slack'
 import * as chat from 'chat'
-import { env } from 'cloudflare:workers'
+import { DurableObject, env } from 'cloudflare:workers'
 import { sql } from 'kysely'
 import { Address } from 'ox'
 import { createClient, http } from 'viem'
@@ -990,7 +990,7 @@ const handlers = {
       await postPrivateReply(
         event,
         event.user,
-        `Usage: \`${getSlackCommand(env.HOST)} countdown [duration]\` with a duration from 1s to 10m. Example: \`${getSlackCommand(env.HOST)} countdown 30s\`.`,
+        `Usage: \`${getSlackCommand(env.HOST)} countdown [duration]\` with a duration from 1s to 7d. Example: \`${getSlackCommand(env.HOST)} countdown 30s\`.`,
       )
       return
     }
@@ -1013,9 +1013,10 @@ const handlers = {
       channelId,
       threadTs: ctx.threadTs,
     })
-    const tick = tickSlackCountdown(installation.botToken, { ...countdown, messageTs })
-    if ('waitUntil' in event && typeof event.waitUntil === 'function') event.waitUntil(tick)
-    else void tick
+    await startSlackCountdown({
+      botToken: installation.botToken,
+      countdown: { ...countdown, messageTs },
+    })
   },
   async raffle(event, ctx) {
     if (Slack.isDMChannelId(event.channel.id)) {
@@ -2129,6 +2130,11 @@ const tipAskReactions = [
   { emoji: '💵', name: 'dollar' },
   { emoji: '💰', name: 'moneybag' },
 ] as const satisfies Array<{ emoji: string; name: TipAskReaction }>
+const countdownDayMs = 24 * 60 * 60 * 1000 // 1 day
+const countdownHourMs = 60 * 60 * 1000 // 1 hour
+const countdownMinuteMs = 60 * 1000 // 1 minute
+const countdownRetryWindowMs = 30 * 1000 // 30 seconds
+const countdownSecondMs = 1000 // 1 second
 const tipRaffleDurationOptions = [
   { label: '90 seconds', ms: 90 * 1000, value: '90s' }, // 90 seconds
   { label: '5 minutes', ms: 5 * 60 * 1000, value: '5m' }, // 5 minutes
@@ -2140,8 +2146,9 @@ const tipRaffleDurationOptions = [
   { label: '3 days', ms: 3 * 24 * 60 * 60 * 1000, value: '3d' }, // 3 days
   { label: '7 days', ms: 7 * 24 * 60 * 60 * 1000, value: '7d' }, // 7 days
 ] as const
-const countdownDurationPattern = /^(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes)?$/i
-const countdownMaxDurationMs = 10 * 60 * 1000 // 10 minutes
+const countdownDurationPattern =
+  /^(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)?$/i
+const countdownMaxDurationMs = 7 * 24 * 60 * 60 * 1000 // 7 days
 const tokenOptions = [
   { address: Tempo.addressLookup.pathUsd, label: 'PathUSD', value: 'pathUSD' },
   { address: Tempo.addressLookup.usdcE, label: 'USDC.e', value: 'USDC.e' },
@@ -3522,35 +3529,48 @@ function parseCountdownDuration(text: string) {
   if (!match) return null
   const amount = Number(match[1])
   const unit = (match[2] ?? 's').toLowerCase()
-  const ms = amount * (unit.startsWith('m') ? 60 * 1000 : 1000)
-  if (!Number.isSafeInteger(ms) || ms < 1000 || ms > countdownMaxDurationMs) return null
+  const ms = amount * getCountdownUnitMs(unit)
+  if (!Number.isSafeInteger(ms) || ms < countdownSecondMs || ms > countdownMaxDurationMs)
+    return null
   return { ms }
+}
+
+function getCountdownUnitMs(unit: string) {
+  if (unit.startsWith('d')) return countdownDayMs
+  if (unit.startsWith('h')) return countdownHourMs
+  if (unit.startsWith('m')) return countdownMinuteMs
+  return countdownSecondMs
 }
 
 function countdownMessage(countdown: CountdownState) {
   const remainingMs = Math.max(0, countdown.endsAt - Date.now())
   const remainingSeconds = Math.ceil(remainingMs / 1000)
-  const text =
-    remainingSeconds > 0
-      ? `<@${countdown.requesterUserId}> started a countdown: ${remainingSeconds}s remaining`
-      : `<@${countdown.requesterUserId}> started a countdown: ended`
-  const context =
-    remainingSeconds > 0
-      ? `POC timer. Ends at <!date^${Math.floor(countdown.endsAt / 1000)}^{time_secs}|${new Date(countdown.endsAt).toISOString()}>.`
-      : 'POC timer ended.'
+  const text = formatCountdownRemaining(countdown.durationMs, remainingSeconds)
   return {
     blocks: [
       {
         text: { text, type: 'mrkdwn' },
         type: 'section',
       },
-      {
-        elements: [{ text: context, type: 'mrkdwn' }],
-        type: 'context',
-      },
     ],
-    text: `${text}. ${context}`,
+    text,
   }
+}
+
+function formatCountdownRemaining(durationMs: number, remainingSeconds: number) {
+  if (durationMs < countdownMinuteMs) return String(remainingSeconds)
+  if (durationMs >= countdownHourMs) {
+    const days = Math.floor(remainingSeconds / (24 * 60 * 60))
+    const hours = Math.floor((remainingSeconds % (24 * 60 * 60)) / (60 * 60))
+    const minutes = Math.floor((remainingSeconds % (60 * 60)) / 60)
+    const seconds = remainingSeconds % 60
+    return `${String(days).padStart(2, '0')}:${String(hours).padStart(2, '0')}:${String(
+      minutes,
+    ).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  }
+  return `${String(Math.floor(remainingSeconds / 60)).padStart(2, '0')}:${String(
+    remainingSeconds % 60,
+  ).padStart(2, '0')}`
 }
 
 async function postSlackCountdownMessage(
@@ -3588,24 +3608,10 @@ async function postSlackCountdownMessage(
   return json.ts
 }
 
-async function tickSlackCountdown(
-  botToken: string,
-  countdown: CountdownState & { messageTs: string },
-) {
-  while (Date.now() < countdown.endsAt) {
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-    try {
-      await updateSlackCountdownMessage(botToken, countdown)
-    } catch (error) {
-      console.error('Failed to update Slack countdown:', error)
-      return
-    }
-  }
-}
-
 async function updateSlackCountdownMessage(
   botToken: string,
   countdown: CountdownState & { messageTs: string },
+  apiUrl = env.SLACK_API_URL,
 ) {
   const message = countdownMessage(countdown)
   const body = new URLSearchParams()
@@ -3616,7 +3622,7 @@ async function updateSlackCountdownMessage(
   body.set('unfurl_links', 'false')
   body.set('unfurl_media', 'false')
   const response = await getSlack().withBotToken(botToken, () =>
-    fetch(`${env.SLACK_API_URL}/chat.update`, {
+    fetch(`${apiUrl}/chat.update`, {
       body,
       headers: { authorization: `Bearer ${botToken}` },
       method: 'POST',
@@ -3630,6 +3636,64 @@ async function updateSlackCountdownMessage(
     await response.json(),
   )
   if (!json.ok) throw Slack.slackApiError('chat.update', json.error)
+}
+
+async function startSlackCountdown(input: {
+  botToken: string
+  countdown: CountdownState & { messageTs: string }
+}) {
+  const id = env.COUNTDOWN.idFromName(
+    `${input.countdown.providerId}:${input.countdown.channelId}:${input.countdown.messageTs}`,
+  )
+  await env.COUNTDOWN.get(id).start({
+    botToken: input.botToken,
+    channelId: input.countdown.channelId,
+    durationMs: input.countdown.durationMs,
+    endsAt: input.countdown.endsAt,
+    messageTs: input.countdown.messageTs,
+    providerId: input.countdown.providerId,
+    requesterUserId: input.countdown.requesterUserId,
+    threadTs: input.countdown.threadTs,
+  })
+}
+
+export class CountdownDO extends DurableObject<Env> {
+  async start(countdown: CountdownDurableState) {
+    await this.ctx.storage.put('countdown', countdown)
+    await this.ctx.storage.setAlarm(Math.min(Date.now() + countdownSecondMs, countdown.endsAt))
+  }
+
+  async stop() {
+    await this.ctx.storage.delete('countdown')
+    await this.ctx.storage.deleteAlarm()
+  }
+
+  async alarm() {
+    const countdown = await this.ctx.storage.get<CountdownDurableState>('countdown')
+    if (!countdown) return
+
+    try {
+      await updateSlackCountdownMessage(countdown.botToken, countdown, this.env.SLACK_API_URL)
+    } catch (error) {
+      console.error('CountdownDO: failed to update Slack countdown:', error)
+      if (Date.now() < countdown.endsAt + countdownRetryWindowMs) {
+        // Retry briefly so transient Slack failures do not strand an active countdown.
+        await this.ctx.storage.setAlarm(Date.now() + countdownSecondMs)
+        return
+      }
+    }
+
+    if (Date.now() < countdown.endsAt) {
+      await this.ctx.storage.setAlarm(Math.min(Date.now() + countdownSecondMs, countdown.endsAt))
+      return
+    }
+    await this.ctx.storage.delete('countdown')
+  }
+}
+
+type CountdownDurableState = CountdownState & {
+  botToken: string
+  messageTs: string
 }
 
 export async function updateTipAskMessage(providerId: string, options: { tipAskId: string }) {
