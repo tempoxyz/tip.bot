@@ -31,9 +31,9 @@ on:
       SLACK_CONFIG_REFRESH_TOKEN:
         required: false
       TWITTER_OAUTH_CLIENT_ID:
-        required: true
+        required: false
       TWITTER_OAUTH_CLIENT_SECRET:
-        required: true
+        required: false
 
 permissions:
   contents: read
@@ -435,8 +435,8 @@ jobs:
           SLACK_CLIENT_ID: ${{ steps.slack.outputs.client_id || steps.state.outputs.client_id }}
           SLACK_CLIENT_SECRET: ${{ steps.slack.outputs.client_secret || steps.state.outputs.client_secret }}
           SLACK_SIGNING_SECRET: ${{ steps.slack.outputs.signing_secret || steps.state.outputs.signing_secret }}
-          TWITTER_OAUTH_CLIENT_ID: ${{ secrets.TWITTER_OAUTH_CLIENT_ID }}
-          TWITTER_OAUTH_CLIENT_SECRET: ${{ secrets.TWITTER_OAUTH_CLIENT_SECRET }}
+          TWITTER_OAUTH_CLIENT_ID: ${{ secrets.TWITTER_OAUTH_CLIENT_ID || 'preview-twitter-oauth-client-id' }}
+          TWITTER_OAUTH_CLIENT_SECRET: ${{ secrets.TWITTER_OAUTH_CLIENT_SECRET || 'preview-twitter-oauth-client-secret' }}
 
       - name: Enable Slack event subscriptions
         if: steps.slack.outputs.created == 'true'
