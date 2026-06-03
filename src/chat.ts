@@ -3565,15 +3565,14 @@ function countdownMessage(countdown: CountdownState) {
       remainingSeconds % 60,
     ).padStart(2, '0')}`
   })()
-  const text = remainingSeconds === 0 ? `${remainingText} countdown ended` : remainingText
   return {
     blocks: [
       {
-        text: `# ${text}`,
+        text: `# ${remainingText}`,
         type: 'markdown',
       },
     ],
-    text,
+    text: remainingText,
   }
 }
 
