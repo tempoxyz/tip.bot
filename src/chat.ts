@@ -1004,8 +1004,23 @@ const modalSubmits = {
       }),
       { account: creator.address as Address.Address, token: tokenAddress as Address.Address },
     )
-    if (BigInt(amount) > balance)
-      return { action: 'errors' as const, errors: { amount: 'Amount exceeds your balance.' } }
+    if (BigInt(amount) > balance) {
+      await postConnectLink(
+        {
+          channel: getChat().channel(`slack:${metadata.channelId}`),
+          threadTs: metadata.threadTs,
+          user: event.user,
+        },
+        {
+          db,
+          forceConnectRefresh: true,
+          provider: { id: metadata.providerId, type: 'slack' },
+          text: '',
+          threadTs: metadata.threadTs,
+        },
+      )
+      return
+    }
     const accessKey = await Tip.checkReusableTipAccessKey(env, {
       amount,
       chainId: workspace.chain_id,
@@ -1014,11 +1029,29 @@ const modalSubmits = {
       tokenAddress,
       workspaceId: workspace.id,
     })
-    if (!accessKey.ok)
-      return {
-        action: 'errors' as const,
-        errors: { amount: 'Amount exceeds your approved amount.' },
+    if (!accessKey.ok) {
+      if (
+        accessKey.code === 'sender_unconnected' ||
+        accessKey.code === 'missing_sender_access_key'
+      ) {
+        await postConnectLink(
+          {
+            channel: getChat().channel(`slack:${metadata.channelId}`),
+            threadTs: metadata.threadTs,
+            user: event.user,
+          },
+          {
+            db,
+            forceConnectRefresh: accessKey.code === 'missing_sender_access_key',
+            provider: { id: metadata.providerId, type: 'slack' },
+            text: '',
+            threadTs: metadata.threadTs,
+          },
+        )
+        return
       }
+      return { action: 'errors' as const, errors: { amount: 'Amount exceeds your balance.' } }
+    }
 
     const installation = await getSlack().getInstallation(metadata.providerId)
     if (!installation) return

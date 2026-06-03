@@ -137,7 +137,7 @@ test('/tip airdrop create modal posts funded pot message', async () => {
   await expectSlackMessage('Claimed: No one yet')
 })
 
-test('/tip airdrop create modal rejects amount above creator balance', async () => {
+test('/tip airdrop create modal prompts approval when amount is above creator balance', async () => {
   await connectTipAccounts()
 
   const response = await postSlackInteraction(
@@ -150,14 +150,13 @@ test('/tip airdrop create modal rejects amount above creator balance', async () 
     .execute()
 
   expect(response.status).toBe(200)
-  await expect(response.json()).resolves.toEqual({
-    errors: { amount: 'Amount exceeds your balance.' },
-    response_action: 'errors',
-  })
+  await expect(response.text()).resolves.toBe('')
   expect(tipAirdrops).toEqual([])
+  await expectSlackMessage('Link expires in 10 minutes')
+  await expectSlackMessageNotContaining('Already connected')
 })
 
-test('/tip airdrop create modal rejects amount above approved access key amount', async () => {
+test('/tip airdrop create modal prompts approval when amount is above approved access key amount', async () => {
   await connectTipAccounts()
   await Actions.token.mintSync(
     createClient({
@@ -182,11 +181,10 @@ test('/tip airdrop create modal rejects amount above approved access key amount'
     .execute()
 
   expect(response.status).toBe(200)
-  await expect(response.json()).resolves.toEqual({
-    errors: { amount: 'Amount exceeds your approved amount.' },
-    response_action: 'errors',
-  })
+  await expect(response.text()).resolves.toBe('')
   expect(tipAirdrops).toEqual([])
+  await expectSlackMessage('Link expires in 10 minutes')
+  await expectSlackMessageNotContaining('Already connected')
 })
 
 test('/tip airdrop claim sends $0.01 from creator to claimer and updates pot', async () => {
