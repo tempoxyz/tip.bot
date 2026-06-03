@@ -217,9 +217,11 @@ type tip = {
 }
 
 type tip_ask = {
+  beneficiary_provider_user_id: string | null
   chain_id: number
   closed_at: string | null
   created_at: k.Generated<string>
+  creator_fee_basis_points: k.Generated<number>
   dollar_amount: number
   id: string
   memo: string | null

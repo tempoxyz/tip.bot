@@ -1503,6 +1503,215 @@ test('/tip jar opens a tip jar and updates totals when a preset is clicked', asy
   await expectSlackMessage('Tip jar is closed.')
 }, 20_000) // 20 seconds
 
+test('/tip open tipjar for account sends beneficiary tip and creator fee', async () => {
+  const connected = await connectTipAccounts({
+    senderProviderUserId: Constants.slack.unconnectedUserId,
+  })
+  const creatorAccount = await factory.account.insert({
+    address: '0x0000000000000000000000000000000000000101',
+  })
+  const creatorMember = await insertMember({
+    account_id: creatorAccount.id,
+    provider_user_id: Constants.slack.adminUserId,
+    workspace_id: connected.workspace.id,
+  })
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+  const response = await postSlashCommand(
+    `open tipjar for <@${Constants.slack.memberUserId}> rehab`,
+  )
+  const tipAsk = await db
+    .selectFrom('tip_ask')
+    .selectAll()
+    .where('workspace_id', '=', connected.workspace.id)
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(tipAsk).toMatchObject({
+    beneficiary_provider_user_id: Constants.slack.memberUserId,
+    creator_fee_basis_points: 100,
+    memo: 'rehab',
+    requester_member_id: creatorMember.id,
+  })
+  await expectSlackMessage(
+    `<@${Constants.slack.adminUserId}> opened a tip jar for <@${Constants.slack.memberUserId}>'s rehab`,
+  )
+  const tipAskPostMessageCall = fetchSpy.mock.calls.find((call) => {
+    const input = call[0]
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    const params = slackFetchBodyParams(call[1]?.body)
+    return (
+      url.endsWith('/chat.postMessage') &&
+      params
+        .get('text')
+        ?.includes(
+          `<@${Constants.slack.adminUserId}> opened a tip jar for <@${Constants.slack.memberUserId}>'s rehab`,
+        )
+    )
+  })
+  const blocks = JSON.parse(
+    slackFetchBodyParams(tipAskPostMessageCall?.[1]?.body).get('blocks') ?? '[]',
+  )
+  const dollarButton = blocks
+    .flatMap(
+      (block: { elements?: Array<{ action_id?: string; value?: string }> }) => block.elements ?? [],
+    )
+    .find((element: { action_id?: string }) => element.action_id === 'tip_ask_option_dollar')
+  const dollarButtonPayload = JSON.parse(dollarButton?.value ?? 'null') as {
+    nonce: string
+    reaction: 'dollar'
+    tipAskId: string
+  }
+
+  const clickResponse = await postSlackInteraction({
+    actions: [
+      {
+        action_id: 'tip_ask_option_dollar',
+        type: 'button',
+        value: JSON.stringify(dollarButtonPayload),
+      },
+    ],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: tipAsk.provider_message_ts,
+      type: 'message',
+    },
+    message: { ts: tipAsk.provider_message_ts },
+    team: { id: providerId },
+    trigger_id: 'tip-ask-beneficiary-dollar-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.unconnectedUserId, name: Constants.slack.unconnectedUserName },
+  })
+  const tips = await db
+    .selectFrom('tip')
+    .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
+    .select([
+      'recipient.provider_user_id as recipient_provider_user_id',
+      'tip.amount',
+      'tip.idempotency_key',
+    ])
+    .where(
+      'tip.idempotency_key',
+      'like',
+      `tip_ask:${tipAsk.id}:dollar:${Constants.slack.unconnectedUserId}:%`,
+    )
+    .orderBy('tip.amount', 'desc')
+    .execute()
+
+  expect(clickResponse.status).toBe(200)
+  expect(tips).toEqual([
+    expect.objectContaining({
+      amount: 10_000,
+      idempotency_key: expect.stringMatching(/:beneficiary$/),
+      recipient_provider_user_id: Constants.slack.memberUserId,
+    }),
+    expect.objectContaining({
+      amount: 100,
+      idempotency_key: expect.stringMatching(/:creator_fee$/),
+      recipient_provider_user_id: Constants.slack.adminUserId,
+    }),
+  ])
+  await expectSlackMessage('1 tip · $0.01 total')
+  await expectSlackMessage(`💵 <@${Constants.slack.unconnectedUserId}>`)
+})
+
+test('/tip open tipjar for unconnected account queues beneficiary tip and pays creator fee', async () => {
+  const connected = await connectTipAccounts({
+    recipient: false,
+    senderProviderUserId: Constants.slack.memberUserId,
+  })
+  const creatorAccount = await factory.account.insert({
+    address: '0x0000000000000000000000000000000000000102',
+  })
+  await insertMember({
+    account_id: creatorAccount.id,
+    provider_user_id: Constants.slack.adminUserId,
+    workspace_id: connected.workspace.id,
+  })
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+  const response = await postSlashCommand(
+    `open tipjar for <@${Constants.slack.unconnectedUserId}> rehab`,
+  )
+  const tipAsk = await db
+    .selectFrom('tip_ask')
+    .selectAll()
+    .where('workspace_id', '=', connected.workspace.id)
+    .executeTakeFirstOrThrow()
+  const tipAskPostMessageCall = fetchSpy.mock.calls.find((call) => {
+    const input = call[0]
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    const params = slackFetchBodyParams(call[1]?.body)
+    return url.endsWith('/chat.postMessage') && params.get('text')?.includes('opened a tip jar')
+  })
+  const blocks = JSON.parse(
+    slackFetchBodyParams(tipAskPostMessageCall?.[1]?.body).get('blocks') ?? '[]',
+  )
+  const dollarButton = blocks
+    .flatMap(
+      (block: { elements?: Array<{ action_id?: string; value?: string }> }) => block.elements ?? [],
+    )
+    .find((element: { action_id?: string }) => element.action_id === 'tip_ask_option_dollar')
+
+  const clickResponse = await postSlackInteraction({
+    actions: [
+      {
+        action_id: 'tip_ask_option_dollar',
+        type: 'button',
+        value: dollarButton?.value,
+      },
+    ],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: tipAsk.provider_message_ts,
+      type: 'message',
+    },
+    message: { ts: tipAsk.provider_message_ts },
+    team: { id: providerId },
+    trigger_id: 'tip-ask-unconnected-dollar-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.memberUserId, name: Constants.slack.memberUserName },
+  })
+  const pendingTip = await db
+    .selectFrom('pending_tip')
+    .select(['amount', 'recipient_provider_user_id'])
+    .where(
+      'idempotency_key',
+      'like',
+      `tip_ask:${tipAsk.id}:dollar:${Constants.slack.memberUserId}:%`,
+    )
+    .executeTakeFirstOrThrow()
+  const creatorFees = await db
+    .selectFrom('tip')
+    .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
+    .select([
+      'recipient.provider_user_id as recipient_provider_user_id',
+      'tip.amount',
+      'tip.idempotency_key',
+    ])
+    .where(
+      'tip.idempotency_key',
+      'like',
+      `tip_ask:${tipAsk.id}:dollar:${Constants.slack.memberUserId}:%`,
+    )
+    .execute()
+  const creatorFee = creatorFees.find((tip) => tip.idempotency_key.endsWith(':creator_fee'))
+
+  expect(response.status).toBe(200)
+  expect(clickResponse.status).toBe(200)
+  expect(pendingTip).toEqual({
+    amount: 10_000,
+    recipient_provider_user_id: Constants.slack.unconnectedUserId,
+  })
+  expect(creatorFee).toMatchObject({
+    amount: 100,
+    recipient_provider_user_id: Constants.slack.adminUserId,
+  })
+  await expectSlackMessage('1 tip · $0.01 total')
+})
+
 test('/tip jar requires the opener to be connected', async () => {
   const response = await postSlashCommand('jar for lunch')
   const tipAsks = await db
