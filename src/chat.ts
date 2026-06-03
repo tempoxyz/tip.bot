@@ -4008,6 +4008,7 @@ async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
     ])
     .where('tip_raffle_ticket.raffle_id', '=', tipRaffle.id)
     .groupBy('buyer.provider_user_id')
+    .orderBy('ticket_count', 'desc')
     .orderBy('buyer.provider_user_id', 'asc')
     .execute()
   const ticketCount = rows.reduce((total, row) => total + Number(row.ticket_count), 0)
@@ -4146,16 +4147,27 @@ async function tipAskMessage(db: DB.Type, tipAsk: TipAskMessageInput) {
   const reactionLines = tipAskReactions
     .map((reaction) => {
       const tipperCounts = new Map<string, number>()
+      const tipperAmounts = new Map<string, number>()
       for (const row of rows) {
         if (row.idempotency_key.split(':')[2] !== reaction.name) continue
         tipperCounts.set(
           row.sender_provider_user_id,
           (tipperCounts.get(row.sender_provider_user_id) ?? 0) + 1,
         )
+        tipperAmounts.set(
+          row.sender_provider_user_id,
+          (tipperAmounts.get(row.sender_provider_user_id) ?? 0) + row.amount,
+        )
       }
-      const tippers = [...tipperCounts].map(
-        ([providerUserId, count]) => `<@${providerUserId}>${count > 1 ? ` x${count}` : ''}`,
-      )
+      const tippers = [...tipperCounts]
+        .sort(([providerUserIdA, countA], [providerUserIdB, countB]) => {
+          const amountA = tipperAmounts.get(providerUserIdA) ?? 0
+          const amountB = tipperAmounts.get(providerUserIdB) ?? 0
+          if (amountA !== amountB) return amountB - amountA
+          if (countA !== countB) return countB - countA
+          return providerUserIdA.localeCompare(providerUserIdB)
+        })
+        .map(([providerUserId, count]) => `<@${providerUserId}>${count > 1 ? ` x${count}` : ''}`)
       if (!tippers.length) return null
       return `${reaction.emoji} ${tippers.join(' ')}`
     })

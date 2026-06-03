@@ -1238,7 +1238,7 @@ test('/tip jar opens a tip jar and updates totals when a preset is clicked', asy
     recipient: false,
     senderProviderUserId: Constants.slack.memberUserId,
   })
-  await insertMember({
+  const adminMember = await insertMember({
     account_id: connected.recipientAccount.id,
     provider_user_id: Constants.slack.adminUserId,
     workspace_id: connected.workspace.id,
@@ -1308,6 +1308,46 @@ test('/tip jar opens a tip jar and updates totals when a preset is clicked', asy
     .find((element: { action_id?: string }) => element.action_id === 'tip_ask_close')
   const closeButtonPayload = JSON.parse(closeButton?.value ?? 'null') as { tipAskId: string }
   expect(closeButtonPayload).toEqual({ tipAskId: tipAsk.id })
+
+  await factory.tip.insert(
+    {
+      amount: 100_000,
+      confirmed_at: new Date().toISOString(),
+      idempotency_key: `tip_ask:${tipAsk.id}:moneybag:${Constants.slack.adminUserId}:one`,
+      recipient_id: connected.recipientAccount.id,
+      recipient_member_id: adminMember.id,
+      sender_id: connected.recipientAccount.id,
+      sender_member_id: adminMember.id,
+      token_address: Tempo.addressLookup.pathUsd,
+      workspace_id: connected.workspace.id,
+    },
+    {
+      amount: 100_000,
+      confirmed_at: new Date().toISOString(),
+      idempotency_key: `tip_ask:${tipAsk.id}:moneybag:${Constants.slack.memberUserId}:one`,
+      recipient_id: connected.recipientAccount.id,
+      recipient_member_id: adminMember.id,
+      sender_id: connected.senderAccount.id,
+      sender_member_id: connected.senderMember.id,
+      token_address: Tempo.addressLookup.pathUsd,
+      workspace_id: connected.workspace.id,
+    },
+    {
+      amount: 100_000,
+      confirmed_at: new Date().toISOString(),
+      idempotency_key: `tip_ask:${tipAsk.id}:moneybag:${Constants.slack.memberUserId}:two`,
+      recipient_id: connected.recipientAccount.id,
+      recipient_member_id: adminMember.id,
+      sender_id: connected.senderAccount.id,
+      sender_member_id: connected.senderMember.id,
+      token_address: Tempo.addressLookup.pathUsd,
+      workspace_id: connected.workspace.id,
+    },
+  )
+  await Chat.updateTipAskMessage(providerId, { tipAskId: tipAsk.id })
+  await expectSlackMessage(
+    `💰 <@${Constants.slack.memberUserId}> x2 <@${Constants.slack.adminUserId}>`,
+  )
 
   const unauthorizedCloseResponse = await postSlackInteraction({
     actions: [
@@ -2080,7 +2120,7 @@ test('/tip raffle create modal posts raffle message', async () => {
 })
 
 test('/tip raffle buy button records tickets and updates message', async () => {
-  await connectTipAccounts()
+  const connected = await connectTipAccounts()
   await postSlackInteraction(createRaffleViewSubmissionPayload({ amount: '0.001' }))
   const tipRaffle = await db
     .selectFrom('tip_raffle')
@@ -2122,8 +2162,23 @@ test('/tip raffle buy button records tickets and updates message', async () => {
   })
   await expectSlackMessage('Pot: $0.005')
   await expectSlackMessage('Ticket: $0.001 · Tickets: 5')
+  if (!connected.recipientMember) throw new Error('Expected connected recipient.')
+  await db
+    .insertInto('tip_raffle_ticket')
+    .values({
+      buyer_member_id: connected.recipientMember.id,
+      id: Nanoid.generate(),
+      idempotency_key: `test-raffle-ticket:${Nanoid.generate()}`,
+      raffle_id: tipRaffle.id,
+      ticket_count: 10,
+    })
+    .execute()
+  await Chat.updateTipRaffleMessage(providerId, { tipRaffleId: tipRaffle.id })
+  await expectSlackMessage(
+    `Entrants: <@${Constants.slack.memberUserId}> x10, <@${Constants.slack.adminUserId}> x5`,
+  )
   const history = await slack.conversations.history({ channel: Constants.slack.channelId })
-  const message = history.messages?.find((message) => message.text?.includes('Pot: $0.005'))
+  const message = history.messages?.find((message) => message.text?.includes('Pot: $0.015'))
   expect(message?.text).toMatch(/Ends:[\s\S]*Entrants:[\s\S]*Ticket:/)
 })
 
