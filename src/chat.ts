@@ -16,7 +16,7 @@ import { env } from 'cloudflare:workers'
 import { sql } from 'kysely'
 import { Address } from 'ox'
 import { createClient, http } from 'viem'
-import { Actions } from 'viem/tempo'
+import { Account as TempoAccount, Actions } from 'viem/tempo'
 import { z } from 'zod'
 
 let bot: chat.Chat | null = null
@@ -379,6 +379,121 @@ export function getSlack() {
 }
 
 const actions = {
+  async airdrop_claim(event) {
+    const raw = z.parse(
+      z.object({
+        channel: z.object({ id: z.string().min(1) }).optional(),
+        container: z.object({ channel_id: z.string().min(1).optional() }).optional(),
+        message: z
+          .object({
+            blocks: z.array(z.unknown()).optional(),
+            text: z.string().optional(),
+            thread_ts: z.string().min(1).optional(),
+            ts: z.string().min(1).optional(),
+          })
+          .optional(),
+        team: z.object({ id: z.string().min(1) }),
+      }),
+      event.raw,
+    )
+    const channelId = raw.channel?.id ?? raw.container?.channel_id
+    if (!channelId) return
+    const payload = z
+      .object({ expiresAt: z.string().min(1), name: z.string().min(1).optional() })
+      .safeParse(
+        (() => {
+          try {
+            return JSON.parse(event.value ?? 'null')
+          } catch {
+            return null
+          }
+        })(),
+      )
+    const expiresAt =
+      (payload.success ? payload.data.expiresAt : null) ??
+      (() => {
+        // Keep the original 5m Slack date token when updating an existing airdrop message.
+        const blockTexts = (raw.message?.blocks ?? []).map(
+          (block) =>
+            z.object({ text: z.object({ text: z.string() }) }).safeParse(block).data?.text.text ??
+            '',
+        )
+        const seconds = [...blockTexts, raw.message?.text ?? '']
+          .join('\n')
+          .match(/<!date\^(\d+)\^/)?.[1]
+        return seconds ? new Date(Number(seconds) * 1000).toISOString() : null
+      })() ??
+      new Date(Date.now() + airdropDurationMs).toISOString()
+    const name =
+      (payload.success ? payload.data.name : null) ??
+      (() => {
+        // Recover the custom name if Slack omits the button payload on retries/tests.
+        const value = raw.message?.text?.match(/^You qualified for the ([\s\S]+?) airdrop!/i)?.[1]
+        return value
+          ? value.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+          : null
+      })() ??
+      'Tipbot'
+    const tipEvent = {
+      channel: getChat().channel(`slack:${channelId}`),
+      threadTs: raw.message?.thread_ts,
+      user: event.user,
+    } satisfies TipEvent
+    const ctx = {
+      db: DB.create(env.DB),
+      provider: { id: raw.team.id, type: 'slack' },
+      text: '',
+      threadTs: raw.message?.thread_ts,
+    } satisfies HandlerContext
+    if (Date.parse(expiresAt) <= Date.now()) {
+      await postPrivateReply(tipEvent, event.user, 'Not eligible for airdrop. Sorry :(', {
+        threadTs: ctx.threadTs,
+      })
+      return
+    }
+    const claimedProviderUserIds = (() => {
+      // Read the public message's claimed list so repeat clicks don't send another payment.
+      return [
+        ...new Set(
+          [
+            raw.message?.text ?? '',
+            ...(raw.message?.blocks ?? []).map(
+              (block) =>
+                z.object({ text: z.object({ text: z.string() }) }).safeParse(block).data?.text
+                  .text ?? '',
+            ),
+          ].flatMap((value) => {
+            if (!value.includes('Claimed:') && !value.includes('*Claimed:*')) return []
+            return [...value.matchAll(/<@([A-Z0-9_]+)(?:\|[^>]+)?>/g)]
+              .map((match) => match[1])
+              .filter((providerUserId): providerUserId is string => Boolean(providerUserId))
+          }),
+        ),
+      ]
+    })()
+    if (claimedProviderUserIds.includes(event.user.userId)) {
+      await postPrivateReply(tipEvent, event.user, 'Not eligible for airdrop. Sorry :(', {
+        threadTs: ctx.threadTs,
+      })
+      return
+    }
+    const claimed = await handleAirdropClaimPayment(tipEvent, ctx, {
+      botUserId: (await getSlack().getInstallation(raw.team.id))?.botUserId,
+      channelId,
+      interactionId: slackActionInteractionId(event) ?? Nanoid.generate(),
+      messageTs: raw.message?.ts,
+      providerId: raw.team.id,
+    })
+    if (!claimed) return
+
+    if (raw.message?.ts)
+      await updateAirdropMessage(raw.team.id, channelId, raw.message.ts, name, expiresAt, [
+        ...claimedProviderUserIds,
+        event.user.userId,
+      ]).catch((error) => {
+        console.error('Failed to update Slack airdrop message:', error)
+      })
+  },
   async tip_ask_option(event) {
     const payload = z
       .object({
@@ -1004,6 +1119,45 @@ const modalSubmits = {
 >
 
 const handlers = {
+  async airdrop(event, ctx) {
+    const name = (() => {
+      // Empty name preserves the default Tipbot airdrop; long names are likely mistakes.
+      const value = ctx.text.trim().replace(/\s+/g, ' ')
+      if (value.length > 80) return null
+      return value || 'Tipbot'
+    })()
+    if (!name) {
+      await postInvalidUsage(event, ctx)
+      return
+    }
+
+    const installation = await getSlack().getInstallation(ctx.channelProviderId ?? ctx.provider.id)
+    if (!installation) throw new Error('Tipbot app not installed for this workspace.')
+
+    const expiresAt = new Date(Date.now() + airdropDurationMs).toISOString()
+    const body = new URLSearchParams()
+    body.set('blocks', JSON.stringify(airdropBlocks([], name, expiresAt)))
+    body.set('channel', Slack.getChannelId(event.channel.id))
+    body.set('text', airdropText([], name, expiresAt))
+    if (ctx.threadTs) body.set('thread_ts', ctx.threadTs)
+    body.set('unfurl_links', 'false')
+    body.set('unfurl_media', 'false')
+    const response = await getSlack().withBotToken(installation.botToken, () =>
+      fetch(`${env.SLACK_API_URL}/chat.postMessage`, {
+        body,
+        headers: { authorization: `Bearer ${installation.botToken}` },
+        method: 'POST',
+      }),
+    )
+    const json = z.parse(
+      z.object({
+        error: z.string().optional(),
+        ok: z.boolean().optional(),
+      }),
+      await response.json(),
+    )
+    if (!json.ok) throw Slack.slackApiError('chat.postMessage', json.error)
+  },
   async raffle(event, ctx) {
     if (Slack.isDMChannelId(event.channel.id)) {
       await postPrivateReply(event, event.user, 'Raffles can only be opened in channels.')
@@ -2096,6 +2250,7 @@ const handlers = {
 >
 
 const commandNames = [
+  'airdrop',
   'balance',
   'config',
   'connect',
@@ -2109,6 +2264,7 @@ const commandNames = [
 ] as const
 const commandPattern = new RegExp(`^(${commandNames.join('|')})(?:\\s+([\\s\\S]*))?$`)
 const actionNames = [
+  'airdrop_claim',
   'config_edit',
   'connect_cancel',
   'confirm_cancel',
@@ -4780,6 +4936,284 @@ async function postSlackInsufficientFunds(event: TipEvent, ctx: HandlerContext, 
     event.user.userId,
     body,
     { threadTs: ctx.threadTs },
+  )
+}
+
+async function handleAirdropClaimPayment(
+  event: TipEvent,
+  ctx: HandlerContext,
+  options: {
+    botUserId?: string
+    channelId: string
+    interactionId: string
+    messageTs?: string
+    providerId: string
+  },
+) {
+  if (!options.botUserId) {
+    await postPrivateReply(event, event.user, 'Claim not sent. Tipbot is not ready.')
+    return false
+  }
+
+  const workspace = await ctx.db
+    .selectFrom('workspace')
+    .selectAll()
+    .where('provider', '=', ctx.provider.type)
+    .where('provider_id', '=', ctx.provider.id)
+    .executeTakeFirst()
+  if (!workspace) {
+    await postPrivateReply(
+      event,
+      event.user,
+      'Tipbot not configured for this workspace. Reinstall Tipbot and try again.',
+    )
+    return false
+  }
+
+  const tokenAddress = Address.checksum(
+    workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+  )
+  const amount = await (async () => {
+    // Charge up to $0.01, but if the wallet has less, claim with the current token balance.
+    const sender = await ctx.db
+      .selectFrom('member')
+      .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+      .innerJoin('account', 'account.id', 'provider_identity.account_id')
+      .select('account.address')
+      .where('member.workspace_id', '=', workspace.id)
+      .where('member.provider_user_id', '=', event.user.userId)
+      .executeTakeFirst()
+    if (!sender) return null
+    const balance = await Actions.token.getBalance(
+      createClient({
+        chain: Tempo.getChain(workspace.chain_id),
+        transport: http(Tempo.getRpcUrl(env, workspace.chain_id)),
+      }),
+      {
+        account: sender.address as Address.Address,
+        token: tokenAddress as Address.Address,
+      },
+    )
+    return balance < BigInt(airdropClaimAmount) ? Number(balance) : airdropClaimAmount
+  })()
+  if (amount === null) {
+    await postConnectLink(event, ctx)
+    return false
+  }
+  if (amount <= 0) {
+    await postPrivateReply(event, event.user, 'Not eligible for airdrop. Sorry :(', {
+      threadTs: ctx.threadTs,
+    })
+    return false
+  }
+
+  await ensureAirdropRecipient(ctx.db, workspace, options.botUserId)
+  const result = await Tip.handleTipRequest(env, {
+    amount,
+    idempotencyKey: `airdrop_claim:${options.providerId}:${options.channelId}:${options.messageTs ?? options.interactionId}:${event.user.userId}`,
+    memo: null,
+    provider: 'slack',
+    providerChannelId: options.channelId,
+    providerId: options.providerId,
+    providerThreadId: ctx.threadTs,
+    recipientProviderUserId: options.botUserId,
+    senderProviderUserId: event.user.userId,
+    source: 'command',
+    tokenAddress,
+    workspaceProviderId: options.providerId,
+  })
+  if (result.ok && result.status === 'duplicate') {
+    await postPrivateReply(event, event.user, 'Not eligible for airdrop. Sorry :(', {
+      threadTs: ctx.threadTs,
+    })
+    return false
+  }
+  if (result.ok && result.status !== 'queued') return true
+  if (!result.ok && result.code === 'confirmation_required' && result.confirmUrl) {
+    await postPrivateReply(event, event.user, 'Not eligible for airdrop. Sorry :(', {
+      threadTs: ctx.threadTs,
+    })
+    return false
+  }
+  if (
+    !result.ok &&
+    (result.code === 'sender_unconnected' || result.code === 'missing_sender_access_key')
+  ) {
+    await postConnectLink(event, ctx)
+    return false
+  }
+  if (!result.ok && result.code === 'insufficient_funds') {
+    await postSlackInsufficientFunds(event, ctx, ctx.threadTs)
+    return false
+  }
+  await postPrivateReply(
+    event,
+    event.user,
+    !result.ok ? (result.message ?? 'Claim not sent.') : 'Claim not sent.',
+    { threadTs: ctx.threadTs },
+  )
+  return false
+}
+
+async function ensureAirdropRecipient(
+  db: DB.Type,
+  workspace: DB_gen.Selectable.workspace,
+  botUserId: string,
+) {
+  const privateKey = Tempo.getFeePayerPrivateKey(env, workspace.chain_id)
+  if (!privateKey) throw new Error('Tipbot recipient wallet is not configured.')
+
+  const now = new Date().toISOString()
+  const address = TempoAccount.fromSecp256k1(privateKey).address
+  await db
+    .insertInto('account')
+    .values({ created_at: now, id: Nanoid.generate(), address, updated_at: now })
+    .onConflict((oc) => oc.column('address').doNothing())
+    .execute()
+  const account = await db
+    .selectFrom('account')
+    .select('id')
+    .where('address', '=', address)
+    .executeTakeFirstOrThrow()
+  await db
+    .insertInto('provider_identity')
+    .values({
+      account_id: account.id,
+      created_at: now,
+      display_name: 'Tipbot',
+      id: Nanoid.generate(),
+      metadata: null,
+      provider: workspace.provider,
+      provider_global_user_id: null,
+      provider_user_id: botUserId,
+      provider_workspace_id: workspace.provider_id,
+      real_name: 'Tipbot',
+      updated_at: now,
+    })
+    .execute()
+    .catch((error) => {
+      if (!isUniqueConstraintError(error)) throw error
+    })
+  const identity = await db
+    .selectFrom('provider_identity')
+    .select('id')
+    .where('provider', '=', workspace.provider)
+    .where('provider_workspace_id', '=', workspace.provider_id)
+    .where('provider_user_id', '=', botUserId)
+    .executeTakeFirstOrThrow()
+  await db
+    .updateTable('provider_identity')
+    .set({ account_id: account.id, updated_at: now })
+    .where('id', '=', identity.id)
+    .execute()
+  await db
+    .insertInto('member')
+    .values({
+      created_at: now,
+      id: Nanoid.generate(),
+      login: 'tipbot',
+      name: 'Tipbot',
+      provider_identity_id: identity.id,
+      provider_user_id: botUserId,
+      updated_at: now,
+      workspace_id: workspace.id,
+    })
+    .onConflict((oc) => oc.columns(['workspace_id', 'provider_user_id']).doNothing())
+    .execute()
+  await db
+    .updateTable('member')
+    .set({ provider_identity_id: identity.id, updated_at: now })
+    .where('workspace_id', '=', workspace.id)
+    .where('provider_user_id', '=', botUserId)
+    .execute()
+}
+
+async function updateAirdropMessage(
+  providerId: string,
+  channelId: string,
+  messageTs: string,
+  name: string,
+  expiresAt: string,
+  claimedProviderUserIds: string[],
+) {
+  const installation = await getSlack().getInstallation(providerId)
+  if (!installation) throw new Error('Tipbot app not installed for this workspace.')
+
+  const uniqueClaimedProviderUserIds = [...new Set(claimedProviderUserIds)]
+  const body = new URLSearchParams()
+  body.set('blocks', JSON.stringify(airdropBlocks(uniqueClaimedProviderUserIds, name, expiresAt)))
+  body.set('channel', channelId)
+  body.set('text', airdropText(uniqueClaimedProviderUserIds, name, expiresAt))
+  body.set('ts', messageTs)
+  body.set('unfurl_links', 'false')
+  body.set('unfurl_media', 'false')
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/chat.update`, {
+      body,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok) throw Slack.slackApiError('chat.update', json.error)
+}
+
+const airdropDurationMs = 5 * 60 * 1000 // 5 minutes
+const airdropClaimAmount = 10_000 // $0.01
+
+function airdropBlocks(claimedProviderUserIds: string[], name: string, expiresAt: string) {
+  return [
+    {
+      text: { text: `You qualified for the ${escapeSlackMrkdwn(name)} airdrop!`, type: 'mrkdwn' },
+      type: 'section',
+    },
+    {
+      text: { text: `*Ends:* ${airdropCountdownText(expiresAt)}`, type: 'mrkdwn' },
+      type: 'section',
+    },
+    {
+      text: { text: airdropClaimedText(claimedProviderUserIds), type: 'mrkdwn' },
+      type: 'section',
+    },
+    {
+      elements: [
+        {
+          action_id: 'airdrop_claim',
+          style: 'primary',
+          text: { text: 'Claim', type: 'plain_text' },
+          type: 'button',
+          value: JSON.stringify({ expiresAt, name }),
+        },
+      ],
+      type: 'actions',
+    },
+  ]
+}
+
+function airdropCountdownText(expiresAt: string) {
+  const date = new Date(expiresAt)
+  return `<!date^${Math.floor(date.getTime() / 1000)}^{date_short_pretty} {time}|${date.toISOString()}>`
+}
+
+function airdropClaimedText(claimedProviderUserIds: string[]) {
+  return claimedProviderUserIds.length
+    ? `*Claimed:* ${claimedProviderUserIds.map((providerUserId) => `<@${providerUserId}>`).join(' ')}`
+    : '*Claimed:* No one yet'
+}
+
+function airdropText(claimedProviderUserIds: string[], name: string, expiresAt: string) {
+  return `You qualified for the ${escapeSlackMrkdwn(name)} airdrop!\nEnds: ${airdropCountdownText(expiresAt)}\n${airdropClaimedText(claimedProviderUserIds)}\nClaim with Tipbot.`
+}
+
+function escapeSlackMrkdwn(value: string) {
+  return value.replace(/[<>&]/g, (char) =>
+    char === '<' ? '&lt;' : char === '>' ? '&gt;' : '&amp;',
   )
 }
 

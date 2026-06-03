@@ -78,6 +78,274 @@ beforeEach(async () => {
   })
 })
 
+test('/tip airdrop posts a claim message and unconnected claim opens connect link', async () => {
+  const response = await postSlashCommand('airdrop Tempo Launch')
+
+  expect(response.status).toBe(200)
+  await expectSlackMessage('You qualified for the Tempo Launch airdrop!')
+  await expectSlackMessage('Claim with Tipbot')
+  await expectSlackMessage('Ends: <!date^')
+  await expectSlackMessage('*Claimed:* No one yet')
+  const messageTs = await findSlackMessageTs('You qualified for the Tempo Launch airdrop!')
+  const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+  const message = history.messages?.find((message) => message.ts === messageTs)
+  const expiresAtSeconds = message?.text?.match(/<!date\^(\d+)\^/)?.[1]
+  expect(Number(expiresAtSeconds) * 1000).toBeGreaterThan(Date.now() + 4 * 60 * 1000) // 4 minutes
+  expect(Number(expiresAtSeconds) * 1000).toBeLessThan(Date.now() + 6 * 60 * 1000) // 6 minutes
+
+  const clickResponse = await postSlackInteraction({
+    actions: [{ action_id: 'airdrop_claim', type: 'button' }],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: messageTs,
+      type: 'message',
+    },
+    message: { text: message?.text, ts: messageTs },
+    team: { id: providerId },
+    trigger_id: 'airdrop-claim-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.memberUserId, name: Constants.slack.memberUserName },
+  })
+
+  expect(clickResponse.status).toBe(200)
+  await expectSlackMessageNotContaining(`*Claimed:* <@${Constants.slack.memberUserId}>`)
+  await expectSlackMessage('Link expires in 10 minutes.')
+})
+
+test('/tip airdrop claim sends $0.01 to Tipbot and updates claimed accounts', async () => {
+  await connectTipAccounts()
+  const response = await postSlashCommand('airdrop Tempo Launch')
+  const messageTs = await findSlackMessageTs('You qualified for the Tempo Launch airdrop!')
+  const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+  const message = history.messages?.find((message) => message.ts === messageTs)
+
+  const clickResponse = await postSlackInteraction({
+    actions: [{ action_id: 'airdrop_claim', type: 'button' }],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: messageTs,
+      type: 'message',
+    },
+    message: { text: message?.text, ts: messageTs },
+    team: { id: providerId },
+    trigger_id: 'airdrop-claim-connected-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.adminUserId, name: Constants.slack.adminUserName },
+  })
+  const tip = await db
+    .selectFrom('tip')
+    .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
+    .innerJoin('member as sender', 'sender.id', 'tip.sender_member_id')
+    .select([
+      'recipient.provider_user_id as recipient_provider_user_id',
+      'sender.provider_user_id as sender_provider_user_id',
+      'tip.amount',
+      'tip.confirmed_at',
+    ])
+    .where('tip.idempotency_key', 'like', `airdrop_claim:${providerId}:%`)
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(clickResponse.status).toBe(200)
+  expect(tip).toMatchObject({
+    amount: 10_000,
+    confirmed_at: expect.any(String),
+    recipient_provider_user_id: Constants.slack.botUserId,
+    sender_provider_user_id: Constants.slack.adminUserId,
+  })
+  await expectSlackMessage(`*Claimed:* <@${Constants.slack.adminUserId}>`)
+  await expectSlackMessageNotContaining('Claim sent $0.01 to Tipbot.')
+
+  const updatedHistory = await slack.conversations.history({ channel: Constants.slack.channelId })
+  const updatedMessage = updatedHistory.messages?.find((message) => message.ts === messageTs)
+  const secondClickResponse = await postSlackInteraction({
+    actions: [{ action_id: 'airdrop_claim', type: 'button' }],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: messageTs,
+      type: 'message',
+    },
+    message: { text: updatedMessage?.text, ts: messageTs },
+    team: { id: providerId },
+    trigger_id: 'airdrop-claim-connected-trigger-repeat',
+    type: 'block_actions',
+    user: { id: Constants.slack.adminUserId, name: Constants.slack.adminUserName },
+  })
+  const tips = await db
+    .selectFrom('tip')
+    .select('id')
+    .where('idempotency_key', 'like', `airdrop_claim:${providerId}:%`)
+    .execute()
+
+  expect(secondClickResponse.status).toBe(200)
+  expect(tips).toHaveLength(1)
+  await expectSlackMessage('Not eligible for airdrop. Sorry :(')
+})
+
+test('/tip airdrop claim fails after the airdrop ends', async () => {
+  await connectTipAccounts()
+
+  const clickResponse = await postSlackInteraction({
+    actions: [
+      {
+        action_id: 'airdrop_claim',
+        type: 'button',
+        value: JSON.stringify({
+          expiresAt: new Date(Date.now() - 1000).toISOString(), // 1 second ago
+          name: 'Tempo Launch',
+        }),
+      },
+    ],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: '1700000031.000000',
+      type: 'message',
+    },
+    message: {
+      text: 'You qualified for the Tempo Launch airdrop!\n*Claimed:* No one yet',
+      ts: '1700000031.000000',
+    },
+    team: { id: providerId },
+    trigger_id: 'airdrop-claim-expired-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.adminUserId, name: Constants.slack.adminUserName },
+  })
+  const tips = await db
+    .selectFrom('tip')
+    .select('id')
+    .where('idempotency_key', 'like', `airdrop_claim:${providerId}:%`)
+    .execute()
+
+  expect(clickResponse.status).toBe(200)
+  expect(tips).toEqual([])
+  await expectSlackMessage('Not eligible for airdrop. Sorry :(')
+})
+
+test('/tip airdrop claim sends available balance when below $0.01', async () => {
+  const workspace = await db
+    .selectFrom('workspace')
+    .selectAll()
+    .where('provider_id', '=', providerId)
+    .executeTakeFirstOrThrow()
+  const root = Account.fromSecp256k1(
+    '0x3333333333333333333333333333333333333333333333333333333333333333',
+  )
+  const account = await findOrCreateAccount(root.address)
+  await Actions.token.mintSync(
+    createClient({
+      chain: Tempo.getChain(Tempo.chainLookup.localnet),
+      transport: http(Tempo.getRpcUrl(env, Tempo.chainLookup.localnet)),
+    }),
+    {
+      account: Account.fromSecp256k1(env.FEE_PAYER_PRIVATE_KEY_TESTNET),
+      amount: parseUnits('0.005', 6),
+      to: root.address,
+      token: Tempo.addressLookup.pathUsd,
+    },
+  )
+  await insertMember({
+    account_id: account.id,
+    provider_user_id: Constants.slack.memberUserId,
+    workspace_id: workspace.id,
+  })
+  await insertReusableAccessKey({ accountId: account.id, root })
+  await postSlashCommand('airdrop Tempo Launch')
+  const messageTs = await findSlackMessageTs('You qualified for the Tempo Launch airdrop!')
+  const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+  const message = history.messages?.find((message) => message.ts === messageTs)
+
+  const clickResponse = await postSlackInteraction({
+    actions: [{ action_id: 'airdrop_claim', type: 'button' }],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: messageTs,
+      type: 'message',
+    },
+    message: { text: message?.text, ts: messageTs },
+    team: { id: providerId },
+    trigger_id: 'airdrop-claim-low-balance-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.memberUserId, name: Constants.slack.memberUserName },
+  })
+  const tip = await db
+    .selectFrom('tip')
+    .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
+    .innerJoin('member as sender', 'sender.id', 'tip.sender_member_id')
+    .select([
+      'recipient.provider_user_id as recipient_provider_user_id',
+      'sender.provider_user_id as sender_provider_user_id',
+      'tip.amount',
+      'tip.confirmed_at',
+    ])
+    .where('tip.idempotency_key', 'like', `airdrop_claim:${providerId}:%`)
+    .executeTakeFirstOrThrow()
+
+  expect(clickResponse.status).toBe(200)
+  expect(tip).toMatchObject({
+    amount: 5_000,
+    confirmed_at: expect.any(String),
+    recipient_provider_user_id: Constants.slack.botUserId,
+    sender_provider_user_id: Constants.slack.memberUserId,
+  })
+  await expectSlackMessage(`*Claimed:* <@${Constants.slack.memberUserId}>`)
+  await expectSlackMessageNotContaining('Claim sent $0.005 to Tipbot.')
+})
+
+test('/tip airdrop claim rejects zero-balance accounts as ineligible', async () => {
+  const workspace = await db
+    .selectFrom('workspace')
+    .selectAll()
+    .where('provider_id', '=', providerId)
+    .executeTakeFirstOrThrow()
+  const root = Account.fromSecp256k1(
+    '0x4444444444444444444444444444444444444444444444444444444444444444',
+  )
+  const account = await findOrCreateAccount(root.address)
+  await insertMember({
+    account_id: account.id,
+    provider_user_id: Constants.slack.memberUserId,
+    workspace_id: workspace.id,
+  })
+  await insertReusableAccessKey({ accountId: account.id, root })
+  await postSlashCommand('airdrop Tempo Launch')
+  const messageTs = await findSlackMessageTs('You qualified for the Tempo Launch airdrop!')
+  const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+  const message = history.messages?.find((message) => message.ts === messageTs)
+
+  const clickResponse = await postSlackInteraction({
+    actions: [{ action_id: 'airdrop_claim', type: 'button' }],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: messageTs,
+      type: 'message',
+    },
+    message: { text: message?.text, ts: messageTs },
+    team: { id: providerId },
+    trigger_id: 'airdrop-claim-zero-balance-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.memberUserId, name: Constants.slack.memberUserName },
+  })
+  const tips = await db
+    .selectFrom('tip')
+    .select('id')
+    .where('idempotency_key', 'like', `airdrop_claim:${providerId}:%`)
+    .execute()
+
+  expect(clickResponse.status).toBe(200)
+  expect(tips).toEqual([])
+  await expectSlackMessageNotContaining(`*Claimed:* <@${Constants.slack.memberUserId}>`)
+  await expectSlackMessageNotContaining(
+    'Claim recorded. No payment sent because your wallet has no balance.',
+  )
+  await expectSlackMessage('Not eligible for airdrop. Sorry :(')
+})
+
 describe('/tip @account', () => {
   test('sends tip', async () => {
     await connectTipAccounts()
@@ -1969,6 +2237,34 @@ test('@Tipbot mention supports jar command', async () => {
   expect(tipAsk).toEqual({ memo: 'lunch', provider_user_id: Constants.slack.adminUserId })
   await expectSlackMessage(`<@${Constants.slack.adminUserId}> opened a tip jar for lunch`)
   await expectSlackMessage('[💸 $0.001] [💵 $0.01] [💰 $0.10]')
+})
+
+test('@Tipbot mention supports airdrop command', async () => {
+  const messageTs = `1700000029.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> airdrop`,
+  })
+
+  expect(response.status).toBe(200)
+  await expectSlackMessage('You qualified for the Tipbot airdrop!')
+  await expectSlackMessage('Claim with Tipbot')
+  await expectSlackMessage('Ends: <!date^')
+  await expectSlackMessage('*Claimed:* No one yet')
+})
+
+test('@Tipbot mention supports custom airdrop name', async () => {
+  const messageTs = `1700000029.${Nanoid.generate().slice(0, 6)}`
+
+  const response = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> airdrop Tempo Launch`,
+  })
+
+  expect(response.status).toBe(200)
+  await expectSlackMessage('You qualified for the Tempo Launch airdrop!')
+  await expectSlackMessage('Ends: <!date^')
 })
 
 test('@Tipbot mention supports jar for account command', async () => {
@@ -6962,12 +7258,14 @@ describe('/tip help', () => {
     await expectSlackMessageNotContaining('Tipbot commands')
     await expectSlackMessage('/tip @account [amount] [token] [for memo]')
     await expectSlackMessage('/tip @account')
+    await expectSlackMessageNotContaining('/tip airdrop')
     await expectSlackMessage('/tip @account for coffee')
     await expectSlackMessage('/tip @account 0.005')
     await expectSlackMessage('/tip @account 0.005 for coffee')
     await expectSlackMessage('/tip @account 0.005 USDC')
     await expectSlackMessage('/tip @account 0.005 USDC for coffee')
     await expectSlackMessage('@Tipbot @account')
+    await expectSlackMessageNotContaining('@Tipbot airdrop')
     await expectSlackMessage('@Tipbot @account for coffee')
     await expectSlackMessage('@Tipbot @account 0.005 for coffee')
     await expectSlackMessage(':money_with_wings: / :dollar: / :moneybag:')
