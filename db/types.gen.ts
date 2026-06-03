@@ -295,7 +295,6 @@ type tip_raffle = {
   created_at: k.Generated<string>
   creator_member_id: string
   ended_at: string | null
-  ending_soon_notified_at: string | null
   ends_at: string
   failed_ticket_count: k.Generated<number>
   id: string

@@ -278,7 +278,6 @@ export const tip_raffle = z.object({
   created_at: z.string(),
   creator_member_id: z.string(),
   ended_at: z.string().nullable(),
-  ending_soon_notified_at: z.string().nullable(),
   ends_at: z.string(),
   failed_ticket_count: z.number(),
   id: z.string(),
