@@ -466,7 +466,7 @@ jobs:
           APP_ID: ${{ steps.slack.outputs.app_id }}
           SLACK_CONFIG_ACCESS_TOKEN: ${{ steps.slack_token.outputs.token }}
         run: |
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5; do
             RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.icon.set \
               -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
               -H "Content-Type: application/x-www-form-urlencoded" \
@@ -474,14 +474,12 @@ jobs:
               --data-urlencode "url=https://${PREVIEW_HOST}/tipbot-preview.png")
             OK=$(echo "$RESPONSE" | jq -r '.ok')
             ERROR=$(echo "$RESPONSE" | jq -r '.error // empty')
-            if [ "$OK" = "true" ] || [ "$ERROR" != "internal_error" ] || [ "$attempt" = "3" ]; then break; fi
-            sleep 5 # 5 seconds
+            if [ "$OK" = "true" ]; then exit 0; fi
+            if [ "$ERROR" != "internal_error" ] && [ "$ERROR" != "icon_not_accessible" ]; then break; fi
+            sleep 10 # 10 seconds
           done
-          OK=$(echo "$RESPONSE" | jq -r '.ok')
-          if [ "$OK" != "true" ]; then
-            echo "$RESPONSE" | jq '{ok,error,errors}'
-            exit 1
-          fi
+          echo "::warning::Slack preview icon could not be set; continuing preview deploy."
+          echo "$RESPONSE" | jq '{ok,error,errors}'
 
       - name: Seed preview workspace
         id: seed
