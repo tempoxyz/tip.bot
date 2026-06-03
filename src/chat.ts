@@ -3823,13 +3823,15 @@ export async function closeExpiredTipRaffles() {
     .execute()
   for (const row of staleMessageRows)
     await updateTipRaffleMessage(row.provider_id, { tipRaffleId: row.id }).catch(async (error) => {
+      if ((error as { code?: unknown }).code === 'message_not_found') {
+        await db
+          .updateTable('tip_raffle')
+          .set({ updated_at: new Date().toISOString() })
+          .where('id', '=', row.id)
+          .execute()
+        return
+      }
       console.error('Failed to update ended tip raffle message:', row.id, error)
-      if ((error as { code?: unknown }).code !== 'message_not_found') return
-      await db
-        .updateTable('tip_raffle')
-        .set({ updated_at: new Date().toISOString() })
-        .where('id', '=', row.id)
-        .execute()
     })
 }
 
