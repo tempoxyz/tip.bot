@@ -3545,7 +3545,7 @@ function parseCountdownDuration(text: string) {
 function countdownMessage(countdown: CountdownState) {
   const remainingMs = Math.max(0, countdown.endsAt - Date.now())
   const remainingSeconds = Math.ceil(remainingMs / 1000)
-  const text = `⏲️ ${(() => {
+  const remainingText = (() => {
     // Seconds-only timers are easiest to scan as a bare number.
     if (countdown.durationMs < countdownMinuteMs) return String(remainingSeconds)
 
@@ -3564,7 +3564,10 @@ function countdownMessage(countdown: CountdownState) {
     return `${String(Math.floor(remainingSeconds / 60)).padStart(2, '0')}:${String(
       remainingSeconds % 60,
     ).padStart(2, '0')}`
-  })()}`
+  })()
+  const text = `⏲️ ${remainingText}${
+    remainingSeconds === 0 ? ` (${remainingText} timer ended)` : ''
+  }`
   return {
     blocks: [
       {
