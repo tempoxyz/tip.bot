@@ -2077,6 +2077,12 @@ test('/tip raffle create modal posts raffle message', async () => {
   await expectSlackMessage(`<@${Constants.slack.adminUserId}> opened a raffle: team lunch`)
   await expectSlackMessage('Ticket: $0.01')
   await expectSlackMessage('Tickets: 0')
+  const history = await slack.conversations.history({ channel: Constants.slack.channelId })
+  const message = history.messages?.find((message) =>
+    message.text?.includes('opened a raffle: team lunch'),
+  )
+  expect(JSON.stringify(message?.blocks)).toContain('"action_id":"tip_raffle_buy_100"')
+  expect(JSON.stringify(message?.blocks)).toContain('"text":"Buy 100"')
 })
 
 test('/tip raffle buy button records tickets and updates message', async () => {
@@ -2091,9 +2097,9 @@ test('/tip raffle buy button records tickets and updates message', async () => {
   const response = await postSlackInteraction({
     actions: [
       {
-        action_id: 'tip_raffle_buy_5',
+        action_id: 'tip_raffle_buy_100',
         type: 'button',
-        value: JSON.stringify({ nonce: 'buy-five', tipRaffleId: tipRaffle.id }),
+        value: JSON.stringify({ nonce: 'buy-one-hundred', tipRaffleId: tipRaffle.id }),
       },
     ],
     channel: { id: Constants.slack.channelId },
@@ -2104,7 +2110,7 @@ test('/tip raffle buy button records tickets and updates message', async () => {
     },
     message: { ts: tipRaffle.provider_message_ts },
     team: { id: providerId },
-    trigger_id: 'tip-raffle-buy-5-trigger',
+    trigger_id: 'tip-raffle-buy-100-trigger',
     type: 'block_actions',
     user: { id: Constants.slack.adminUserId, name: Constants.slack.adminUserName },
   })
@@ -2118,12 +2124,12 @@ test('/tip raffle buy button records tickets and updates message', async () => {
   expect(response.status).toBe(200)
   expect(ticket).toEqual({
     provider_user_id: Constants.slack.adminUserId,
-    ticket_count: 5,
+    ticket_count: 100,
   })
-  await expectSlackMessage('Pot: $0.005')
-  await expectSlackMessage('Ticket: $0.001 · Tickets: 5')
+  await expectSlackMessage('Pot: $0.10')
+  await expectSlackMessage('Ticket: $0.001 · Tickets: 100')
   const history = await slack.conversations.history({ channel: Constants.slack.channelId })
-  const message = history.messages?.find((message) => message.text?.includes('Pot: $0.005'))
+  const message = history.messages?.find((message) => message.text?.includes('Pot: $0.10'))
   expect(message?.text).toMatch(/Ends:[\s\S]*Entrants:[\s\S]*Ticket:/)
 })
 
