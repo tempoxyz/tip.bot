@@ -335,7 +335,8 @@ test('/tip airdrop claim fails after the airdrop ends even with pot remaining', 
   expect(clickResponse.status).toBe(200)
   expect(tips).toEqual([])
   expect(updatedAirdrop).toEqual({ claimed_amount: 0, status: 'ended' })
-  await expectSlackMessage('Not eligible for airdrop. Sorry :(')
+  await expectSlackMessage('Ended · Pot: $0.02 left of $0.02')
+  await expectSlackMessageNotContaining('Not eligible for airdrop. Sorry :(')
 })
 
 test('/tip airdrop cron closes expired airdrop and updates message', async () => {
@@ -420,7 +421,36 @@ test('/tip airdrop claim fails after pot is depleted', async () => {
 
   expect(clickResponse.status).toBe(200)
   expect(tips).toEqual([])
-  await expectSlackMessage('Not eligible for airdrop. Sorry :(')
+  await expectSlackMessageNotContaining('Not eligible for airdrop. Sorry :(')
+})
+
+test('/tip airdrop claim closes airdrop when creator payment cannot be sent', async () => {
+  await connectTipAccounts()
+  await postSlackInteraction(createAirdropViewSubmissionPayload())
+  const tipAirdrop = await db
+    .selectFrom('tip_airdrop')
+    .selectAll()
+    .where('provider_id', '=', providerId)
+    .executeTakeFirstOrThrow()
+  await db.deleteFrom('access_key').execute()
+
+  const clickResponse = await postSlackInteraction(
+    createAirdropClaimPayload(tipAirdrop, {
+      userId: Constants.slack.memberUserId,
+      userName: Constants.slack.memberUserName,
+    }),
+  )
+  const updatedAirdrop = await db
+    .selectFrom('tip_airdrop')
+    .select(['ended_at', 'status'])
+    .where('id', '=', tipAirdrop.id)
+    .executeTakeFirstOrThrow()
+
+  expect(clickResponse.status).toBe(200)
+  expect(updatedAirdrop.status).toBe('ended')
+  expect(updatedAirdrop.ended_at).toEqual(expect.any(String))
+  await expectSlackMessage('Ended · Pot: $0.02 left of $0.02')
+  await expectSlackMessageNotContaining('Not eligible for airdrop. Sorry :(')
 })
 
 describe('/tip @account', () => {

@@ -446,25 +446,29 @@ const actions = {
       .executeTakeFirst()
     if (!tipAirdrop) return
 
+    const closeAirdrop = async () => {
+      const now = new Date().toISOString()
+      await ctx.db
+        .updateTable('tip_airdrop')
+        .set({ ended_at: now, status: 'ended', updated_at: now })
+        .where('id', '=', tipAirdrop.id)
+        .where('status', '=', 'open')
+        .execute()
+      if (raw.message?.ts)
+        await updateAirdropMessage(raw.team.id, channelId, raw.message.ts, tipAirdrop.id).catch(
+          (error) => {
+            console.error('Failed to update Slack airdrop message:', error)
+          },
+        )
+    }
+
     const remainingAmount = tipAirdrop.total_amount - tipAirdrop.claimed_amount
     if (
       tipAirdrop.status !== 'open' ||
       Date.parse(tipAirdrop.ends_at) <= Date.now() ||
       remainingAmount <= 0
     ) {
-      await postPrivateReply(tipEvent, event.user, 'Not eligible for airdrop. Sorry :(', {
-        threadTs: ctx.threadTs,
-      })
-      if (tipAirdrop.status === 'open')
-        await ctx.db
-          .updateTable('tip_airdrop')
-          .set({
-            ended_at: new Date().toISOString(),
-            status: 'ended',
-            updated_at: new Date().toISOString(),
-          })
-          .where('id', '=', tipAirdrop.id)
-          .execute()
+      await closeAirdrop()
       return
     }
 
@@ -495,9 +499,7 @@ const actions = {
     })
     if (result.ok && result.status === 'duplicate') return
     if (!result.ok) {
-      await postPrivateReply(tipEvent, event.user, 'Not eligible for airdrop. Sorry :(', {
-        threadTs: ctx.threadTs,
-      })
+      await closeAirdrop()
       return
     }
 
@@ -520,9 +522,13 @@ const actions = {
     await ctx.db
       .updateTable('tip_airdrop')
       .set({
-        claimed_amount: tipAirdrop.claimed_amount + amount,
-        ended_at: tipAirdrop.claimed_amount + amount >= tipAirdrop.total_amount ? now : null,
-        status: tipAirdrop.claimed_amount + amount >= tipAirdrop.total_amount ? 'ended' : 'open',
+        claimed_amount: sql<number>`min("total_amount", "claimed_amount" + ${amount})`,
+        ended_at: sql<
+          string | null
+        >`case when "claimed_amount" + ${amount} >= "total_amount" then ${now} else null end`,
+        status: sql<
+          DB_gen.Selectable.tip_airdrop['status']
+        >`case when "claimed_amount" + ${amount} >= "total_amount" then 'ended' else 'open' end`,
         updated_at: now,
       })
       .where('id', '=', tipAirdrop.id)
