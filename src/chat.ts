@@ -472,7 +472,7 @@ const actions = {
       ]
     })()
     if (claimedProviderUserIds.includes(event.user.userId)) {
-      await postPrivateReply(tipEvent, event.user, 'Not eligible for airdrop. Sorry :(', {
+      await postPrivateReply(tipEvent, event.user, 'Already claimed!', {
         threadTs: ctx.threadTs,
       })
       return
@@ -5023,7 +5023,7 @@ async function handleAirdropClaimPayment(
     workspaceProviderId: options.providerId,
   })
   if (result.ok && result.status === 'duplicate') {
-    await postPrivateReply(event, event.user, 'Not eligible for airdrop. Sorry :(', {
+    await postPrivateReply(event, event.user, 'Already claimed!', {
       threadTs: ctx.threadTs,
     })
     return false

@@ -183,7 +183,7 @@ test('/tip airdrop claim sends $0.01 to Tipbot and updates claimed accounts', as
 
   expect(secondClickResponse.status).toBe(200)
   expect(tips).toHaveLength(1)
-  await expectSlackMessage('Not eligible for airdrop. Sorry :(')
+  await expectSlackMessage('Already claimed!')
 })
 
 test('/tip airdrop claim fails after the airdrop ends', async () => {
