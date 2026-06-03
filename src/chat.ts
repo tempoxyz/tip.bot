@@ -412,6 +412,7 @@ const actions = {
       .select([
         'requester.provider_user_id as requester_provider_user_id',
         'tip_ask.beneficiary_provider_user_id',
+        'tip_ask.beneficiary_provider_workspace_id',
         'tip_ask.chain_id',
         'tip_ask.closed_at',
         'tip_ask.creator_fee_basis_points',
@@ -442,6 +443,8 @@ const actions = {
       return
     }
 
+    const amount = tipAskAmount(tipAsk, payload.data.reaction)
+    const feeAmount = Math.floor((amount * tipAsk.creator_fee_basis_points) / 10_000)
     const tipEvent = {
       channel: getChat().channel(`slack:${tipAsk.provider_channel_id}`),
       user: event.user,
@@ -462,7 +465,10 @@ const actions = {
       ? `${idempotencyKey}:beneficiary`
       : idempotencyKey
     const result = await Tip.handleTipRequest(env, {
-      amount: tipAskAmount(tipAsk, payload.data.reaction),
+      amount,
+      ...(feeAmount > 0 && event.user.userId !== tipAsk.requester_provider_user_id
+        ? { confirmationAccessKeyLimit: amount + feeAmount }
+        : {}),
       idempotencyKey: beneficiaryIdempotencyKey,
       memo: tipAsk.memo,
       provider: 'slack',
@@ -474,6 +480,7 @@ const actions = {
       source: 'command',
       tokenAddress: tipAsk.token_address,
       workspaceProviderId: tipAsk.workspace_provider_id,
+      recipientProviderWorkspaceId: tipAsk.beneficiary_provider_workspace_id ?? undefined,
     }).catch(
       (error) =>
         ({
@@ -484,25 +491,11 @@ const actions = {
     )
 
     if (result.ok) {
-      const feeAmount = Math.floor(
-        (tipAskAmount(tipAsk, payload.data.reaction) * tipAsk.creator_fee_basis_points) / 10_000,
-      )
-      if (feeAmount > 0 && event.user.userId !== tipAsk.requester_provider_user_id)
-        await Tip.handleTipRequest(env, {
-          amount: feeAmount,
-          idempotencyKey: `${idempotencyKey}:creator_fee`,
-          memo: tipAsk.memo,
-          provider: 'slack',
-          providerChannelId: tipAsk.provider_channel_id,
-          providerId: tipAsk.provider_id,
-          recipientProviderUserId: tipAsk.requester_provider_user_id,
-          senderProviderUserId: event.user.userId,
-          source: 'command',
-          tokenAddress: tipAsk.token_address,
-          workspaceProviderId: tipAsk.workspace_provider_id,
-        }).catch((error) => {
-          console.error('Failed to send tip jar creator fee:', error)
-        })
+      await sendTipAskCreatorFee(tipAsk.provider_id, {
+        idempotencyKey,
+      }).catch((error) => {
+        console.error('Failed to send tip jar creator fee:', error)
+      })
       await updateTipAskMessage(tipAsk.provider_id, { tipAskId: tipAsk.id }).catch((error) => {
         console.error('Failed to update Slack tip jar:', error)
       })
@@ -1074,6 +1067,12 @@ const handlers = {
   },
   async jar(event, ctx) {
     const parsed = (() => {
+      const beneficiaryAfterFor = ctx.text.match(/^for\s+<@([A-Z0-9_]+)(?:\|[^>]+)?>\s*([\s\S]*)$/i)
+      if (beneficiaryAfterFor)
+        return {
+          beneficiaryProviderUserId: beneficiaryAfterFor[1]!,
+          memo: beneficiaryAfterFor[2]?.trim() || null,
+        }
       const beneficiary = ctx.text.match(/^<@([A-Z0-9_]+)(?:\|[^>]+)?>\s*(?:for\s+([\s\S]*))?$/i)
       if (beneficiary)
         return {
@@ -1143,17 +1142,51 @@ const handlers = {
 
     const installation = await getSlack().getInstallation(ctx.provider.id)
     if (!installation) return
+    const beneficiary = await (async () => {
+      if (parsed.beneficiaryProviderUserId === event.user.userId) return null
+      const conversation = await Slack.getConversationInfo({
+        apiUrl: env.SLACK_API_URL,
+        botToken: installation.botToken,
+        channelId: event.channel.id,
+        withBotToken: (botToken, fn) => getSlack().withBotToken(botToken, fn),
+      })
+      if (!conversation.isShared) return { providerUserId: parsed.beneficiaryProviderUserId }
+      const resolvedRecipient = await resolveSlackConnectRecipient(
+        ctx,
+        conversation.teamIds,
+        { recipientProviderUserId: parsed.beneficiaryProviderUserId },
+        { allowUnconnected: true },
+      )
+      if ('message' in resolvedRecipient) {
+        await postPrivateReply(
+          event,
+          event.user,
+          resolvedRecipient.message ??
+            'Tip jar not opened. Recipient could not be resolved safely.',
+        )
+        return false
+      }
+      return {
+        providerUserId:
+          resolvedRecipient.value?.recipientProviderUserId ?? parsed.beneficiaryProviderUserId,
+        providerWorkspaceId: resolvedRecipient.value?.recipientProviderWorkspaceId,
+      }
+    })()
+    if (beneficiary === false) return
     const now = new Date().toISOString()
     const tipAskId = Nanoid.generate()
+    const beneficiaryProviderUserId = beneficiary?.providerUserId ?? event.user.userId
     const tipAsk = {
       beneficiary_provider_user_id:
-        parsed.beneficiaryProviderUserId === event.user.userId
+        beneficiaryProviderUserId === event.user.userId ? null : beneficiaryProviderUserId,
+      beneficiary_provider_workspace_id:
+        beneficiaryProviderUserId === event.user.userId
           ? null
-          : parsed.beneficiaryProviderUserId,
+          : (beneficiary?.providerWorkspaceId ?? null),
       chain_id: workspace.chain_id,
       closed_at: null,
       created_at: now,
-      creator_fee_basis_points: parsed.beneficiaryProviderUserId === event.user.userId ? 0 : 100,
+      creator_fee_basis_points: beneficiaryProviderUserId === event.user.userId ? 0 : 100,
       dollar_amount: amounts.dollar,
       id: tipAskId,
       memo: parsed.memo,
@@ -3565,6 +3598,59 @@ export async function updateTipAskMessage(providerId: string, options: { tipAskI
     .set({ updated_at: new Date().toISOString() })
     .where('id', '=', tipAsk.id)
     .execute()
+}
+
+export async function sendTipAskCreatorFee(
+  providerId: string,
+  options: { idempotencyKey: string },
+) {
+  const idempotencyKey = options.idempotencyKey.replace(/:(?:beneficiary|creator_fee)$/, '')
+  const parts = idempotencyKey.split(':')
+  const reaction = z.enum(tipAskReactionNames).safeParse(parts[2])
+  const senderProviderUserId = parts[3]
+  if (parts[0] !== 'tip_ask' || !parts[1] || !reaction.success || !senderProviderUserId) return
+
+  const db = DB.create(env.DB)
+  const tipAsk = await db
+    .selectFrom('tip_ask')
+    .innerJoin('workspace', 'workspace.id', 'tip_ask.workspace_id')
+    .innerJoin('member as requester', 'requester.id', 'tip_ask.requester_member_id')
+    .select([
+      'requester.provider_user_id as requester_provider_user_id',
+      'tip_ask.creator_fee_basis_points',
+      'tip_ask.dollar_amount',
+      'tip_ask.id',
+      'tip_ask.memo',
+      'tip_ask.money_with_wings_amount',
+      'tip_ask.moneybag_amount',
+      'tip_ask.provider_channel_id',
+      'tip_ask.provider_id',
+      'tip_ask.token_address',
+      'workspace.provider_id as workspace_provider_id',
+    ])
+    .where('tip_ask.id', '=', parts[1])
+    .where('tip_ask.provider_id', '=', providerId)
+    .executeTakeFirst()
+  if (!tipAsk || senderProviderUserId === tipAsk.requester_provider_user_id) return
+
+  const amount = Math.floor(
+    (tipAskAmount(tipAsk, reaction.data) * tipAsk.creator_fee_basis_points) / 10_000,
+  )
+  if (amount <= 0) return
+
+  await Tip.handleTipRequest(env, {
+    amount,
+    idempotencyKey: `${idempotencyKey}:creator_fee`,
+    memo: tipAsk.memo,
+    provider: 'slack',
+    providerChannelId: tipAsk.provider_channel_id,
+    providerId: tipAsk.provider_id,
+    recipientProviderUserId: tipAsk.requester_provider_user_id,
+    senderProviderUserId,
+    source: 'command',
+    tokenAddress: tipAsk.token_address,
+    workspaceProviderId: tipAsk.workspace_provider_id,
+  })
 }
 
 export async function updateTipRaffleMessage(providerId: string, options: { tipRaffleId: string }) {

@@ -218,6 +218,7 @@ type tip = {
 
 type tip_ask = {
   beneficiary_provider_user_id: string | null
+  beneficiary_provider_workspace_id: string | null
   chain_id: number
   closed_at: string | null
   created_at: k.Generated<string>

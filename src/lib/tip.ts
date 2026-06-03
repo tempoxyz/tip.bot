@@ -151,6 +151,7 @@ export async function handleTipRequest(
   env: Env,
   input: {
     amount?: number
+    confirmationAccessKeyLimit?: number
     idempotencyKey: string
     memo: string | null
     provider: Database.Selectable.workspace['provider']
@@ -278,9 +279,16 @@ export async function handleTipRequest(
     return { accessKey, trackedAccessKeyLimitExceeded }
   })()
   if (!accessKey)
-    return await createConfirmationRequired(env, input, executionWorkspace, amount, tokenAddress, {
-      kind: trackedAccessKeyLimitExceeded ? 'onetime_payment' : undefined,
-    })
+    return await createConfirmationRequired(
+      env,
+      input,
+      executionWorkspace,
+      amount,
+      tokenAddress,
+      input.confirmationAccessKeyLimit
+        ? { accessKeyLimit: BigInt(input.confirmationAccessKeyLimit), kind: 'reusable_access_key' }
+        : { kind: trackedAccessKeyLimitExceeded ? 'onetime_payment' : undefined },
+    )
 
   if (!recipient)
     return await createPendingTip(env, db, {

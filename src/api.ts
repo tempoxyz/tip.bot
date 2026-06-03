@@ -782,6 +782,22 @@ export const api = new Hono<{
           )
         else if (
           result.status === 'sent' &&
+          Chat.isTipAskIdempotencyKey(data.payload.idempotencyKey)
+        )
+          c.executionCtx.waitUntil(
+            (async () => {
+              await Chat.getChat().initialize()
+              await Chat.sendTipAskCreatorFee(data.payload.providerId, {
+                idempotencyKey: data.payload.idempotencyKey,
+              })
+              const tipAskId = Chat.getTipAskIdFromIdempotencyKey(data.payload.idempotencyKey)
+              if (tipAskId) await Chat.updateTipAskMessage(data.payload.providerId, { tipAskId })
+            })().catch((error) => {
+              console.error('Failed to settle Slack tip jar after confirmation:', error)
+            }),
+          )
+        else if (
+          result.status === 'sent' &&
           Chat.isReceiptBoostIdempotencyKey(data.payload.idempotencyKey)
         )
           c.executionCtx.waitUntil(
@@ -898,19 +914,6 @@ export const api = new Hono<{
               }
             })().catch((error) => {
               console.error('Failed to post Slack boost receipt after confirmation:', error)
-            }),
-          )
-        else if (
-          result.status === 'sent' &&
-          Chat.isTipAskIdempotencyKey(data.payload.idempotencyKey)
-        )
-          c.executionCtx.waitUntil(
-            (async () => {
-              const tipAskId = Chat.getTipAskIdFromIdempotencyKey(data.payload.idempotencyKey)
-              if (!tipAskId) return
-              await Chat.updateTipAskMessage(data.payload.providerId, { tipAskId })
-            })().catch((error) => {
-              console.error('Failed to update Slack tip jar after confirmation:', error)
             }),
           )
         else if (result.status === 'sent')

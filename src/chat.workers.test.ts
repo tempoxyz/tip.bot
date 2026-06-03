@@ -1530,6 +1530,7 @@ test('/tip jar for account sends beneficiary tip and creator fee', async () => {
   expect(response.status).toBe(200)
   expect(tipAsk).toMatchObject({
     beneficiary_provider_user_id: Constants.slack.memberUserId,
+    beneficiary_provider_workspace_id: null,
     creator_fee_basis_points: 100,
     memo: 'rehab',
     requester_member_id: creatorMember.id,
@@ -1709,6 +1710,82 @@ test('/tip jar for unconnected account queues beneficiary tip and pays creator f
     recipient_provider_user_id: Constants.slack.adminUserId,
   })
   await expectSlackMessage('1 tip · $0.01 total')
+})
+
+test('/tip jar for account approval requests enough access key allowance for creator fee', async () => {
+  const connected = await connectTipAccounts({
+    senderProviderUserId: Constants.slack.unconnectedUserId,
+  })
+  const creatorAccount = await factory.account.insert({
+    address: '0x0000000000000000000000000000000000000103',
+  })
+  await insertMember({
+    account_id: creatorAccount.id,
+    provider_user_id: Constants.slack.adminUserId,
+    workspace_id: connected.workspace.id,
+  })
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+  const response = await postSlashCommand(`jar for <@${Constants.slack.memberUserId}> rehab`)
+  const tipAsk = await db
+    .selectFrom('tip_ask')
+    .selectAll()
+    .where('workspace_id', '=', connected.workspace.id)
+    .executeTakeFirstOrThrow()
+  const tipAskPostMessageCall = fetchSpy.mock.calls.find((call) => {
+    const input = call[0]
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    const params = slackFetchBodyParams(call[1]?.body)
+    return url.endsWith('/chat.postMessage') && params.get('text')?.includes('opened a tip jar')
+  })
+  const blocks = JSON.parse(
+    slackFetchBodyParams(tipAskPostMessageCall?.[1]?.body).get('blocks') ?? '[]',
+  )
+  const dollarButton = blocks
+    .flatMap(
+      (block: { elements?: Array<{ action_id?: string; value?: string }> }) => block.elements ?? [],
+    )
+    .find((element: { action_id?: string }) => element.action_id === 'tip_ask_option_dollar')
+  const handleTipRequest = vi.spyOn(Tip, 'handleTipRequest').mockResolvedValue({
+    code: 'confirmation_required',
+    confirmUrl: `https://${env.HOST}/confirm/test-token`,
+    ok: false,
+  })
+
+  const clickResponse = await postSlackInteraction({
+    actions: [
+      {
+        action_id: 'tip_ask_option_dollar',
+        type: 'button',
+        value: dollarButton?.value,
+      },
+    ],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: tipAsk.provider_message_ts,
+      type: 'message',
+    },
+    message: { ts: tipAsk.provider_message_ts },
+    team: { id: providerId },
+    trigger_id: 'tip-ask-confirmation-required-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.unconnectedUserId, name: Constants.slack.unconnectedUserName },
+  })
+
+  expect(response.status).toBe(200)
+  expect(clickResponse.status).toBe(200)
+  expect(handleTipRequest).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.objectContaining({
+      amount: 10_000,
+      confirmationAccessKeyLimit: 10_100,
+      recipientProviderUserId: Constants.slack.memberUserId,
+      senderProviderUserId: Constants.slack.unconnectedUserId,
+    }),
+  )
+  await expectSlackMessage('Tipbot needs your approval to send this payment.')
+  handleTipRequest.mockRestore()
 })
 
 test('/tip jar requires the opener to be connected', async () => {
@@ -1985,6 +2062,7 @@ test('@Tipbot mention supports jar for account command', async () => {
     .select([
       'member.provider_user_id',
       'tip_ask.beneficiary_provider_user_id',
+      'tip_ask.beneficiary_provider_workspace_id',
       'tip_ask.creator_fee_basis_points',
       'tip_ask.memo',
     ])
@@ -1994,6 +2072,7 @@ test('@Tipbot mention supports jar for account command', async () => {
   expect(response.status).toBe(200)
   expect(tipAsk).toEqual({
     beneficiary_provider_user_id: Constants.slack.memberUserId,
+    beneficiary_provider_workspace_id: null,
     creator_fee_basis_points: 100,
     memo: 'rehab',
     provider_user_id: Constants.slack.adminUserId,
@@ -2001,6 +2080,105 @@ test('@Tipbot mention supports jar for account command', async () => {
   await expectSlackMessage(
     `<@${Constants.slack.adminUserId}> opened a tip jar for <@${Constants.slack.memberUserId}>'s rehab`,
   )
+})
+
+test('@Tipbot mention jar for Slack Connect account stores beneficiary workspace and tips it', async () => {
+  await deleteSlackConnectWorkspace()
+  await Chat.getSlack().setInstallation(Constants.slackConnect.teamId, {
+    botToken: Constants.slackConnect.teamBotToken,
+    botUserId: Constants.slackConnect.teamBotUserId,
+    teamName: Constants.slackConnect.teamName,
+  })
+  const connected = await connectTipAccounts({ recipient: false })
+  const connectWorkspace = await factory.workspace.insert({
+    chain_id: Tempo.chainLookup.localnet,
+    name: Constants.slackConnect.teamName,
+    provider_id: Constants.slackConnect.teamId,
+  })
+  await insertMember({
+    account_id: connected.recipientAccount.id,
+    provider_user_id: Constants.slackConnect.userId,
+    workspace_id: connectWorkspace.id,
+  })
+  const channelId = await getSlackConnectChannelId()
+  const messageTs = `1700000030.${Nanoid.generate().slice(0, 6)}`
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  await expectSlackConnectEmulator(channelId)
+
+  const response = await postSlackAppMention({
+    channelId,
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> jar for <@${Constants.slackConnect.userId}> rehab`,
+  })
+  const tipAsk = await db
+    .selectFrom('tip_ask')
+    .selectAll()
+    .where('workspace_id', '=', connected.workspace.id)
+    .executeTakeFirstOrThrow()
+  const tipAskPostMessageCall = fetchSpy.mock.calls.find((call) => {
+    const input = call[0]
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    const params = slackFetchBodyParams(call[1]?.body)
+    return url.endsWith('/chat.postMessage') && params.get('text')?.includes('opened a tip jar')
+  })
+  const blocks = JSON.parse(
+    slackFetchBodyParams(tipAskPostMessageCall?.[1]?.body).get('blocks') ?? '[]',
+  )
+  const dollarButton = blocks
+    .flatMap(
+      (block: { elements?: Array<{ action_id?: string; value?: string }> }) => block.elements ?? [],
+    )
+    .find((element: { action_id?: string }) => element.action_id === 'tip_ask_option_dollar')
+  const handleTipRequest = vi.spyOn(Tip, 'handleTipRequest').mockResolvedValue({
+    amount: '0.01',
+    chainId: connected.workspace.chain_id,
+    feePayer: 'sponsor',
+    isDefaultToken: true,
+    memo: 'rehab',
+    ok: true,
+    recipientProviderUserId: Constants.slackConnect.userId,
+    senderProviderUserId: Constants.slack.memberUserId,
+    status: 'sent',
+    tokenCurrency: 'usd',
+    tokenSymbol: 'USDC',
+    transactionHash: `0x${'1'.repeat(64)}`,
+  })
+
+  const clickResponse = await postSlackInteraction({
+    actions: [
+      {
+        action_id: 'tip_ask_option_dollar',
+        type: 'button',
+        value: dollarButton?.value,
+      },
+    ],
+    channel: { id: channelId },
+    container: {
+      channel_id: channelId,
+      message_ts: tipAsk.provider_message_ts,
+      type: 'message',
+    },
+    message: { ts: tipAsk.provider_message_ts },
+    team: { id: providerId },
+    trigger_id: 'tip-ask-slack-connect-dollar-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.memberUserId, name: Constants.slack.memberUserName },
+  })
+
+  expect(response.status).toBe(200)
+  expect(clickResponse.status).toBe(200)
+  expect(tipAsk).toMatchObject({
+    beneficiary_provider_user_id: Constants.slackConnect.userId,
+    beneficiary_provider_workspace_id: Constants.slackConnect.teamId,
+  })
+  expect(handleTipRequest).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.objectContaining({
+      recipientProviderUserId: Constants.slackConnect.userId,
+      recipientProviderWorkspaceId: Constants.slackConnect.teamId,
+    }),
+  )
+  handleTipRequest.mockRestore()
 })
 
 test('@Tipbot thread mention posts jar in the source thread', async () => {
