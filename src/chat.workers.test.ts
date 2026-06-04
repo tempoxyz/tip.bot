@@ -2386,6 +2386,63 @@ test('@Tipbot mention supports jar command', async () => {
   await expectSlackMessage('[💸 $0.001] [💵 $0.01] [💰 $0.10]')
 })
 
+test('@Tipbot mention adds original message images to tip jars', async () => {
+  await connectTipAccounts()
+  const messageTs = `1700000029.${Nanoid.generate().slice(0, 6)}`
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+  const response = await postSlackAppMention({
+    files: [
+      {
+        filetype: 'png',
+        id: 'Ftipjarimage',
+        mimetype: 'image/png',
+        title: 'Jar photo',
+      },
+      {
+        filetype: 'pdf',
+        id: 'Fnotimage',
+        mimetype: 'application/pdf',
+        title: 'Not image',
+      },
+    ],
+    messageTs,
+    subtype: 'file_share',
+    text: `<@${Constants.slack.botUserId}> jar for lunch`,
+  })
+  const imageFiles = await db
+    .selectFrom('tip_ask_image_file')
+    .select(['alt_text', 'position', 'provider_file_id', 'tip_ask_id'])
+    .execute()
+  const tipAskPostMessageCall = fetchSpy.mock.calls.find((call) => {
+    const input = call[0]
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    const params = slackFetchBodyParams(call[1]?.body)
+    return (
+      url.endsWith('/chat.postMessage') &&
+      params.get('text')?.includes(`<@${Constants.slack.adminUserId}> opened a tip jar for lunch`)
+    )
+  })
+  const blocks = JSON.parse(
+    slackFetchBodyParams(tipAskPostMessageCall?.[1]?.body).get('blocks') ?? '[]',
+  )
+
+  expect(response.status).toBe(200)
+  expect(imageFiles).toEqual([
+    {
+      alt_text: 'Jar photo',
+      position: 0,
+      provider_file_id: 'Ftipjarimage',
+      tip_ask_id: expect.any(String),
+    },
+  ])
+  expect(blocks).toContainEqual({
+    alt_text: 'Jar photo',
+    slack_file: { id: 'Ftipjarimage' },
+    type: 'image',
+  })
+})
+
 test('@Tipbot mention supports airdrop command', async () => {
   await connectTipAccounts()
   const messageTs = `1700000029.${Nanoid.generate().slice(0, 6)}`
@@ -8893,6 +8950,13 @@ async function postSlackAppMention(options: {
   channelId?: string
   contextTeamId?: string
   eventId?: string
+  files?: Array<{
+    filetype?: string
+    id?: string
+    mimetype?: string
+    name?: string
+    title?: string
+  }>
   messageTs: string
   subtype?: string
   teamId?: string
@@ -8908,6 +8972,7 @@ async function postSlackAppMention(options: {
       channel_type: 'channel',
       ...(options.contextTeamId ? { context_team_id: options.contextTeamId } : {}),
       event_ts: options.messageTs,
+      ...(options.files ? { files: options.files } : {}),
       ...(options.subtype ? { subtype: options.subtype } : {}),
       team: options.teamId ?? providerId,
       text: options.text,

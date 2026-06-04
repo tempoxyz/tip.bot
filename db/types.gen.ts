@@ -19,6 +19,7 @@ export interface DB {
   tip_airdrop: tip_airdrop
   tip_airdrop_claim: tip_airdrop_claim
   tip_ask: tip_ask
+  tip_ask_image_file: tip_ask_image_file
   tip_batch: tip_batch
   tip_raffle: tip_raffle
   tip_raffle_ticket: tip_raffle_ticket
@@ -268,6 +269,16 @@ type tip_ask = {
   workspace_id: string
 }
 
+type tip_ask_image_file = {
+  alt_text: string
+  created_at: k.Generated<string>
+  id: string
+  position: number
+  provider_file_id: string
+  tip_ask_id: string
+  updated_at: k.Generated<string>
+}
+
 type tip_batch = {
   amount_each: number
   created_at: k.Generated<string>
@@ -364,6 +375,7 @@ export declare namespace DB {
   type tip_airdrop = k.Selectable<DB['tip_airdrop']>
   type tip_airdrop_claim = k.Selectable<DB['tip_airdrop_claim']>
   type tip_ask = k.Selectable<DB['tip_ask']>
+  type tip_ask_image_file = k.Selectable<DB['tip_ask_image_file']>
   type tip_batch = k.Selectable<DB['tip_batch']>
   type tip_raffle = k.Selectable<DB['tip_raffle']>
   type tip_raffle_ticket = k.Selectable<DB['tip_raffle_ticket']>
@@ -387,6 +399,7 @@ export declare namespace DB {
     type tip_airdrop = k.Insertable<DB['tip_airdrop']>
     type tip_airdrop_claim = k.Insertable<DB['tip_airdrop_claim']>
     type tip_ask = k.Insertable<DB['tip_ask']>
+    type tip_ask_image_file = k.Insertable<DB['tip_ask_image_file']>
     type tip_batch = k.Insertable<DB['tip_batch']>
     type tip_raffle = k.Insertable<DB['tip_raffle']>
     type tip_raffle_ticket = k.Insertable<DB['tip_raffle_ticket']>
@@ -411,6 +424,7 @@ export declare namespace DB {
     type tip_airdrop = k.Selectable<DB['tip_airdrop']>
     type tip_airdrop_claim = k.Selectable<DB['tip_airdrop_claim']>
     type tip_ask = k.Selectable<DB['tip_ask']>
+    type tip_ask_image_file = k.Selectable<DB['tip_ask_image_file']>
     type tip_batch = k.Selectable<DB['tip_batch']>
     type tip_raffle = k.Selectable<DB['tip_raffle']>
     type tip_raffle_ticket = k.Selectable<DB['tip_raffle_ticket']>
@@ -435,6 +449,7 @@ export declare namespace DB {
     type tip_airdrop = k.Updateable<DB['tip_airdrop']>
     type tip_airdrop_claim = k.Updateable<DB['tip_airdrop_claim']>
     type tip_ask = k.Updateable<DB['tip_ask']>
+    type tip_ask_image_file = k.Updateable<DB['tip_ask_image_file']>
     type tip_batch = k.Updateable<DB['tip_batch']>
     type tip_raffle = k.Updateable<DB['tip_raffle']>
     type tip_raffle_ticket = k.Updateable<DB['tip_raffle_ticket']>

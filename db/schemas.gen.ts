@@ -244,6 +244,16 @@ export const tip_ask = z.object({
   workspace_id: z.string(),
 })
 
+export const tip_ask_image_file = z.object({
+  alt_text: z.string(),
+  created_at: z.string(),
+  id: z.string(),
+  position: z.number(),
+  provider_file_id: z.string(),
+  tip_ask_id: z.string(),
+  updated_at: z.string(),
+})
+
 export const tip_batch = z.object({
   amount_each: z.number(),
   created_at: z.string(),
@@ -347,6 +357,7 @@ export const db = {
   tip_airdrop: tip_airdrop,
   tip_airdrop_claim: tip_airdrop_claim,
   tip_ask: tip_ask,
+  tip_ask_image_file: tip_ask_image_file,
   tip_batch: tip_batch,
   tip_raffle: tip_raffle,
   tip_raffle_ticket: tip_raffle_ticket,
