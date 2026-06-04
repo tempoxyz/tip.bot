@@ -3244,6 +3244,35 @@ async function handleSlackReactionTip(event: Slack.ReactionEvent, context: React
         }
       }
 
+      const originalMentionBatch = await db
+        .selectFrom('tip_batch')
+        .select(['id', 'provider_thread_id', 'workspace_id'])
+        .where('workspace_id', '=', workspace.id)
+        .where(
+          'idempotency_key',
+          '=',
+          `mention:${provider.id}:${event.item.channel}:${event.item.ts}`,
+        )
+        .executeTakeFirst()
+      if (originalMentionBatch) {
+        const threadTs =
+          originalMentionBatch.provider_thread_id ?? message.thread_ts ?? event.item.ts
+        await recordSlackReceiptMessage(db, {
+          channelId: event.item.channel,
+          messageTs: event.item.ts,
+          threadTs,
+          tipBatchId: originalMentionBatch.id,
+          workspaceId: originalMentionBatch.workspace_id,
+        })
+        return {
+          channelId: event.item.channel,
+          messageTs: event.item.ts,
+          threadTs,
+          tipBatchId: originalMentionBatch.id,
+          workspaceId: originalMentionBatch.workspace_id,
+        }
+      }
+
       // Backfill older receipts by parsing the receipt link from the Slack message.
       if (
         message?.text?.startsWith('Reaction tips received in this thread:') ||

@@ -6057,6 +6057,104 @@ test('plus reaction boosts a receipt', async () => {
   })
 }, 20_000) // 20 seconds
 
+test('plus reaction boosts an original app mention tip message', async () => {
+  await connectTipAccounts()
+
+  const messageTs = `1700000041.${Nanoid.generate().slice(0, 6)}`
+  const tipResponse = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}>`,
+  })
+  const boostResponse = await postSlackReaction({
+    itemUserId: Constants.slack.adminUserId,
+    messageTs,
+    reaction: '+',
+    userId: Constants.slack.adminUserId,
+  })
+
+  expect(tipResponse.status).toBe(200)
+  expect(boostResponse.status).toBe(200)
+  await expect
+    .poll(
+      () =>
+        db
+          .selectFrom('tip_batch')
+          .innerJoin('workspace', 'workspace.id', 'tip_batch.workspace_id')
+          .select([
+            'tip_batch.amount_each',
+            'tip_batch.idempotency_key',
+            'tip_batch.recipient_count',
+            'tip_batch.status',
+          ])
+          .where('workspace.provider_id', '=', providerId)
+          .where('tip_batch.idempotency_key', 'like', `${Chat.receiptBoostIdempotencyPrefix}%`)
+          .executeTakeFirst(),
+      { timeout: 10_000 }, // 10 seconds
+    )
+    .toMatchObject({
+      amount_each: 1000,
+      idempotency_key: expect.stringMatching(/^boost:[^:]/),
+      recipient_count: 1,
+      status: 'confirmed',
+    })
+  await expectSlackThreadMessage(messageTs, `<@${Constants.slack.adminUserId}> boosted`, {
+    wait: true,
+  })
+}, 20_000) // 20 seconds
+
+test('plus reaction on original app mention reports unconnected sender', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  const handleTipBatchRequest = vi.spyOn(Tip, 'handleTipBatchRequest')
+  await connectTipAccounts()
+
+  const messageTs = `1700000041.${Nanoid.generate().slice(0, 6)}`
+  const tipResponse = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}>`,
+  })
+  const boostResponse = await postSlackReaction({
+    itemUserId: Constants.slack.adminUserId,
+    messageTs,
+    reaction: '+',
+    userId: unconnectedProviderUserId,
+  })
+
+  expect(tipResponse.status).toBe(200)
+  expect(boostResponse.status).toBe(200)
+  expect(handleTipBatchRequest).not.toHaveBeenCalled()
+  await expectSlackPostEphemeralCall(fetchSpy, 'Boost not sent. Connect to Tipbot')
+  fetchSpy.mockRestore()
+}, 20_000) // 20 seconds
+
+test('plus reaction on original app mention reports insufficient funds', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  await connectTipAccounts()
+
+  const messageTs = `1700000041.${Nanoid.generate().slice(0, 6)}`
+  const tipResponse = await postSlackAppMention({
+    messageTs,
+    text: `<@${Constants.slack.botUserId}> <@${Constants.slack.memberUserId}>`,
+  })
+  vi.spyOn(Tip, 'handleTipBatchRequest').mockResolvedValue({
+    code: 'insufficient_funds',
+    ok: false,
+  })
+  const boostResponse = await postSlackReaction({
+    itemUserId: Constants.slack.adminUserId,
+    messageTs,
+    reaction: '+',
+    userId: Constants.slack.adminUserId,
+  })
+
+  expect(tipResponse.status).toBe(200)
+  expect(boostResponse.status).toBe(200)
+  await expectSlackPostEphemeralCall(
+    fetchSpy,
+    'Boost not sent. Your wallet has insufficient funds.',
+  )
+  fetchSpy.mockRestore()
+}, 20_000) // 20 seconds
+
 test('receipt boost aggregates threaded receipt boosts', async () => {
   const connected = await connectTipAccounts()
   const secondRecipientAccount = await factory.account.insert({})
