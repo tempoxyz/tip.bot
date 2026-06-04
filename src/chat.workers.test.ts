@@ -2603,6 +2603,61 @@ test('/tip raffle buy button records tickets and updates message', async () => {
   expect(message?.text).toMatch(/Ends:[\s\S]*Entrants:[\s\S]*Ticket:/)
 })
 
+test('/tip raffle buy button uses raffle chain when workspace network changes after creation', async () => {
+  await connectTipAccounts()
+  await postSlackInteraction(createRaffleViewSubmissionPayload({ amount: '0.001' }))
+  const tipRaffle = await db
+    .selectFrom('tip_raffle')
+    .selectAll()
+    .where('provider_id', '=', providerId)
+    .executeTakeFirstOrThrow()
+  await db
+    .updateTable('workspace')
+    .set({ chain_id: Tempo.chainLookup.mainnet })
+    .where('id', '=', tipRaffle.workspace_id)
+    .execute()
+
+  const response = await postSlackInteraction({
+    actions: [
+      {
+        action_id: 'tip_raffle_buy_1',
+        type: 'button',
+        value: JSON.stringify({ nonce: 'buy-after-chain-change', tipRaffleId: tipRaffle.id }),
+      },
+    ],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: tipRaffle.provider_message_ts,
+      type: 'message',
+    },
+    message: { ts: tipRaffle.provider_message_ts },
+    team: { id: providerId },
+    trigger_id: 'tip-raffle-buy-chain-change-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.adminUserId, name: Constants.slack.adminUserName },
+  })
+  const ticket = await db
+    .selectFrom('tip_raffle_ticket')
+    .select(['ticket_count'])
+    .where('raffle_id', '=', tipRaffle.id)
+    .executeTakeFirstOrThrow()
+  const escrowTip = await db
+    .selectFrom('tip')
+    .select(['amount', 'chain_id'])
+    .where(
+      'idempotency_key',
+      '=',
+      `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:buy-after-chain-change`,
+    )
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(ticket.ticket_count).toBe(1)
+  expect(escrowTip).toEqual({ amount: 1000, chain_id: tipRaffle.chain_id })
+  await expectSlackMessageNotContaining('Ticket not bought. Try again.')
+})
+
 test('/tip raffle buy button does not record tickets when escrow payment fails', async () => {
   await connectTipAccounts()
   await postSlackInteraction(createRaffleViewSubmissionPayload({ amount: '0.001' }))
@@ -2677,6 +2732,52 @@ test('/tip raffle buy button offers refresh when reusable access key does not co
   expect(response.status).toBe(200)
   await expectSlackMessage('Link expires in 10 minutes')
   await expectSlackMessageNotContaining('Already connected')
+})
+
+test('/tip raffle buy button offers refresh when ticket payment requires confirmation', async () => {
+  await connectTipAccounts()
+  await postSlackInteraction(createRaffleViewSubmissionPayload({ amount: '0.001' }))
+  const tipRaffle = await db
+    .selectFrom('tip_raffle')
+    .selectAll()
+    .where('provider_id', '=', providerId)
+    .executeTakeFirstOrThrow()
+  vi.spyOn(Tip, 'handleTipRequest').mockResolvedValue({
+    code: 'confirmation_required',
+    confirmUrl: 'https://tip.bot/confirm/test',
+    ok: false,
+  })
+
+  const response = await postSlackInteraction({
+    actions: [
+      {
+        action_id: 'tip_raffle_buy_1',
+        type: 'button',
+        value: JSON.stringify({ nonce: 'buy-confirmation-required', tipRaffleId: tipRaffle.id }),
+      },
+    ],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: tipRaffle.provider_message_ts,
+      type: 'message',
+    },
+    message: { ts: tipRaffle.provider_message_ts },
+    team: { id: providerId },
+    trigger_id: 'tip-raffle-buy-confirmation-required-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.adminUserId, name: Constants.slack.adminUserName },
+  })
+  const ticket = await db
+    .selectFrom('tip_raffle_ticket')
+    .select('id')
+    .where('raffle_id', '=', tipRaffle.id)
+    .executeTakeFirst()
+
+  expect(response.status).toBe(200)
+  expect(ticket).toBeUndefined()
+  await expectSlackMessage('Link expires in 10 minutes')
+  await expectSlackMessageNotContaining('Ticket not bought. Try again.')
 })
 
 test('/tip raffle cron ends without winner when fewer than two buyers enter', async () => {
