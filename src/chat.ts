@@ -63,6 +63,17 @@ export function getChat() {
           .optional(),
         channel: z.string().min(1),
         context_team_id: z.string().min(1).nullable().optional(),
+        files: z
+          .array(
+            z.object({
+              filetype: z.string().optional(),
+              id: z.string().min(1).optional(),
+              mimetype: z.string().optional(),
+              name: z.string().optional(),
+              title: z.string().optional(),
+            }),
+          )
+          .optional(),
         subtype: z.string().min(1).optional(),
         team: z.string().min(1).optional(),
         team_id: z.string().min(1).optional(),
@@ -74,7 +85,8 @@ export function getChat() {
       }),
       message.raw,
     )
-    if (raw.subtype && !['reply_broadcast', 'thread_broadcast'].includes(raw.subtype)) return
+    if (raw.subtype && !['file_share', 'reply_broadcast', 'thread_broadcast'].includes(raw.subtype))
+      return
 
     const providerId = (() => {
       const mentioned = new Set(
@@ -199,6 +211,7 @@ export function getChat() {
       provider: { id: providerId, type: 'slack' },
       text: Slack.parseMentionTipText(mentionText) ?? '',
       threadTs: privateThreadTs,
+      tipAskImageFiles: slackTipAskImageFiles(raw.files),
     } satisfies HandlerContext
 
     if (mentionText.toLowerCase() === 'introduce yourself') {
@@ -1571,6 +1584,7 @@ const handlers = {
     } satisfies DB_gen.Insertable.tip_ask
     const message = await tipAskMessage(ctx.db, {
       ...tipAsk,
+      image_files: ctx.tipAskImageFiles ?? [],
       requester_provider_user_id: event.user.userId,
       workspace_default_token_address: workspace.default_token_address,
     })
@@ -1601,6 +1615,19 @@ const handlers = {
       .insertInto('tip_ask')
       .values({ ...tipAsk, provider_message_ts: json.ts })
       .execute()
+    if (ctx.tipAskImageFiles?.length)
+      await ctx.db
+        .insertInto('tip_ask_image_file')
+        .values(
+          ctx.tipAskImageFiles.map((imageFile, position) => ({
+            alt_text: imageFile.alt_text,
+            id: Nanoid.generate(),
+            position,
+            provider_file_id: imageFile.provider_file_id,
+            tip_ask_id: tipAskId,
+          })),
+        )
+        .execute()
     await postSlackEphemeral(
       ctx.provider.id,
       Slack.getChannelId(event.channel.id),
@@ -2529,6 +2556,7 @@ const modalSubmitNames = ['config_edit', 'tip_airdrop_create', 'tip_raffle_creat
 const tipAskIdempotencyPrefix = 'tip_ask:'
 const tipRaffleIdempotencyPrefix = 'tip_raffle:'
 const tipAskReactionNames = ['money_with_wings', 'dollar', 'moneybag'] as const
+const tipAskImageFileLimit = 5
 const tipAskReactions = [
   { emoji: '💸', name: 'money_with_wings' },
   { emoji: '💵', name: 'dollar' },
@@ -2573,6 +2601,7 @@ type HandlerContext = {
   settingsProviderId?: string
   text: string
   threadTs?: string
+  tipAskImageFiles?: TipAskImageFile[]
 }
 
 type ProviderContext = { id: string; type: 'slack' }
@@ -2607,9 +2636,12 @@ type TipAskMessageInput = Pick<
   | 'token_address'
   | 'chain_id'
 > & {
+  image_files: TipAskImageFile[]
   requester_provider_user_id: string
   workspace_default_token_address: string | null
 }
+
+type TipAskImageFile = Pick<DB_gen.Selectable.tip_ask_image_file, 'alt_text' | 'provider_file_id'>
 
 type TipAirdropMessageInput = Pick<
   DB_gen.Selectable.tip_airdrop,
@@ -3987,7 +4019,13 @@ export async function updateTipAskMessage(providerId: string, options: { tipAskI
   const installation = await getSlack().getInstallation(providerId)
   if (!installation) return
 
-  const message = await tipAskMessage(db, tipAsk)
+  const imageFiles = await db
+    .selectFrom('tip_ask_image_file')
+    .select(['alt_text', 'provider_file_id'])
+    .where('tip_ask_id', '=', tipAsk.id)
+    .orderBy('position', 'asc')
+    .execute()
+  const message = await tipAskMessage(db, { ...tipAsk, image_files: imageFiles })
   const body = new URLSearchParams()
   body.set('blocks', JSON.stringify(message.blocks))
   body.set('channel', tipAsk.provider_channel_id)
@@ -5021,6 +5059,11 @@ async function tipAskMessage(db: DB.Type, tipAsk: TipAskMessageInput) {
         },
         type: 'section',
       },
+      ...tipAsk.image_files.map((imageFile) => ({
+        alt_text: imageFile.alt_text,
+        slack_file: { id: imageFile.provider_file_id },
+        type: 'image',
+      })),
       ...(tipAsk.closed_at
         ? []
         : [
@@ -7362,6 +7405,30 @@ function configToken(workspace: DB_gen.Selectable.workspace) {
   return Tempo.getTokenMetadataFallback(
     workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
   )
+}
+
+function slackTipAskImageFiles(
+  files:
+    | Array<{
+        filetype?: string
+        id?: string
+        mimetype?: string
+        name?: string
+        title?: string
+      }>
+    | undefined,
+) {
+  return (files ?? [])
+    .filter((file) => {
+      if (!file.id) return false
+      if (['gif', 'jpeg', 'jpg', 'png'].includes(file.filetype ?? '')) return true
+      return ['image/gif', 'image/jpeg', 'image/png'].includes(file.mimetype ?? '')
+    })
+    .slice(0, tipAskImageFileLimit)
+    .map((file) => ({
+      alt_text: (file.title || file.name || 'Tip jar image').slice(0, 2000),
+      provider_file_id: file.id!,
+    }))
 }
 
 function workspaceTokenOptions(chainId?: number) {
