@@ -2515,17 +2515,78 @@ test('/tip raffle buy button records tickets and updates message', async () => {
     .select(['member.provider_user_id', 'tip_raffle_ticket.ticket_count'])
     .where('tip_raffle_ticket.raffle_id', '=', tipRaffle.id)
     .executeTakeFirstOrThrow()
+  const escrowTip = await db
+    .selectFrom('tip')
+    .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
+    .innerJoin('member as sender', 'sender.id', 'tip.sender_member_id')
+    .select([
+      'recipient.provider_user_id as recipient_provider_user_id',
+      'sender.provider_user_id as sender_provider_user_id',
+      'tip.amount',
+    ])
+    .where(
+      'tip.idempotency_key',
+      '=',
+      `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:buy-five`,
+    )
+    .executeTakeFirstOrThrow()
 
   expect(response.status).toBe(200)
   expect(ticket).toEqual({
     provider_user_id: Constants.slack.adminUserId,
     ticket_count: 5,
   })
+  expect(escrowTip).toEqual({
+    amount: 5000,
+    recipient_provider_user_id: Constants.slack.botUserId,
+    sender_provider_user_id: Constants.slack.adminUserId,
+  })
   await expectSlackMessage('Pot: $0.005')
   await expectSlackMessage('Ticket: $0.001 · Tickets: 5')
   const history = await slack.conversations.history({ channel: Constants.slack.channelId })
   const message = history.messages?.find((message) => message.text?.includes('Pot: $0.005'))
   expect(message?.text).toMatch(/Ends:[\s\S]*Entrants:[\s\S]*Ticket:/)
+})
+
+test('/tip raffle buy button does not record tickets when escrow payment fails', async () => {
+  await connectTipAccounts()
+  await postSlackInteraction(createRaffleViewSubmissionPayload({ amount: '0.001' }))
+  const tipRaffle = await db
+    .selectFrom('tip_raffle')
+    .selectAll()
+    .where('provider_id', '=', providerId)
+    .executeTakeFirstOrThrow()
+  vi.spyOn(Tip, 'handleTipRequest').mockResolvedValue({ code: 'insufficient_funds', ok: false })
+
+  const response = await postSlackInteraction({
+    actions: [
+      {
+        action_id: 'tip_raffle_buy_1',
+        type: 'button',
+        value: JSON.stringify({ nonce: 'failed-buy', tipRaffleId: tipRaffle.id }),
+      },
+    ],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: tipRaffle.provider_message_ts,
+      type: 'message',
+    },
+    message: { ts: tipRaffle.provider_message_ts },
+    team: { id: providerId },
+    trigger_id: 'tip-raffle-buy-failed-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.adminUserId, name: Constants.slack.adminUserName },
+  })
+  const ticket = await db
+    .selectFrom('tip_raffle_ticket')
+    .select('id')
+    .where('raffle_id', '=', tipRaffle.id)
+    .executeTakeFirst()
+
+  expect(response.status).toBe(200)
+  expect(ticket).toBeUndefined()
+  await expectSlackMessage('Ticket not bought. Your wallet has insufficient funds.')
 })
 
 test('/tip raffle buy button offers refresh when reusable access key does not cover raffle', async () => {
@@ -2655,6 +2716,107 @@ test('/tip raffle cron retries stale settling raffle', async () => {
   })
   await expectSlackMessage('Ended · No winner · 5 tickets')
 })
+
+test('/tip raffle cron reuses winner selected before stale settlement retry', async () => {
+  const connected = await connectTipAccounts()
+  if (!connected.recipientMember) throw new Error('Expected connected recipient.')
+
+  const recipientRoot = Account.fromSecp256k1(Constants.tip.recipientRootPrivateKey)
+  await insertReusableAccessKey({ accountId: connected.recipientAccount.id, root: recipientRoot })
+  await Actions.token.mintSync(
+    createClient({
+      chain: Tempo.getChain(Tempo.chainLookup.localnet),
+      transport: http(env.RPC_URL_TESTNET),
+    }),
+    {
+      account: Account.fromSecp256k1(env.FEE_PAYER_PRIVATE_KEY_TESTNET),
+      amount: parseUnits('1', 6),
+      to: recipientRoot.address,
+      token: Tempo.addressLookup.pathUsd,
+    },
+  )
+
+  await postSlackInteraction(createRaffleViewSubmissionPayload({ amount: '0.001' }))
+  const tipRaffle = await db
+    .selectFrom('tip_raffle')
+    .selectAll()
+    .where('provider_id', '=', providerId)
+    .executeTakeFirstOrThrow()
+  await db
+    .insertInto('tip_raffle_ticket')
+    .values([
+      {
+        buyer_member_id: connected.senderMember.id,
+        id: Nanoid.generate(),
+        idempotency_key: `test-raffle-ticket:${Nanoid.generate()}`,
+        raffle_id: tipRaffle.id,
+        ticket_count: 1,
+      },
+      {
+        buyer_member_id: connected.recipientMember.id,
+        id: Nanoid.generate(),
+        idempotency_key: `test-raffle-ticket:${Nanoid.generate()}`,
+        raffle_id: tipRaffle.id,
+        ticket_count: 1,
+      },
+    ])
+    .execute()
+  const orderedBuyers = [connected.senderMember.id, connected.recipientMember.id].sort()
+  const adminTicketIndex = orderedBuyers.indexOf(connected.senderMember.id)
+  const memberTicketIndex = orderedBuyers.indexOf(connected.recipientMember.id)
+  const staleAt = new Date(Date.now() - 11 * 60 * 1000).toISOString() // 11 minutes ago
+  await db
+    .updateTable('tip_raffle')
+    .set({
+      ends_at: new Date(Date.now() - 60 * 1000).toISOString(), // 1 minute ago
+      status: 'settling',
+      updated_at: staleAt,
+      winner_member_id: connected.senderMember.id,
+      winning_ticket_number: adminTicketIndex + 1,
+    })
+    .where('id', '=', tipRaffle.id)
+    .execute()
+
+  const getRandomValues = crypto.getRandomValues.bind(crypto)
+  const getRandomValuesSpy = vi.spyOn(crypto, 'getRandomValues').mockImplementation((array) => {
+    if (!(array instanceof Uint32Array) || array.length !== 1) return getRandomValues(array)
+    array[0] = memberTicketIndex
+    return array
+  })
+
+  await closeExpired(env, createExecutionContext())
+  const ended = await db
+    .selectFrom('tip_raffle')
+    .select(['settled_amount', 'status', 'winner_member_id', 'winning_ticket_number'])
+    .where('id', '=', tipRaffle.id)
+    .executeTakeFirstOrThrow()
+  const payout = await db
+    .selectFrom('tip')
+    .innerJoin('member as sender', 'sender.id', 'tip.sender_member_id')
+    .select(['amount', 'recipient_member_id', 'sender_member_id'])
+    .select('sender.provider_user_id as sender_provider_user_id')
+    .where('idempotency_key', '=', `tip_raffle:${tipRaffle.id}:payout`)
+    .executeTakeFirstOrThrow()
+
+  expect(
+    getRandomValuesSpy.mock.calls.some(
+      ([array]) => array instanceof Uint32Array && array.length === 1,
+    ),
+  ).toBe(false)
+  expect(ended).toEqual({
+    settled_amount: 2000,
+    status: 'ended',
+    winner_member_id: connected.senderMember.id,
+    winning_ticket_number: adminTicketIndex + 1,
+  })
+  expect(payout).toEqual({
+    amount: 2000,
+    recipient_member_id: connected.senderMember.id,
+    sender_member_id: expect.any(String),
+    sender_provider_user_id: Constants.slack.botUserId,
+  })
+  await expectSlackMessage(`Ended · Winner: <@${Constants.slack.adminUserId}>`)
+}, 20_000) // 20 seconds
 
 test('/tip raffle cron leaves fresh settling raffle in progress', async () => {
   await connectTipAccounts()
@@ -2815,9 +2977,10 @@ test('/tip raffle closes expired raffle and settles winner payout', async () => 
 
   const orderedBuyers = [connected.senderMember.id, connected.recipientMember.id].sort()
   const adminTicketIndex = orderedBuyers.indexOf(connected.senderMember.id)
+  const getRandomValues = crypto.getRandomValues.bind(crypto)
   const getRandomValuesSpy = vi.spyOn(crypto, 'getRandomValues').mockImplementation((array) => {
-    const values = array as Uint32Array
-    values[0] = adminTicketIndex
+    if (!(array instanceof Uint32Array) || array.length !== 1) return getRandomValues(array)
+    array[0] = adminTicketIndex
     return array
   })
 
@@ -2830,28 +2993,27 @@ test('/tip raffle closes expired raffle and settles winner payout', async () => 
     .executeTakeFirstOrThrow()
   const payout = await db
     .selectFrom('tip')
+    .innerJoin('member as sender', 'sender.id', 'tip.sender_member_id')
     .select(['amount', 'recipient_member_id', 'sender_member_id'])
-    .where(
-      'idempotency_key',
-      '=',
-      `tip_raffle:${tipRaffle.id}:settle:${connected.recipientMember.id}`,
-    )
+    .select('sender.provider_user_id as sender_provider_user_id')
+    .where('idempotency_key', '=', `tip_raffle:${tipRaffle.id}:payout`)
     .executeTakeFirstOrThrow()
 
   expect(ended).toEqual({
-    settled_amount: 1000,
+    settled_amount: 2000,
     status: 'ended',
     winner_member_id: connected.senderMember.id,
     winning_ticket_number: adminTicketIndex + 1,
   })
   expect(payout).toEqual({
-    amount: 1000,
+    amount: 2000,
     recipient_member_id: connected.senderMember.id,
-    sender_member_id: connected.recipientMember.id,
+    sender_member_id: expect.any(String),
+    sender_provider_user_id: Constants.slack.botUserId,
   })
   await expectSlackMessage(`Ended · Winner: <@${Constants.slack.adminUserId}>`)
-  await expectSlackMessage('Paid out: $0.001')
-  await expectSlackMessageNotContaining('Paid out: $0.001 / $0.001')
+  await expectSlackMessage('Paid out: $0.002')
+  await expectSlackMessageNotContaining('Paid out: $0.002 / $0.002')
   await expectSlackMessageNotContaining('Paid out: $0.001 / $0.002')
   await expectSlackMessage('Ticket: $0.001 · Tickets: 2')
   await expectSlackMessage(`<@${Constants.slack.adminUserId}> x1`)
@@ -2859,11 +3021,11 @@ test('/tip raffle closes expired raffle and settles winner payout', async () => 
   if (!tipRaffle.provider_message_ts) throw new Error('Expected raffle message timestamp.')
   await expectSlackThreadMessage(
     tipRaffle.provider_message_ts,
-    `<@${Constants.slack.memberUserId}> paid raffle winner <@${Constants.slack.adminUserId}> $0.001 for team lunch · Receipt`,
+    `<@${Constants.slack.botUserId}> paid raffle winner <@${Constants.slack.adminUserId}> $0.002 for team lunch · Receipt`,
   )
 }, 20_000) // 20 seconds
 
-test('/tip raffle reports failed settlement payments', async () => {
+test('/tip raffle pays escrowed pot even when a buyer cannot pay later', async () => {
   const connected = await connectTipAccounts()
   if (!connected.recipientMember) throw new Error('Expected connected recipient.')
 
@@ -2894,57 +3056,6 @@ test('/tip raffle reports failed settlement payments', async () => {
       ),
     )
     .execute()
-  const settlementBatchId = Nanoid.generate()
-  const settlementTipId = Nanoid.generate()
-  const settlementKey = `tip_raffle:${tipRaffle.id}:settle:${connected.senderMember.id}`
-  await db
-    .insertInto('tip_batch')
-    .values({
-      amount_each: 1000,
-      created_at: new Date().toISOString(),
-      failure_reason: null,
-      id: settlementBatchId,
-      idempotency_key: settlementKey,
-      memo: tipRaffle.memo,
-      provider: 'slack',
-      provider_channel_id: tipRaffle.provider_channel_id,
-      provider_id: providerId,
-      provider_thread_id: null,
-      recipient_count: 1,
-      sender_member_id: connected.senderMember.id,
-      source: 'command',
-      status: 'confirmed',
-      token_address: Tempo.addressLookup.pathUsd,
-      total_amount: 1000,
-      transaction_hash: `0x${Nanoid.generate().padEnd(64, '1').slice(0, 64)}`,
-      updated_at: new Date().toISOString(),
-      workspace_id: connected.workspace.id,
-    })
-    .execute()
-  await db
-    .insertInto('tip')
-    .values({
-      access_key_id: null,
-      amount: 1000,
-      batch_id: settlementBatchId,
-      chain_id: Tempo.chainLookup.localnet,
-      confirmed_at: new Date().toISOString(),
-      failed_at: null,
-      failure_reason: null,
-      id: settlementTipId,
-      idempotency_key: settlementKey,
-      memo: tipRaffle.memo,
-      recipient_id: connected.recipientAccount.id,
-      recipient_member_id: connected.recipientMember.id,
-      sender_id: connected.senderAccount.id,
-      sender_member_id: connected.senderMember.id,
-      sponsorship_memo: null,
-      token_address: Tempo.addressLookup.pathUsd,
-      transfer_log_index: null,
-      updated_at: new Date().toISOString(),
-      workspace_id: connected.workspace.id,
-    })
-    .execute()
   await db
     .updateTable('tip_raffle')
     .set({ ends_at: new Date(Date.now() - 60 * 1000).toISOString() }) // 1 minute ago
@@ -2957,9 +3068,10 @@ test('/tip raffle reports failed settlement payments', async () => {
     failedMember.id,
   ].sort()
   const memberTicketIndex = orderedBuyers.indexOf(connected.recipientMember.id)
+  const getRandomValues = crypto.getRandomValues.bind(crypto)
   const getRandomValuesSpy = vi.spyOn(crypto, 'getRandomValues').mockImplementation((array) => {
-    const values = array as Uint32Array
-    values[0] = memberTicketIndex
+    if (!(array instanceof Uint32Array) || array.length !== 1) return getRandomValues(array)
+    array[0] = memberTicketIndex
     return array
   })
 
@@ -2972,14 +3084,14 @@ test('/tip raffle reports failed settlement payments', async () => {
     .executeTakeFirstOrThrow()
 
   expect(ended).toEqual({
-    failed_ticket_count: 1,
-    settled_amount: 1000,
+    failed_ticket_count: 0,
+    settled_amount: 3000,
     status: 'ended',
     winner_member_id: connected.recipientMember.id,
   })
   await expectSlackMessage(`Ended · Winner: <@${Constants.slack.memberUserId}>`)
-  await expectSlackMessage('Paid out: $0.001 / $0.002')
-  await expectSlackMessage('1 ticket failed payment')
+  await expectSlackMessage('Paid out: $0.003')
+  await expectSlackMessageNotContaining('failed payment')
 }, 20_000) // 20 seconds
 
 test('@Tipbot mention connect link completion connects local workspace account', async () => {

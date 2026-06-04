@@ -14,8 +14,10 @@ import { createSlackAdapter } from '@chat-adapter/slack'
 import * as chat from 'chat'
 import { env } from 'cloudflare:workers'
 import { sql } from 'kysely'
-import { Address } from 'ox'
+import { Address, Hash, Hex } from 'ox'
 import { createClient, http } from 'viem'
+import { sendTransactionSync } from 'viem/actions'
+import { privateKeyToAccount } from 'viem/accounts'
 import { Actions } from 'viem/tempo'
 import { z } from 'zod'
 
@@ -4122,18 +4124,8 @@ async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount:
     return
   }
 
-  const buyer = await getConnectedSlackMember(db, tipRaffle.workspace_id, event.user.userId)
-  const existing = buyer
-    ? await db
-        .selectFrom('tip_raffle_ticket')
-        .select(sql<number>`coalesce(sum(ticket_count), 0)`.as('ticket_count'))
-        .where('raffle_id', '=', tipRaffle.id)
-        .where('buyer_member_id', '=', buyer.memberId)
-        .executeTakeFirst()
-    : null
-  const totalAmount = ((existing?.ticket_count ?? 0) + input.ticketCount) * tipRaffle.ticket_amount
   const accessKey = await Tip.checkReusableTipAccessKey(env, {
-    amount: totalAmount,
+    amount: input.ticketCount * tipRaffle.ticket_amount,
     chainId: tipRaffle.chain_id,
     memo: tipRaffle.memo,
     providerUserId: event.user.userId,
@@ -4165,6 +4157,43 @@ async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount:
   }
   const buyerMemberId = accessKey.memberId
   if (!buyerMemberId) return
+  const escrowMember = await ensureTipRaffleEscrowMember(db, {
+    chainId: tipRaffle.chain_id,
+    providerId: tipRaffle.provider_id,
+    workspaceId: tipRaffle.workspace_id,
+  })
+  const ticketIdempotencyKey = `${tipRaffleIdempotencyPrefix}${tipRaffle.id}:ticket:${event.user.userId}:${payload.data.nonce}`
+  const result = await Tip.handleTipRequest(env, {
+    amount: input.ticketCount * tipRaffle.ticket_amount,
+    idempotencyKey: ticketIdempotencyKey,
+    memo: tipRaffle.memo,
+    provider: 'slack',
+    providerChannelId: tipRaffle.provider_channel_id,
+    providerId: tipRaffle.provider_id,
+    recipientProviderUserId: escrowMember.providerUserId,
+    senderProviderUserId: event.user.userId,
+    source: 'command',
+    tokenAddress: tipRaffle.token_address,
+    workspaceProviderId: tipRaffle.provider_id,
+  }).catch(
+    (error) =>
+      ({
+        code: 'failed',
+        message: error instanceof Error ? error.message : 'Ticket payment failed.',
+        ok: false,
+      }) satisfies Tip.TipResult,
+  )
+  if (!result.ok) {
+    await postSlackEphemeral(
+      tipRaffle.provider_id,
+      raw.channel.id,
+      event.user.userId,
+      result.code === 'insufficient_funds'
+        ? 'Ticket not bought. Your wallet has insufficient funds.'
+        : 'Ticket not bought. Try again.',
+    )
+    return
+  }
 
   await db
     .insertInto('tip_raffle_ticket')
@@ -4172,7 +4201,7 @@ async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount:
       buyer_member_id: buyerMemberId,
       created_at: new Date().toISOString(),
       id: Nanoid.generate(),
-      idempotency_key: `${tipRaffleIdempotencyPrefix}${tipRaffle.id}:ticket:${event.user.userId}:${payload.data.nonce}`,
+      idempotency_key: ticketIdempotencyKey,
       raffle_id: tipRaffle.id,
       ticket_count: input.ticketCount,
       updated_at: new Date().toISOString(),
@@ -4206,13 +4235,21 @@ async function closeTipRaffle(db: DB.Type, tipRaffleId: string, providerId: stri
   const rows = await db
     .selectFrom('tip_raffle_ticket')
     .innerJoin('member as buyer', 'buyer.id', 'tip_raffle_ticket.buyer_member_id')
+    .innerJoin(
+      'provider_identity as buyer_identity',
+      'buyer_identity.id',
+      'buyer.provider_identity_id',
+    )
+    .innerJoin('account as buyer_account', 'buyer_account.id', 'buyer_identity.account_id')
     .select([
+      'buyer_account.address as buyer_account_address',
+      'buyer_account.id as buyer_account_id',
       'buyer.id as buyer_member_id',
       'buyer.provider_user_id as buyer_provider_user_id',
       sql<number>`sum(tip_raffle_ticket.ticket_count)`.as('ticket_count'),
     ])
     .where('tip_raffle_ticket.raffle_id', '=', tipRaffle.id)
-    .groupBy(['buyer.id', 'buyer.provider_user_id'])
+    .groupBy(['buyer.id', 'buyer.provider_user_id', 'buyer_account.id', 'buyer_account.address'])
     .orderBy('buyer.id', 'asc')
     .execute()
   const buyerCount = rows.length
@@ -4227,56 +4264,67 @@ async function closeTipRaffle(db: DB.Type, tipRaffleId: string, providerId: stri
     return
   }
 
-  const winningTicketNumber = (() => {
-    const array = new Uint32Array(1)
-    crypto.getRandomValues(array)
-    return (array[0]! % ticketCount) + 1
-  })()
-  let cursor = 0
-  const winner = rows.find((row) => {
-    cursor += Number(row.ticket_count)
-    return winningTicketNumber <= cursor
-  })
-  if (!winner) return
-
-  let settledAmount = 0
-  let failedTicketCount = 0
-  const receipts: Array<Extract<Tip.TipResult, { ok: true; status: 'duplicate' | 'sent' }>> = []
-  for (const row of rows) {
-    if (row.buyer_member_id === winner.buyer_member_id) continue
-    const amount = Number(row.ticket_count) * tipRaffle.ticket_amount
-    const result = await Tip.handleTipRequest(env, {
-      amount,
-      idempotencyKey: `${tipRaffleIdempotencyPrefix}${tipRaffle.id}:settle:${row.buyer_member_id}`,
-      memo: tipRaffle.memo,
-      provider: 'slack',
-      providerChannelId: tipRaffle.provider_channel_id,
-      providerId: tipRaffle.provider_id,
-      recipientProviderUserId: winner.buyer_provider_user_id,
-      senderProviderUserId: row.buyer_provider_user_id,
-      source: 'command',
-      tokenAddress: tipRaffle.token_address,
-      workspaceProviderId: tipRaffle.provider_id,
-    }).catch(
-      (error) =>
-        ({
-          code: 'failed',
-          message: error instanceof Error ? error.message : 'Raffle payout failed.',
-          ok: false,
-        }) satisfies Tip.TipResult,
+  let winningTicketNumber = tipRaffle.winning_ticket_number
+  let winner = tipRaffle.winner_member_id
+    ? rows.find((row) => row.buyer_member_id === tipRaffle.winner_member_id)
+    : undefined
+  if (!winner || !winningTicketNumber) {
+    const drawnTicketNumber = (() => {
+      const array = new Uint32Array(1)
+      crypto.getRandomValues(array)
+      return (array[0]! % ticketCount) + 1
+    })()
+    let cursor = 0
+    const drawnWinner = rows.find((row) => {
+      cursor += Number(row.ticket_count)
+      return drawnTicketNumber <= cursor
+    })
+    if (!drawnWinner) return
+    await db
+      .updateTable('tip_raffle')
+      .set({
+        updated_at: now,
+        winner_member_id: drawnWinner.buyer_member_id,
+        winning_ticket_number: drawnTicketNumber,
+      })
+      .where('id', '=', tipRaffle.id)
+      .where('winner_member_id', 'is', null)
+      .where('winning_ticket_number', 'is', null)
+      .execute()
+    const persistedWinner = await db
+      .selectFrom('tip_raffle')
+      .select(['winner_member_id', 'winning_ticket_number'])
+      .where('id', '=', tipRaffle.id)
+      .executeTakeFirst()
+    winningTicketNumber = persistedWinner?.winning_ticket_number ?? drawnTicketNumber
+    winner = rows.find(
+      (row) =>
+        row.buyer_member_id === (persistedWinner?.winner_member_id ?? drawnWinner.buyer_member_id),
     )
-    if (result.ok) {
-      settledAmount += amount
-      if (result.status !== 'queued') receipts.push(result)
-    } else failedTicketCount += Number(row.ticket_count)
   }
+  if (!winner) return
+  if (!winningTicketNumber) return
+
+  const payableAmount = ticketCount * tipRaffle.ticket_amount
+  const receipts: Array<Extract<Tip.TipResult, { ok: true; status: 'duplicate' | 'sent' }>> = []
+  const result = await sendTipRaffleEscrowPayout(db, {
+    amount: payableAmount,
+    channelId: tipRaffle.provider_channel_id,
+    idempotencyKey: `${tipRaffleIdempotencyPrefix}${tipRaffle.id}:payout`,
+    memo: tipRaffle.memo,
+    providerId,
+    tokenAddress: tipRaffle.token_address,
+    winner,
+    workspaceId: tipRaffle.workspace_id,
+  })
+  receipts.push(result)
 
   await db
     .updateTable('tip_raffle')
     .set({
       ended_at: now,
-      failed_ticket_count: failedTicketCount,
-      settled_amount: settledAmount,
+      failed_ticket_count: 0,
+      settled_amount: payableAmount,
       status: 'ended',
       updated_at: now,
       winner_member_id: winner.buyer_member_id,
@@ -4297,6 +4345,305 @@ async function closeTipRaffle(db: DB.Type, tipRaffleId: string, providerId: stri
     }).catch((error) => {
       console.error('Failed to post tip raffle receipt:', tipRaffle.id, error)
     })
+}
+
+async function ensureTipRaffleEscrowMember(
+  db: DB.Type,
+  input: { chainId: number; providerId: string; workspaceId: string },
+) {
+  const privateKey = Tempo.getFeePayerPrivateKey(env, input.chainId)
+  if (!privateKey) throw new Error('Tip raffle escrow wallet is not configured.')
+  const installation = await getSlack().getInstallation(input.providerId)
+  if (!installation?.botUserId) throw new Error('Slack app installation missing bot user id.')
+  const botUserId = installation.botUserId
+
+  const now = new Date().toISOString()
+  const address = privateKeyToAccount(privateKey).address
+  await db
+    .insertInto('account')
+    .values({ created_at: now, id: Nanoid.generate(), address, updated_at: now })
+    .onConflict((oc) => oc.column('address').doNothing())
+    .execute()
+  const account = await db
+    .selectFrom('account')
+    .select(['id', 'address'])
+    .where('address', '=', address)
+    .executeTakeFirstOrThrow()
+  const existingIdentity = await db
+    .selectFrom('provider_identity')
+    .select(['id'])
+    .where('provider', '=', 'slack')
+    .where('provider_workspace_id', '=', input.providerId)
+    .where('provider_user_id', '=', botUserId)
+    .executeTakeFirst()
+  const identity = await (async () => {
+    if (existingIdentity) {
+      await db
+        .updateTable('provider_identity')
+        .set({ account_id: account.id, updated_at: now })
+        .where('id', '=', existingIdentity.id)
+        .execute()
+      return existingIdentity
+    }
+
+    const id = Nanoid.generate()
+    await db
+      .insertInto('provider_identity')
+      .values({
+        account_id: account.id,
+        created_at: now,
+        display_name: 'tipbot',
+        id,
+        metadata: null,
+        provider: 'slack',
+        provider_global_user_id: null,
+        provider_user_id: botUserId,
+        provider_workspace_id: input.providerId,
+        real_name: 'tipbot',
+        updated_at: now,
+      })
+      .execute()
+    return { id }
+  })()
+  await db
+    .insertInto('member')
+    .values({
+      created_at: now,
+      id: Nanoid.generate(),
+      login: 'tipbot',
+      name: 'tipbot',
+      provider_identity_id: identity.id,
+      provider_user_id: botUserId,
+      updated_at: now,
+      workspace_id: input.workspaceId,
+    })
+    .onConflict((oc) =>
+      oc
+        .columns(['workspace_id', 'provider_user_id'])
+        .doUpdateSet({ provider_identity_id: identity.id, updated_at: now }),
+    )
+    .execute()
+  const member = await db
+    .selectFrom('member')
+    .select(['id', 'provider_user_id'])
+    .where('workspace_id', '=', input.workspaceId)
+    .where('provider_user_id', '=', botUserId)
+    .executeTakeFirstOrThrow()
+  return {
+    accountAddress: account.address,
+    accountId: account.id,
+    memberId: member.id,
+    providerUserId: member.provider_user_id,
+  }
+}
+
+async function sendTipRaffleEscrowPayout(
+  db: DB.Type,
+  input: {
+    amount: number
+    channelId: string
+    idempotencyKey: string
+    memo: string
+    providerId: string
+    tokenAddress: string
+    winner: {
+      buyer_account_address: string
+      buyer_account_id: string
+      buyer_member_id: string
+      buyer_provider_user_id: string
+    }
+    workspaceId: string
+  },
+): Promise<Extract<Tip.TipResult, { ok: true; status: 'duplicate' | 'sent' }>> {
+  const existing = await db
+    .selectFrom('tip')
+    .innerJoin('tip_batch', 'tip_batch.id', 'tip.batch_id')
+    .innerJoin('workspace', 'workspace.id', 'tip.workspace_id')
+    .select([
+      'tip.amount',
+      'tip.chain_id',
+      'tip.memo',
+      'tip.token_address',
+      'tip_batch.status',
+      'tip_batch.transaction_hash',
+      'workspace.default_token_address',
+    ])
+    .where('tip.idempotency_key', '=', input.idempotencyKey)
+    .executeTakeFirst()
+  if (existing?.status === 'confirmed' && existing.transaction_hash) {
+    const token = await Tempo.getTokenMetadata(env, existing.chain_id, existing.token_address)
+    return {
+      amount: formatAmount(existing.amount),
+      chainId: existing.chain_id,
+      feePayer: 'sender',
+      isDefaultToken: Address.isEqual(
+        Address.checksum(existing.token_address),
+        Address.checksum(existing.default_token_address ?? Tempo.addressLookup.pathUsd),
+      ),
+      memo: existing.memo,
+      ok: true,
+      recipientProviderUserId: input.winner.buyer_provider_user_id,
+      senderProviderUserId: (
+        await ensureTipRaffleEscrowMember(db, {
+          chainId: existing.chain_id,
+          providerId: input.providerId,
+          workspaceId: input.workspaceId,
+        })
+      ).providerUserId,
+      status: 'duplicate',
+      tokenCurrency: token.currency,
+      tokenSymbol: token.symbol,
+      transactionHash: existing.transaction_hash,
+    }
+  }
+  if (existing) throw new Error('Raffle payout is still pending.')
+
+  const workspace = await db
+    .selectFrom('workspace')
+    .selectAll()
+    .where('id', '=', input.workspaceId)
+    .executeTakeFirstOrThrow()
+  const escrow = await ensureTipRaffleEscrowMember(db, {
+    chainId: workspace.chain_id,
+    providerId: input.providerId,
+    workspaceId: input.workspaceId,
+  })
+  const now = new Date().toISOString()
+  const batchId = Nanoid.generate()
+  const tipId = Nanoid.generate()
+  await db
+    .insertInto('tip_batch')
+    .values({
+      amount_each: input.amount,
+      created_at: now,
+      failure_reason: null,
+      id: batchId,
+      idempotency_key: input.idempotencyKey,
+      memo: input.memo,
+      provider: 'slack',
+      provider_channel_id: input.channelId,
+      provider_id: input.providerId,
+      provider_thread_id: null,
+      recipient_count: 1,
+      sender_member_id: escrow.memberId,
+      source: 'command',
+      status: 'pending',
+      token_address: input.tokenAddress,
+      total_amount: input.amount,
+      updated_at: now,
+      workspace_id: input.workspaceId,
+    })
+    .execute()
+  await db
+    .insertInto('tip')
+    .values({
+      access_key_id: null,
+      amount: input.amount,
+      batch_id: batchId,
+      chain_id: workspace.chain_id,
+      confirmed_at: null,
+      created_at: now,
+      failed_at: null,
+      failure_reason: null,
+      id: tipId,
+      idempotency_key: input.idempotencyKey,
+      memo: input.memo,
+      recipient_id: input.winner.buyer_account_id,
+      recipient_member_id: input.winner.buyer_member_id,
+      sender_id: escrow.accountId,
+      sender_member_id: escrow.memberId,
+      sponsorship_memo: null,
+      token_address: input.tokenAddress,
+      transfer_log_index: null,
+      updated_at: now,
+      workspace_id: input.workspaceId,
+    })
+    .execute()
+
+  try {
+    await db
+      .updateTable('tip_batch')
+      .set({ status: 'submitting', updated_at: new Date().toISOString() })
+      .where('id', '=', batchId)
+      .execute()
+    const privateKey = Tempo.getFeePayerPrivateKey(env, workspace.chain_id)
+    if (!privateKey) throw new Error('Tip raffle escrow wallet is not configured.')
+    const client = createClient({
+      chain: Tempo.getChain(workspace.chain_id),
+      transport: http(Tempo.getRpcUrl(env, workspace.chain_id)),
+    })
+    const receipt = await sendTransactionSync(client, {
+      accessList: [
+        {
+          address: escrow.accountAddress as Address.Address,
+          storageKeys: [Hash.keccak256(Hex.fromString(input.idempotencyKey))],
+        },
+      ],
+      account: privateKeyToAccount(privateKey),
+      calls: [
+        Actions.token.transfer.call({
+          amount: BigInt(input.amount),
+          ...(input.memo ? { memo: Tip.encodeTransferMemo(input.memo) } : {}),
+          to: input.winner.buyer_account_address as Address.Address,
+          token: input.tokenAddress as Address.Address,
+        }),
+      ],
+      chain: Tempo.getChain(workspace.chain_id),
+      feeToken: input.tokenAddress as Address.Address,
+      nonceKey: 'expiring' as const,
+    } as never)
+    if (!receipt.transactionHash) throw new Error('Tempo transaction did not return a hash.')
+    await db
+      .updateTable('tip_batch')
+      .set({
+        status: 'confirmed',
+        transaction_hash: receipt.transactionHash,
+        updated_at: new Date().toISOString(),
+      })
+      .where('id', '=', batchId)
+      .execute()
+    await db
+      .updateTable('tip')
+      .set({ confirmed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .where('id', '=', tipId)
+      .execute()
+
+    const token = await Tempo.getTokenMetadata(env, workspace.chain_id, input.tokenAddress)
+    return {
+      amount: formatAmount(input.amount),
+      chainId: workspace.chain_id,
+      feePayer: 'sender',
+      isDefaultToken: Address.isEqual(
+        Address.checksum(input.tokenAddress),
+        Address.checksum(workspace.default_token_address ?? Tempo.addressLookup.pathUsd),
+      ),
+      memo: input.memo,
+      ok: true,
+      recipientProviderUserId: input.winner.buyer_provider_user_id,
+      senderProviderUserId: escrow.providerUserId,
+      status: 'sent',
+      tokenCurrency: token.currency,
+      tokenSymbol: token.symbol,
+      transactionHash: receipt.transactionHash,
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Raffle payout failed.'
+    await db
+      .updateTable('tip_batch')
+      .set({ failure_reason: message, status: 'failed', updated_at: new Date().toISOString() })
+      .where('id', '=', batchId)
+      .execute()
+    await db
+      .updateTable('tip')
+      .set({
+        failed_at: new Date().toISOString(),
+        failure_reason: message,
+        updated_at: new Date().toISOString(),
+      })
+      .where('id', '=', tipId)
+      .execute()
+    throw error
+  }
 }
 
 async function postTipRaffleReceiptMessage(
@@ -4431,11 +4778,7 @@ async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
     .execute()
   const ticketCount = rows.reduce((total, row) => total + Number(row.ticket_count), 0)
   const pledgedAmount = ticketCount * tipRaffle.ticket_amount
-  const winnerRow = rows.find(
-    (row) => row.buyer_provider_user_id === tipRaffle.winner_provider_user_id,
-  )
-  const winnerTicketCount = Number(winnerRow?.ticket_count ?? 0)
-  const payableAmount = pledgedAmount - winnerTicketCount * tipRaffle.ticket_amount
+  const payableAmount = pledgedAmount
   const entrantLines = rows.map(
     (row) => `<@${row.buyer_provider_user_id}> x${Number(row.ticket_count)}`,
   )
