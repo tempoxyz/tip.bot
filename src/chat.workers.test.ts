@@ -1684,46 +1684,6 @@ test('/tip jar opens a tip jar and updates totals when a preset is clicked', asy
   const closeButtonPayload = JSON.parse(closeButton?.value ?? 'null') as { tipAskId: string }
   expect(closeButtonPayload).toEqual({ tipAskId: tipAsk.id })
 
-  await factory.tip.insert(
-    {
-      amount: 100_000,
-      confirmed_at: new Date().toISOString(),
-      idempotency_key: `tip_ask:${tipAsk.id}:moneybag:${Constants.slack.adminUserId}:one`,
-      recipient_id: connected.recipientAccount.id,
-      recipient_member_id: adminMember.id,
-      sender_id: connected.recipientAccount.id,
-      sender_member_id: adminMember.id,
-      token_address: Tempo.addressLookup.pathUsd,
-      workspace_id: connected.workspace.id,
-    },
-    {
-      amount: 100_000,
-      confirmed_at: new Date().toISOString(),
-      idempotency_key: `tip_ask:${tipAsk.id}:moneybag:${Constants.slack.memberUserId}:one`,
-      recipient_id: connected.recipientAccount.id,
-      recipient_member_id: adminMember.id,
-      sender_id: connected.senderAccount.id,
-      sender_member_id: connected.senderMember.id,
-      token_address: Tempo.addressLookup.pathUsd,
-      workspace_id: connected.workspace.id,
-    },
-    {
-      amount: 100_000,
-      confirmed_at: new Date().toISOString(),
-      idempotency_key: `tip_ask:${tipAsk.id}:moneybag:${Constants.slack.memberUserId}:two`,
-      recipient_id: connected.recipientAccount.id,
-      recipient_member_id: adminMember.id,
-      sender_id: connected.senderAccount.id,
-      sender_member_id: connected.senderMember.id,
-      token_address: Tempo.addressLookup.pathUsd,
-      workspace_id: connected.workspace.id,
-    },
-  )
-  await Chat.updateTipAskMessage(providerId, { tipAskId: tipAsk.id })
-  await expectSlackMessage(
-    `💰 <@${Constants.slack.memberUserId}> x2 <@${Constants.slack.adminUserId}>`,
-  )
-
   const unauthorizedCloseResponse = await postSlackInteraction({
     actions: [
       {
@@ -1919,6 +1879,46 @@ test('/tip jar opens a tip jar and updates totals when a preset is clicked', asy
   expect(thirdClickResponse.status).toBe(200)
   expect(tipCountAfterClose.count).toBe(2)
   await expectSlackMessage('Tip jar is closed.')
+
+  await factory.tip.insert(
+    {
+      amount: 100_000,
+      confirmed_at: new Date().toISOString(),
+      idempotency_key: `tip_ask:${tipAsk.id}:moneybag:${Constants.slack.adminUserId}:one`,
+      recipient_id: connected.recipientAccount.id,
+      recipient_member_id: adminMember.id,
+      sender_id: connected.recipientAccount.id,
+      sender_member_id: adminMember.id,
+      token_address: Tempo.addressLookup.pathUsd,
+      workspace_id: connected.workspace.id,
+    },
+    {
+      amount: 100_000,
+      confirmed_at: new Date().toISOString(),
+      idempotency_key: `tip_ask:${tipAsk.id}:moneybag:${Constants.slack.memberUserId}:one`,
+      recipient_id: connected.recipientAccount.id,
+      recipient_member_id: adminMember.id,
+      sender_id: connected.senderAccount.id,
+      sender_member_id: connected.senderMember.id,
+      token_address: Tempo.addressLookup.pathUsd,
+      workspace_id: connected.workspace.id,
+    },
+    {
+      amount: 100_000,
+      confirmed_at: new Date().toISOString(),
+      idempotency_key: `tip_ask:${tipAsk.id}:moneybag:${Constants.slack.memberUserId}:two`,
+      recipient_id: connected.recipientAccount.id,
+      recipient_member_id: adminMember.id,
+      sender_id: connected.senderAccount.id,
+      sender_member_id: connected.senderMember.id,
+      token_address: Tempo.addressLookup.pathUsd,
+      workspace_id: connected.workspace.id,
+    },
+  )
+  await Chat.updateTipAskMessage(providerId, { tipAskId: tipAsk.id })
+  await expectSlackMessage(
+    `💰 <@${Constants.slack.memberUserId}> x2 <@${Constants.slack.adminUserId}>`,
+  )
 }, 20_000) // 20 seconds
 
 test('/tip jar for account sends beneficiary tip and creator fee', async () => {
