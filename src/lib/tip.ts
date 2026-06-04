@@ -151,6 +151,7 @@ export async function handleTipRequest(
   env: Env,
   input: {
     amount?: number
+    chainId?: number
     idempotencyKey: string
     memo: string | null
     provider: Database.Selectable.workspace['provider']
@@ -208,7 +209,7 @@ export async function handleTipRequest(
     : workspace
   const executionWorkspace = {
     ...workspace,
-    chain_id: settingsWorkspace.chain_id,
+    chain_id: input.chainId ?? settingsWorkspace.chain_id,
     default_amount: settingsWorkspace.default_amount,
     default_token_address: settingsWorkspace.default_token_address,
   }

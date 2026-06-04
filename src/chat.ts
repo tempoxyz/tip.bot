@@ -4194,6 +4194,7 @@ async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount:
   const ticketIdempotencyKey = `${tipRaffleIdempotencyPrefix}${tipRaffle.id}:ticket:${event.user.userId}:${payload.data.nonce}`
   const result = await Tip.handleTipRequest(env, {
     amount: input.ticketCount * tipRaffle.ticket_amount,
+    chainId: tipRaffle.chain_id,
     idempotencyKey: ticketIdempotencyKey,
     memo: tipRaffle.memo,
     provider: 'slack',
@@ -4207,19 +4208,45 @@ async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount:
   }).catch(
     (error) =>
       ({
+        chainId: tipRaffle.chain_id,
         code: 'failed',
         message: error instanceof Error ? error.message : 'Ticket payment failed.',
         ok: false,
       }) satisfies Tip.TipResult,
   )
   if (!result.ok) {
+    if (
+      result.code === 'sender_unconnected' ||
+      result.code === 'missing_sender_access_key' ||
+      result.code === 'confirmation_required'
+    ) {
+      await postConnectLink(
+        { channel: getChat().channel(`slack:${tipRaffle.provider_channel_id}`), user: event.user },
+        {
+          db,
+          forceConnectRefresh: result.code !== 'sender_unconnected',
+          provider: { id: tipRaffle.provider_id, type: 'slack' },
+          text: '',
+        },
+      )
+      return
+    }
+    if (result.code !== 'insufficient_funds' && result.code !== 'pending')
+      console.warn('Tip raffle ticket payment failed:', {
+        chainId: result.chainId,
+        code: result.code,
+        message: result.message,
+        tipRaffleId: tipRaffle.id,
+      })
     await postSlackEphemeral(
       tipRaffle.provider_id,
       raw.channel.id,
       event.user.userId,
       result.code === 'insufficient_funds'
         ? 'Ticket not bought. Your wallet has insufficient funds.'
-        : 'Ticket not bought. Try again.',
+        : result.code === 'pending'
+          ? 'Ticket purchase is still sending.'
+          : 'Ticket not bought. Try again.',
     )
     return
   }
@@ -4338,6 +4365,7 @@ async function closeTipRaffle(db: DB.Type, tipRaffleId: string, providerId: stri
   const receipts: Array<Extract<Tip.TipResult, { ok: true; status: 'duplicate' | 'sent' }>> = []
   const result = await sendTipRaffleEscrowPayout(db, {
     amount: payableAmount,
+    chainId: tipRaffle.chain_id,
     channelId: tipRaffle.provider_channel_id,
     idempotencyKey: `${tipRaffleIdempotencyPrefix}${tipRaffle.id}:payout`,
     memo: tipRaffle.memo,
@@ -4470,6 +4498,7 @@ async function sendTipRaffleEscrowPayout(
   db: DB.Type,
   input: {
     amount: number
+    chainId: number
     channelId: string
     idempotencyKey: string
     memo: string
@@ -4533,7 +4562,7 @@ async function sendTipRaffleEscrowPayout(
     .where('id', '=', input.workspaceId)
     .executeTakeFirstOrThrow()
   const escrow = await ensureTipRaffleEscrowMember(db, {
-    chainId: workspace.chain_id,
+    chainId: input.chainId,
     providerId: input.providerId,
     workspaceId: input.workspaceId,
   })
@@ -4569,7 +4598,7 @@ async function sendTipRaffleEscrowPayout(
       access_key_id: null,
       amount: input.amount,
       batch_id: batchId,
-      chain_id: workspace.chain_id,
+      chain_id: input.chainId,
       confirmed_at: null,
       created_at: now,
       failed_at: null,
@@ -4595,11 +4624,11 @@ async function sendTipRaffleEscrowPayout(
       .set({ status: 'submitting', updated_at: new Date().toISOString() })
       .where('id', '=', batchId)
       .execute()
-    const privateKey = Tempo.getFeePayerPrivateKey(env, workspace.chain_id)
+    const privateKey = Tempo.getFeePayerPrivateKey(env, input.chainId)
     if (!privateKey) throw new Error('Tip raffle escrow wallet is not configured.')
     const client = createClient({
-      chain: Tempo.getChain(workspace.chain_id),
-      transport: http(Tempo.getRpcUrl(env, workspace.chain_id)),
+      chain: Tempo.getChain(input.chainId),
+      transport: http(Tempo.getRpcUrl(env, input.chainId)),
     })
     const receipt = await sendTransactionSync(client, {
       accessList: [
@@ -4617,7 +4646,7 @@ async function sendTipRaffleEscrowPayout(
           token: input.tokenAddress as Address.Address,
         }),
       ],
-      chain: Tempo.getChain(workspace.chain_id),
+      chain: Tempo.getChain(input.chainId),
       feeToken: input.tokenAddress as Address.Address,
       nonceKey: 'expiring' as const,
     } as never)
@@ -4637,10 +4666,10 @@ async function sendTipRaffleEscrowPayout(
       .where('id', '=', tipId)
       .execute()
 
-    const token = await Tempo.getTokenMetadata(env, workspace.chain_id, input.tokenAddress)
+    const token = await Tempo.getTokenMetadata(env, input.chainId, input.tokenAddress)
     return {
       amount: formatAmount(input.amount),
-      chainId: workspace.chain_id,
+      chainId: input.chainId,
       feePayer: 'sender',
       isDefaultToken: Address.isEqual(
         Address.checksum(input.tokenAddress),
