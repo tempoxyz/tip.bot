@@ -194,6 +194,36 @@ export const tip = z.object({
   workspace_id: z.string(),
 })
 
+export const tip_airdrop = z.object({
+  chain_id: z.number(),
+  claim_amount: z.number(),
+  claimed_amount: z.number(),
+  created_at: z.string(),
+  creator_member_id: z.string(),
+  ended_at: z.string().nullable(),
+  ends_at: z.string(),
+  id: z.string(),
+  name: z.string(),
+  provider_channel_id: z.string(),
+  provider_id: z.string(),
+  provider_message_ts: z.string(),
+  status: z.enum(['open', 'ended']),
+  token_address: z.string(),
+  total_amount: z.number(),
+  updated_at: z.string(),
+  workspace_id: z.string(),
+})
+
+export const tip_airdrop_claim = z.object({
+  airdrop_id: z.string(),
+  amount: z.number(),
+  created_at: z.string(),
+  id: z.string(),
+  idempotency_key: z.string(),
+  recipient_member_id: z.string(),
+  updated_at: z.string(),
+})
+
 export const tip_ask = z.object({
   beneficiary_provider_user_id: z.string().nullable(),
   chain_id: z.number(),
@@ -314,6 +344,8 @@ export const db = {
   reaction_tip_thread: reaction_tip_thread,
   receipt_boost_thread: receipt_boost_thread,
   tip: tip,
+  tip_airdrop: tip_airdrop,
+  tip_airdrop_claim: tip_airdrop_claim,
   tip_ask: tip_ask,
   tip_batch: tip_batch,
   tip_raffle: tip_raffle,

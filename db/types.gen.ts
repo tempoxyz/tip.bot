@@ -16,6 +16,8 @@ export interface DB {
   reaction_tip_thread: reaction_tip_thread
   receipt_boost_thread: receipt_boost_thread
   tip: tip
+  tip_airdrop: tip_airdrop
+  tip_airdrop_claim: tip_airdrop_claim
   tip_ask: tip_ask
   tip_batch: tip_batch
   tip_raffle: tip_raffle
@@ -216,6 +218,36 @@ type tip = {
   workspace_id: string
 }
 
+type tip_airdrop = {
+  chain_id: number
+  claim_amount: number
+  claimed_amount: k.Generated<number>
+  created_at: k.Generated<string>
+  creator_member_id: string
+  ended_at: string | null
+  ends_at: string
+  id: string
+  name: string
+  provider_channel_id: string
+  provider_id: string
+  provider_message_ts: string
+  status: 'open' | 'ended'
+  token_address: string
+  total_amount: number
+  updated_at: k.Generated<string>
+  workspace_id: string
+}
+
+type tip_airdrop_claim = {
+  airdrop_id: string
+  amount: number
+  created_at: k.Generated<string>
+  id: string
+  idempotency_key: string
+  recipient_member_id: string
+  updated_at: k.Generated<string>
+}
+
 type tip_ask = {
   beneficiary_provider_user_id: string | null
   chain_id: number
@@ -329,6 +361,8 @@ export declare namespace DB {
   type reaction_tip_thread = k.Selectable<DB['reaction_tip_thread']>
   type receipt_boost_thread = k.Selectable<DB['receipt_boost_thread']>
   type tip = k.Selectable<DB['tip']>
+  type tip_airdrop = k.Selectable<DB['tip_airdrop']>
+  type tip_airdrop_claim = k.Selectable<DB['tip_airdrop_claim']>
   type tip_ask = k.Selectable<DB['tip_ask']>
   type tip_batch = k.Selectable<DB['tip_batch']>
   type tip_raffle = k.Selectable<DB['tip_raffle']>
@@ -350,6 +384,8 @@ export declare namespace DB {
     type reaction_tip_thread = k.Insertable<DB['reaction_tip_thread']>
     type receipt_boost_thread = k.Insertable<DB['receipt_boost_thread']>
     type tip = k.Insertable<DB['tip']>
+    type tip_airdrop = k.Insertable<DB['tip_airdrop']>
+    type tip_airdrop_claim = k.Insertable<DB['tip_airdrop_claim']>
     type tip_ask = k.Insertable<DB['tip_ask']>
     type tip_batch = k.Insertable<DB['tip_batch']>
     type tip_raffle = k.Insertable<DB['tip_raffle']>
@@ -372,6 +408,8 @@ export declare namespace DB {
     type reaction_tip_thread = k.Selectable<DB['reaction_tip_thread']>
     type receipt_boost_thread = k.Selectable<DB['receipt_boost_thread']>
     type tip = k.Selectable<DB['tip']>
+    type tip_airdrop = k.Selectable<DB['tip_airdrop']>
+    type tip_airdrop_claim = k.Selectable<DB['tip_airdrop_claim']>
     type tip_ask = k.Selectable<DB['tip_ask']>
     type tip_batch = k.Selectable<DB['tip_batch']>
     type tip_raffle = k.Selectable<DB['tip_raffle']>
@@ -394,6 +432,8 @@ export declare namespace DB {
     type reaction_tip_thread = k.Updateable<DB['reaction_tip_thread']>
     type receipt_boost_thread = k.Updateable<DB['receipt_boost_thread']>
     type tip = k.Updateable<DB['tip']>
+    type tip_airdrop = k.Updateable<DB['tip_airdrop']>
+    type tip_airdrop_claim = k.Updateable<DB['tip_airdrop_claim']>
     type tip_ask = k.Updateable<DB['tip_ask']>
     type tip_batch = k.Updateable<DB['tip_batch']>
     type tip_raffle = k.Updateable<DB['tip_raffle']>
