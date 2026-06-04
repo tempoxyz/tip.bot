@@ -33,6 +33,7 @@ minimumReleaseAgeExclude:
   - viem
 minimumReleaseAgeStrict: true
 overrides:
+  hono: 4.12.21
   protobufjs: 7.5.8
   tar: 7.5.11
   tmp: 0.2.6
