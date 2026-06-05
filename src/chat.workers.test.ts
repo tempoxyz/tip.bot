@@ -301,7 +301,7 @@ test('/tip airdrop claim prompts unconnected claimers to connect', async () => {
   await expectSlackMessage('Link expires in 10 minutes.')
 })
 
-test('/tip airdrop claim fails after the airdrop ends even with pot remaining', async () => {
+test('/tip airdrop claim extends an expired airdrop with pot remaining', async () => {
   await connectTipAccounts()
   await postSlackInteraction(createAirdropViewSubmissionPayload())
   const tipAirdrop = await db
@@ -323,23 +323,24 @@ test('/tip airdrop claim fails after the airdrop ends even with pot remaining', 
   )
   const tips = await db
     .selectFrom('tip')
-    .select('id')
+    .select(['amount', 'id'])
     .where('idempotency_key', 'like', `tip_airdrop:${tipAirdrop.id}:claim:%`)
     .execute()
   const updatedAirdrop = await db
     .selectFrom('tip_airdrop')
-    .select(['claimed_amount', 'status'])
+    .select(['claimed_amount', 'ended_at', 'ends_at', 'status'])
     .where('id', '=', tipAirdrop.id)
     .executeTakeFirstOrThrow()
 
   expect(clickResponse.status).toBe(200)
-  expect(tips).toEqual([])
-  expect(updatedAirdrop).toEqual({ claimed_amount: 0, status: 'ended' })
-  await expectSlackMessage('Ended · Pot: $0.02 left of $0.02')
+  expect(tips).toEqual([expect.objectContaining({ amount: 10_000 })])
+  expect(updatedAirdrop).toMatchObject({ claimed_amount: 10_000, ended_at: null, status: 'open' })
+  expect(new Date(updatedAirdrop.ends_at).getTime()).toBeGreaterThan(Date.now() + 4 * 60 * 1000) // 4 minutes
+  await expectSlackMessage('Pot: $0.01 left of $0.02')
   await expectSlackMessageNotContaining('Not eligible for airdrop. Sorry :(')
 })
 
-test('/tip airdrop cron closes expired airdrop and updates message', async () => {
+test('/tip airdrop cron extends expired airdrop with pot remaining', async () => {
   await connectTipAccounts()
   await postSlackInteraction(createAirdropViewSubmissionPayload())
   const tipAirdrop = await db
@@ -358,7 +359,7 @@ test('/tip airdrop cron closes expired airdrop and updates message', async () =>
   await waitOnExecutionContext(ctx)
   const updatedAirdrop = await db
     .selectFrom('tip_airdrop')
-    .select(['ended_at', 'status', 'updated_at'])
+    .select(['ended_at', 'ends_at', 'status'])
     .where('id', '=', tipAirdrop.id)
     .executeTakeFirstOrThrow()
   const history = await slack.conversations.history({ channel: Constants.slack.channelId })
@@ -368,12 +369,13 @@ test('/tip airdrop cron closes expired airdrop and updates message', async () =>
   )
   const messageJson = JSON.stringify(message)
 
-  expect(updatedAirdrop.status).toBe('ended')
-  expect(updatedAirdrop.ended_at).toEqual(expect.any(String))
-  expect(updatedAirdrop.updated_at).not.toBe(updatedAirdrop.ended_at)
-  expect(actionBlocks).toEqual([])
-  expect(messageJson).not.toContain('Claim while supplies last!')
-  await expectSlackMessage('Ended · Pot: $0.02 left of $0.02')
+  expect(updatedAirdrop.status).toBe('open')
+  expect(updatedAirdrop.ended_at).toBeNull()
+  expect(new Date(updatedAirdrop.ends_at).getTime()).toBeGreaterThan(Date.now() + 4 * 60 * 1000) // 4 minutes
+  expect(actionBlocks).toHaveLength(1)
+  expect(messageJson).toContain('Claim while supplies last!')
+  await expectSlackMessage('Pot: $0.02 left of $0.02')
+  await expectSlackMessageNotContaining('Ended · Pot: $0.02 left of $0.02')
 })
 
 test('/tip airdrop create modal uses selected duration', async () => {

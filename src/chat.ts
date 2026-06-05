@@ -478,13 +478,20 @@ const actions = {
     }
 
     const remainingAmount = tipAirdrop.total_amount - tipAirdrop.claimed_amount
-    if (
-      tipAirdrop.status !== 'open' ||
-      Date.parse(tipAirdrop.ends_at) <= Date.now() ||
-      remainingAmount <= 0
-    ) {
+    if (tipAirdrop.status !== 'open' || remainingAmount <= 0) {
       await closeAirdrop()
       return
+    }
+    if (Date.parse(tipAirdrop.ends_at) <= Date.now()) {
+      const endsAt = new Date(Date.now() + airdropExpiryExtensionMs).toISOString()
+      await ctx.db
+        .updateTable('tip_airdrop')
+        .set({ ends_at: endsAt, updated_at: new Date().toISOString() })
+        .where('id', '=', tipAirdrop.id)
+        .where('status', '=', 'open')
+        .whereRef('claimed_amount', '<', 'total_amount')
+        .execute()
+      tipAirdrop.ends_at = endsAt
     }
 
     const recipient = await getConnectedSlackMember(
@@ -540,10 +547,10 @@ const actions = {
         claimed_amount: sql<number>`min("total_amount", "claimed_amount" + ${amount})`,
         ended_at: sql<
           string | null
-        >`case when "claimed_amount" + ${amount} >= "total_amount" then ${now} else null end`,
+        >`case when min("total_amount", "claimed_amount" + ${amount}) >= "total_amount" then ${now} else null end`,
         status: sql<
           DB_gen.Selectable.tip_airdrop['status']
-        >`case when "claimed_amount" + ${amount} >= "total_amount" then 'ended' else 'open' end`,
+        >`case when min("total_amount", "claimed_amount" + ${amount}) >= "total_amount" then 'ended' else 'open' end`,
         updated_at: now,
       })
       .where('id', '=', tipAirdrop.id)
@@ -5719,7 +5726,14 @@ export async function closeExpiredTipAirdrops() {
   const db = DB.create(env.DB)
   const rows = await db
     .selectFrom('tip_airdrop')
-    .select(['id', 'provider_channel_id', 'provider_id', 'provider_message_ts'])
+    .select([
+      'claimed_amount',
+      'id',
+      'provider_channel_id',
+      'provider_id',
+      'provider_message_ts',
+      'total_amount',
+    ])
     .where('status', '=', 'open')
     .where('ends_at', '<=', new Date().toISOString())
     .orderBy('ends_at', 'asc')
@@ -5727,6 +5741,35 @@ export async function closeExpiredTipAirdrops() {
     .execute()
   for (const row of rows) {
     const now = new Date().toISOString()
+    if (row.claimed_amount < row.total_amount) {
+      await db
+        .updateTable('tip_airdrop')
+        .set({
+          ends_at: new Date(Date.now() + airdropExpiryExtensionMs).toISOString(),
+          updated_at: now,
+        })
+        .where('id', '=', row.id)
+        .where('status', '=', 'open')
+        .whereRef('claimed_amount', '<', 'total_amount')
+        .execute()
+      await updateAirdropMessage(
+        row.provider_id,
+        row.provider_channel_id,
+        row.provider_message_ts,
+        row.id,
+      ).catch(async (error) => {
+        if ((error as { code?: unknown }).code !== 'message_not_found') {
+          console.error('Failed to update extended airdrop message:', row.id, error)
+          return
+        }
+        await db
+          .updateTable('tip_airdrop')
+          .set({ updated_at: new Date().toISOString() })
+          .where('id', '=', row.id)
+          .execute()
+      })
+      continue
+    }
     await db
       .updateTable('tip_airdrop')
       .set({ ended_at: now, status: 'ended', updated_at: now })
@@ -5779,6 +5822,7 @@ export async function closeExpiredTipAirdrops() {
 }
 
 const airdropClaimAmount = 10_000 // $0.01
+const airdropExpiryExtensionMs = 5 * 60 * 1000 // 5 minutes
 
 async function tipAirdropMessage(db: DB.Type, input: TipAirdropMessageInput | string) {
   const tipAirdrop =
