@@ -25,8 +25,14 @@ export function getChain(chainId: number) {
   throw new Error(`Unsupported Tempo chain ${chainId}.`)
 }
 
-export function getRpcUrl(env: Pick<Env, 'RPC_URL_MAINNET' | 'RPC_URL_TESTNET'>, chainId: number) {
-  if (chainId === chainLookup.mainnet) return env.RPC_URL_MAINNET || undefined
+export function getRpcUrl(
+  env: Pick<Env, 'RPC_CREDENTIALS' | 'RPC_URL_MAINNET' | 'RPC_URL_TESTNET'>,
+  chainId: number,
+) {
+  if (chainId === chainLookup.mainnet) {
+    const auth = env.RPC_CREDENTIALS
+    return env.RPC_URL_MAINNET || `https://${auth ? `${auth}@` : ''}rpc.tempo.xyz`
+  }
   if (chainId === chainLookup.testnet || chainId === chainLookup.localnet)
     return env.RPC_URL_TESTNET || undefined
   return undefined

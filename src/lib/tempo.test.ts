@@ -12,13 +12,16 @@ test('returns optional RPC URLs by chain', () => {
   expect(
     Tempo.getRpcUrl({ RPC_URL_MAINNET: 'https://mainnet.example' }, Tempo.chainLookup.mainnet),
   ).toBe('https://mainnet.example')
+  expect(Tempo.getRpcUrl({ RPC_CREDENTIALS: 'account:secret' }, Tempo.chainLookup.mainnet)).toBe(
+    'https://account:secret@rpc.tempo.xyz',
+  )
   expect(
     Tempo.getRpcUrl({ RPC_URL_TESTNET: 'https://testnet.example' }, Tempo.chainLookup.testnet),
   ).toBe('https://testnet.example')
   expect(
     Tempo.getRpcUrl({ RPC_URL_TESTNET: 'https://testnet.example' }, Tempo.chainLookup.localnet),
   ).toBe('https://testnet.example')
-  expect(Tempo.getRpcUrl({}, Tempo.chainLookup.mainnet)).toBe(undefined)
+  expect(Tempo.getRpcUrl({}, Tempo.chainLookup.mainnet)).toBe('https://rpc.tempo.xyz')
   expect(Tempo.getRpcUrl({}, 1)).toBe(undefined)
 })
 

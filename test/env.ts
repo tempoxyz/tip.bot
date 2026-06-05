@@ -18,6 +18,7 @@ const schema = z.object({
   FEE_PAYER_PRIVATE_KEY_MAINNET: privateKey,
   FEE_PAYER_PRIVATE_KEY_TESTNET: privateKey,
   HOST: z.string(),
+  RPC_CREDENTIALS: z.string().optional(),
   RPC_URL_MAINNET: z.string().optional(),
   RPC_URL_TESTNET: z.string().optional(),
   SECRET_KEY: z.string(),
