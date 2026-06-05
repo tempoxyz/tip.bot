@@ -2624,7 +2624,7 @@ test('/tip raffle buy button records tickets and updates message', async () => {
     .where(
       'tip.idempotency_key',
       '=',
-      `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:buy-five`,
+      `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:tip-raffle-buy-5-trigger`,
     )
     .executeTakeFirstOrThrow()
 
@@ -2705,7 +2705,7 @@ test('/tip raffle buy button uses raffle chain when workspace network changes af
     .where(
       'idempotency_key',
       '=',
-      `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:buy-after-chain-change`,
+      `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:tip-raffle-buy-chain-change-trigger`,
     )
     .executeTakeFirstOrThrow()
 
@@ -2754,6 +2754,130 @@ test('/tip raffle buy button does not record tickets when escrow payment fails',
   expect(response.status).toBe(200)
   expect(ticket).toBeUndefined()
   await expectSlackMessage('Ticket not bought. Your wallet has insufficient funds.')
+})
+
+test('/tip raffle buy button can retry after a failed ticket payment', async () => {
+  await connectTipAccounts()
+  await postSlackInteraction(createRaffleViewSubmissionPayload({ amount: '0.001' }))
+  const tipRaffle = await db
+    .selectFrom('tip_raffle')
+    .selectAll()
+    .where('provider_id', '=', providerId)
+    .executeTakeFirstOrThrow()
+  const handleTipRequest = vi
+    .spyOn(Tip, 'handleTipRequest')
+    .mockResolvedValueOnce({
+      chainId: tipRaffle.chain_id,
+      code: 'failed',
+      message: 'Ticket payment failed.',
+      ok: false,
+    })
+    .mockResolvedValueOnce({
+      amount: '0.001',
+      chainId: tipRaffle.chain_id,
+      feePayer: 'sponsor',
+      isDefaultToken: true,
+      memo: tipRaffle.memo,
+      ok: true,
+      recipientProviderUserId: Constants.slack.botUserId,
+      senderProviderUserId: Constants.slack.adminUserId,
+      status: 'sent',
+      tokenCurrency: 'USD',
+      tokenSymbol: 'USDC',
+      transactionHash: `0x${'1'.repeat(64)}`,
+    })
+  const payload = {
+    actions: [
+      {
+        action_id: 'tip_raffle_buy_1',
+        type: 'button',
+        value: JSON.stringify({ nonce: 'retry-buy', tipRaffleId: tipRaffle.id }),
+      },
+    ],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: tipRaffle.provider_message_ts,
+      type: 'message',
+    },
+    message: { ts: tipRaffle.provider_message_ts },
+    team: { id: providerId },
+    type: 'block_actions',
+    user: { id: Constants.slack.adminUserId, name: Constants.slack.adminUserName },
+  }
+
+  const failedResponse = await postSlackInteraction({
+    ...payload,
+    trigger_id: 'tip-raffle-buy-retry-failed-trigger',
+  })
+  const retryResponse = await postSlackInteraction({
+    ...payload,
+    trigger_id: 'tip-raffle-buy-retry-success-trigger',
+  })
+  const ticket = await db
+    .selectFrom('tip_raffle_ticket')
+    .select(['idempotency_key', 'ticket_count'])
+    .where('raffle_id', '=', tipRaffle.id)
+    .executeTakeFirstOrThrow()
+
+  expect(failedResponse.status).toBe(200)
+  expect(retryResponse.status).toBe(200)
+  expect(handleTipRequest).toHaveBeenCalledTimes(2)
+  expect(handleTipRequest.mock.calls.map((call) => call[1].idempotencyKey)).toEqual([
+    `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:tip-raffle-buy-retry-failed-trigger`,
+    `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:tip-raffle-buy-retry-success-trigger`,
+  ])
+  expect(ticket).toEqual({
+    idempotency_key: `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:tip-raffle-buy-retry-success-trigger`,
+    ticket_count: 1,
+  })
+  await expectSlackMessage('Ticket not bought. Try again.')
+})
+
+test('/tip raffle buy button does not spam while ticket payment is pending', async () => {
+  await connectTipAccounts()
+  await postSlackInteraction(createRaffleViewSubmissionPayload({ amount: '0.001' }))
+  const tipRaffle = await db
+    .selectFrom('tip_raffle')
+    .selectAll()
+    .where('provider_id', '=', providerId)
+    .executeTakeFirstOrThrow()
+  vi.spyOn(Tip, 'handleTipRequest').mockResolvedValue({
+    chainId: tipRaffle.chain_id,
+    code: 'pending',
+    message: 'Tip is still sending.',
+    ok: false,
+  })
+
+  const response = await postSlackInteraction({
+    actions: [
+      {
+        action_id: 'tip_raffle_buy_1',
+        type: 'button',
+        value: JSON.stringify({ nonce: 'pending-buy', tipRaffleId: tipRaffle.id }),
+      },
+    ],
+    channel: { id: Constants.slack.channelId },
+    container: {
+      channel_id: Constants.slack.channelId,
+      message_ts: tipRaffle.provider_message_ts,
+      type: 'message',
+    },
+    message: { ts: tipRaffle.provider_message_ts },
+    team: { id: providerId },
+    trigger_id: 'tip-raffle-buy-pending-trigger',
+    type: 'block_actions',
+    user: { id: Constants.slack.adminUserId, name: Constants.slack.adminUserName },
+  })
+  const ticket = await db
+    .selectFrom('tip_raffle_ticket')
+    .select('id')
+    .where('raffle_id', '=', tipRaffle.id)
+    .executeTakeFirst()
+
+  expect(response.status).toBe(200)
+  expect(ticket).toBeUndefined()
+  await expectSlackMessageNotContaining('Ticket purchase is still sending.')
 })
 
 test('/tip raffle buy button offers refresh when reusable access key does not cover raffle', async () => {

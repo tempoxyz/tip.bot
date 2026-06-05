@@ -4191,124 +4191,142 @@ async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount:
     return
   }
 
-  const accessKey = await Tip.checkReusableTipAccessKey(env, {
-    amount: input.ticketCount * tipRaffle.ticket_amount,
-    chainId: tipRaffle.chain_id,
-    memo: tipRaffle.memo,
-    providerUserId: event.user.userId,
-    tokenAddress: tipRaffle.token_address,
-    workspaceId: tipRaffle.workspace_id,
-  })
-  if (!accessKey.ok) {
-    if (accessKey.code === 'sender_unconnected' || accessKey.code === 'missing_sender_access_key') {
-      await postConnectLink(
-        { channel: getChat().channel(`slack:${tipRaffle.provider_channel_id}`), user: event.user },
-        {
-          db,
-          forceConnectRefresh: accessKey.code === 'missing_sender_access_key',
-          provider: { id: tipRaffle.provider_id, type: 'slack' },
-          text: '',
-        },
-      )
-      return
-    }
-    await postSlackEphemeral(
-      tipRaffle.provider_id,
-      raw.channel.id,
-      event.user.userId,
-      accessKey.code === 'insufficient_funds'
-        ? 'Ticket not bought. Your wallet has insufficient funds.'
-        : 'Ticket not bought. Try again.',
-    )
-    return
-  }
-  const buyerMemberId = accessKey.memberId
-  if (!buyerMemberId) return
-  const escrowMember = await ensureTipRaffleEscrowMember(db, {
-    chainId: tipRaffle.chain_id,
-    providerId: tipRaffle.provider_id,
-    workspaceId: tipRaffle.workspace_id,
-  })
-  const ticketIdempotencyKey = `${tipRaffleIdempotencyPrefix}${tipRaffle.id}:ticket:${event.user.userId}:${payload.data.nonce}`
-  const result = await Tip.handleTipRequest(env, {
-    amount: input.ticketCount * tipRaffle.ticket_amount,
-    chainId: tipRaffle.chain_id,
-    idempotencyKey: ticketIdempotencyKey,
-    memo: tipRaffle.memo,
-    provider: 'slack',
-    providerChannelId: tipRaffle.provider_channel_id,
-    providerId: tipRaffle.provider_id,
-    recipientProviderUserId: escrowMember.providerUserId,
-    senderProviderUserId: event.user.userId,
-    source: 'command',
-    tokenAddress: tipRaffle.token_address,
-    workspaceProviderId: tipRaffle.provider_id,
-  }).catch(
-    (error) =>
-      ({
-        chainId: tipRaffle.chain_id,
-        code: 'failed',
-        message: error instanceof Error ? error.message : 'Ticket payment failed.',
-        ok: false,
-      }) satisfies Tip.TipResult,
-  )
-  if (!result.ok) {
-    if (
-      result.code === 'sender_unconnected' ||
-      result.code === 'missing_sender_access_key' ||
-      result.code === 'confirmation_required'
-    ) {
-      await postConnectLink(
-        { channel: getChat().channel(`slack:${tipRaffle.provider_channel_id}`), user: event.user },
-        {
-          db,
-          forceConnectRefresh: result.code !== 'sender_unconnected',
-          provider: { id: tipRaffle.provider_id, type: 'slack' },
-          text: '',
-        },
-      )
-      return
-    }
-    if (result.code !== 'insufficient_funds' && result.code !== 'pending')
-      console.warn('Tip raffle ticket payment failed:', {
-        chainId: result.chainId,
-        code: result.code,
-        message: result.message,
-        tipRaffleId: tipRaffle.id,
-      })
-    await postSlackEphemeral(
-      tipRaffle.provider_id,
-      raw.channel.id,
-      event.user.userId,
-      result.code === 'insufficient_funds'
-        ? 'Ticket not bought. Your wallet has insufficient funds.'
-        : result.code === 'pending'
-          ? 'Ticket purchase is still sending.'
+  const ticketLockKey = `${tipRaffleIdempotencyPrefix}${tipRaffle.id}:ticket:${event.user.userId}:sending`
+  const ticketLockTtlMs = 2 * 60 * 1000 // 2 minutes
+  if (!(await getChat().getState().setIfNotExists(ticketLockKey, true, ticketLockTtlMs))) return
+  try {
+    const accessKey = await Tip.checkReusableTipAccessKey(env, {
+      amount: input.ticketCount * tipRaffle.ticket_amount,
+      chainId: tipRaffle.chain_id,
+      memo: tipRaffle.memo,
+      providerUserId: event.user.userId,
+      tokenAddress: tipRaffle.token_address,
+      workspaceId: tipRaffle.workspace_id,
+    })
+    if (!accessKey.ok) {
+      if (
+        accessKey.code === 'sender_unconnected' ||
+        accessKey.code === 'missing_sender_access_key'
+      ) {
+        await postConnectLink(
+          {
+            channel: getChat().channel(`slack:${tipRaffle.provider_channel_id}`),
+            user: event.user,
+          },
+          {
+            db,
+            forceConnectRefresh: accessKey.code === 'missing_sender_access_key',
+            provider: { id: tipRaffle.provider_id, type: 'slack' },
+            text: '',
+          },
+        )
+        return
+      }
+      await postSlackEphemeral(
+        tipRaffle.provider_id,
+        raw.channel.id,
+        event.user.userId,
+        accessKey.code === 'insufficient_funds'
+          ? 'Ticket not bought. Your wallet has insufficient funds.'
           : 'Ticket not bought. Try again.',
+      )
+      return
+    }
+    const buyerMemberId = accessKey.memberId
+    if (!buyerMemberId) return
+    const escrowMember = await ensureTipRaffleEscrowMember(db, {
+      chainId: tipRaffle.chain_id,
+      providerId: tipRaffle.provider_id,
+      workspaceId: tipRaffle.workspace_id,
+    })
+    const ticketIdempotencyKey = `${tipRaffleIdempotencyPrefix}${tipRaffle.id}:ticket:${event.user.userId}:${slackActionInteractionId(event) ?? payload.data.nonce}`
+    const result = await Tip.handleTipRequest(env, {
+      amount: input.ticketCount * tipRaffle.ticket_amount,
+      chainId: tipRaffle.chain_id,
+      idempotencyKey: ticketIdempotencyKey,
+      memo: tipRaffle.memo,
+      provider: 'slack',
+      providerChannelId: tipRaffle.provider_channel_id,
+      providerId: tipRaffle.provider_id,
+      recipientProviderUserId: escrowMember.providerUserId,
+      senderProviderUserId: event.user.userId,
+      source: 'command',
+      tokenAddress: tipRaffle.token_address,
+      workspaceProviderId: tipRaffle.provider_id,
+    }).catch(
+      (error) =>
+        ({
+          chainId: tipRaffle.chain_id,
+          code: 'failed',
+          message: error instanceof Error ? error.message : 'Ticket payment failed.',
+          ok: false,
+        }) satisfies Tip.TipResult,
     )
-    return
-  }
+    if (!result.ok) {
+      if (
+        result.code === 'sender_unconnected' ||
+        result.code === 'missing_sender_access_key' ||
+        result.code === 'confirmation_required'
+      ) {
+        await postConnectLink(
+          {
+            channel: getChat().channel(`slack:${tipRaffle.provider_channel_id}`),
+            user: event.user,
+          },
+          {
+            db,
+            forceConnectRefresh: result.code !== 'sender_unconnected',
+            provider: { id: tipRaffle.provider_id, type: 'slack' },
+            text: '',
+          },
+        )
+        return
+      }
+      if (result.code !== 'insufficient_funds' && result.code !== 'pending')
+        console.warn('Tip raffle ticket payment failed:', {
+          chainId: result.chainId,
+          code: result.code,
+          message: result.message,
+          tipRaffleId: tipRaffle.id,
+        })
+      if (result.code === 'pending') return
+      await postSlackEphemeral(
+        tipRaffle.provider_id,
+        raw.channel.id,
+        event.user.userId,
+        result.code === 'insufficient_funds'
+          ? 'Ticket not bought. Your wallet has insufficient funds.'
+          : 'Ticket not bought. Try again.',
+      )
+      return
+    }
 
-  await db
-    .insertInto('tip_raffle_ticket')
-    .values({
-      buyer_member_id: buyerMemberId,
-      created_at: new Date().toISOString(),
-      id: Nanoid.generate(),
-      idempotency_key: ticketIdempotencyKey,
-      raffle_id: tipRaffle.id,
-      ticket_count: input.ticketCount,
-      updated_at: new Date().toISOString(),
-    })
-    .execute()
-    .catch((error) => {
-      if (!isUniqueConstraintError(error)) throw error
-    })
-  await updateTipRaffleMessage(tipRaffle.provider_id, { tipRaffleId: tipRaffle.id }).catch(
-    (error) => {
-      console.error('Failed to update Slack raffle:', error)
-    },
-  )
+    await db
+      .insertInto('tip_raffle_ticket')
+      .values({
+        buyer_member_id: buyerMemberId,
+        created_at: new Date().toISOString(),
+        id: Nanoid.generate(),
+        idempotency_key: ticketIdempotencyKey,
+        raffle_id: tipRaffle.id,
+        ticket_count: input.ticketCount,
+        updated_at: new Date().toISOString(),
+      })
+      .execute()
+      .catch((error) => {
+        if (!isUniqueConstraintError(error)) throw error
+      })
+    await updateTipRaffleMessage(tipRaffle.provider_id, { tipRaffleId: tipRaffle.id }).catch(
+      (error) => {
+        console.error('Failed to update Slack raffle:', error)
+      },
+    )
+  } finally {
+    await getChat()
+      .getState()
+      .delete(ticketLockKey)
+      .catch(() => {})
+  }
 }
 
 async function closeTipRaffle(db: DB.Type, tipRaffleId: string, providerId: string) {
