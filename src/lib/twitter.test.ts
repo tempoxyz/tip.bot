@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import * as Tempo from '#/lib/tempo.ts'
-import { formatTwitterReceiptText, parseWebhookTweets } from '#/lib/twitter.ts'
+import { formatTwitterReceiptText, parseWebhookTweets, stripTwitterTipVerb } from '#/lib/twitter.ts'
 
 test('parses simple Twitter webhook test payload', () => {
   expect(
@@ -131,4 +131,12 @@ test('formats Twitter receipt reply like Slack without sentence-ending period', 
   ).toBe(
     `@bob tipped @alice $1\nReceipt: ${Tempo.formatTxLink(Tempo.chainLookup.testnet, transactionHash)}`,
   )
+})
+
+test('strips Twitter tip verb only before explicit amounts', () => {
+  expect(stripTwitterTipVerb('tip $1 for this demo :saluting_face:')).toBe(
+    '$1 for this demo :saluting_face:',
+  )
+  expect(stripTwitterTipVerb('send .25 for coffee')).toBe('.25 for coffee')
+  expect(stripTwitterTipVerb('tip jar for coffee')).toBe('tip jar for coffee')
 })

@@ -1076,7 +1076,7 @@ export async function parseTwitterTip(env: Env, input: TwitterTweetInput) {
       new RegExp(`(^|[^\\p{L}\\p{N}_])@${escapeRegex(handle)}\\b`, 'giu'),
       '$1',
     )
-  remaining = remaining.trim()
+  remaining = stripTwitterTipVerb(remaining.trim())
   if (!uniqueHandles.length && !remaining) return null
 
   const parsed = Tip.parseTipBatchText(
@@ -1097,6 +1097,10 @@ export async function parseTwitterTip(env: Env, input: TwitterTweetInput) {
     recipients: parsed.recipients,
     tokenAddress,
   }
+}
+
+export function stripTwitterTipVerb(value: string) {
+  return value.replace(/^(?:tip|send)\s+(?=\$?(?:\d|\.\d))/i, '')
 }
 
 async function resolveTwitterTipRecipients(env: Env, recipients: Tip.TipRecipientInput[]) {
