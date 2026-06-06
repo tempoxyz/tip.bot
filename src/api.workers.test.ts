@@ -206,6 +206,29 @@ describe('/api/chat/twitter', () => {
     })
   })
 
+  test('parses Twitter tip verb before recipient amount', async () => {
+    server.use(
+      mswHttp.get('https://api.twitter.com/2/users/by/username/christopherwxyz', () =>
+        HttpResponse.json({ data: { id: '200', username: 'christopherwxyz' } }),
+      ),
+    )
+
+    await expect(
+      Twitter.parseTwitterTip(env, {
+        authorHandle: 'itokenize',
+        authorId: '100',
+        id: 'tweet-parse-tip-verb',
+        text: '@tipbotgg tip @christopherwxyz $1 for this demo :saluting_face:',
+      }),
+    ).resolves.toEqual({
+      amount: 1_000_000,
+      memo: 'this demo :saluting_face:',
+      ok: true,
+      recipients: [{ recipientProviderLabel: '@christopherwxyz', recipientProviderUserId: '200' }],
+      tokenAddress: null,
+    })
+  })
+
   test('real v2 Twitter webhook payload sends a tip for connected X accounts', async () => {
     const senderProviderUserId = twitterProviderUserId()
     const recipientProviderUserId = twitterProviderUserId()
