@@ -780,6 +780,9 @@ const actions = {
   async tip_raffle_buy_5(event) {
     await handleTipRaffleBuy(event, { ticketCount: 5 })
   },
+  async tip_raffle_buy_for(event) {
+    await openTipRaffleBuyForModal(event)
+  },
   async config_edit(event) {
     const raw = z.parse(
       z.object({
@@ -1222,6 +1225,23 @@ const modalSubmits = {
       .values({ ...tipRaffle, provider_message_ts: json.ts })
       .execute()
   },
+  async tip_raffle_buy_for(event) {
+    const metadata = z.parse(
+      z.object({
+        tipRaffleId: z.string().min(1),
+      }),
+      JSON.parse(event.privateMetadata ?? '{}'),
+    )
+    const ticketCount = event.values.ticket_count === '5' ? 5 : 1
+    const recipientProviderUserId = event.values.recipient
+    if (!recipientProviderUserId)
+      return { action: 'errors' as const, errors: { recipient: 'Choose a recipient.' } }
+    await handleTipRaffleBuy(event, {
+      recipientProviderUserId,
+      ticketCount,
+      tipRaffleId: metadata.tipRaffleId,
+    })
+  },
   async config_edit(event) {
     const metadata = z.parse(
       z.object({
@@ -1465,7 +1485,7 @@ const handlers = {
           chat.TextInput({
             id: 'ticket_amount',
             initialValue: '0.01',
-            label: `Ticket price (${token.symbol})`,
+            label: `Tipet price (${token.symbol})`,
             placeholder: '0.01',
           }),
           chat.Select({
@@ -2551,8 +2571,14 @@ const actionNames = [
   'tip_ask_option_moneybag',
   'tip_raffle_buy_1',
   'tip_raffle_buy_5',
+  'tip_raffle_buy_for',
 ] as const
-const modalSubmitNames = ['config_edit', 'tip_airdrop_create', 'tip_raffle_create'] as const
+const modalSubmitNames = [
+  'config_edit',
+  'tip_airdrop_create',
+  'tip_raffle_buy_for',
+  'tip_raffle_create',
+] as const
 const tipAskIdempotencyPrefix = 'tip_ask:'
 const tipRaffleIdempotencyPrefix = 'tip_raffle:'
 const tipAskReactionNames = ['money_with_wings', 'dollar', 'moneybag'] as const
@@ -4135,7 +4161,7 @@ export async function closeExpiredTipRaffles() {
     })
 }
 
-async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount: 1 | 5 }) {
+function tipRaffleActionPayload(event: chat.ActionEvent) {
   const payload = z
     .object({
       nonce: z.string().min(1),
@@ -4150,11 +4176,85 @@ async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount:
         }
       })(),
     )
-  if (!payload.success) return
+  return payload.success ? payload.data : null
+}
+
+async function openTipRaffleBuyForModal(event: chat.ActionEvent) {
+  const payload = tipRaffleActionPayload(event)
+  if (!payload) return
 
   const raw = z.parse(
     z.object({
-      channel: z.object({ id: z.string().min(1) }),
+      team: z.object({ id: z.string().min(1) }),
+      trigger_id: z.string().min(1),
+    }),
+    event.raw,
+  )
+  const installation = await getSlack().getInstallation(raw.team.id)
+  if (!installation) return
+
+  const body = new URLSearchParams()
+  body.set('trigger_id', raw.trigger_id)
+  body.set(
+    'view',
+    JSON.stringify({
+      blocks: [
+        {
+          block_id: 'recipient',
+          element: { action_id: 'recipient', type: 'users_select' },
+          label: { text: 'Recipient', type: 'plain_text' },
+          type: 'input',
+        },
+        {
+          block_id: 'ticket_count',
+          element: {
+            action_id: 'ticket_count',
+            initial_option: { text: { text: '1 tipet', type: 'plain_text' }, value: '1' },
+            options: [
+              { text: { text: '1 tipet', type: 'plain_text' }, value: '1' },
+              { text: { text: '5 tipets', type: 'plain_text' }, value: '5' },
+            ],
+            type: 'static_select',
+          },
+          label: { text: 'Tipets', type: 'plain_text' },
+          type: 'input',
+        },
+      ],
+      callback_id: 'tip_raffle_buy_for',
+      private_metadata: JSON.stringify({ tipRaffleId: payload.tipRaffleId }),
+      submit: { text: 'Buy tipets', type: 'plain_text' },
+      title: { text: 'Buy tipets', type: 'plain_text' },
+      type: 'modal',
+    }),
+  )
+  const response = await getSlack().withBotToken(installation.botToken, () =>
+    fetch(`${env.SLACK_API_URL}/views.open`, {
+      body,
+      headers: { authorization: `Bearer ${installation.botToken}` },
+      method: 'POST',
+    }),
+  )
+  const json = z.parse(
+    z.object({
+      error: z.string().optional(),
+      ok: z.boolean().optional(),
+    }),
+    await response.json(),
+  )
+  if (!json.ok) throw Slack.slackApiError('views.open', json.error)
+}
+
+async function handleTipRaffleBuy(
+  event: chat.ActionEvent | chat.ModalSubmitEvent,
+  input: { recipientProviderUserId?: string; ticketCount: 1 | 5; tipRaffleId?: string },
+) {
+  const payload = 'value' in event ? tipRaffleActionPayload(event) : null
+  const tipRaffleId = input.tipRaffleId ?? payload?.tipRaffleId
+  if (!tipRaffleId) return
+
+  const raw = z.parse(
+    z.object({
+      channel: z.object({ id: z.string().min(1) }).optional(),
       team: z.object({ id: z.string().min(1) }),
     }),
     event.raw,
@@ -4176,7 +4276,7 @@ async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount:
       'workspace.id as workspace_id',
       'workspace.provider_id as workspace_provider_id',
     ])
-    .where('tip_raffle.id', '=', payload.data.tipRaffleId)
+    .where('tip_raffle.id', '=', tipRaffleId)
     .where('tip_raffle.provider_id', '=', raw.team.id)
     .executeTakeFirst()
   if (!tipRaffle) return
@@ -4184,14 +4284,15 @@ async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount:
     await closeTipRaffle(db, tipRaffle.id, tipRaffle.provider_id)
     await postSlackEphemeral(
       tipRaffle.provider_id,
-      raw.channel.id,
+      raw.channel?.id ?? tipRaffle.provider_channel_id,
       event.user.userId,
       'Raffle ended.',
     )
     return
   }
 
-  const ticketLockKey = `${tipRaffleIdempotencyPrefix}${tipRaffle.id}:ticket:${event.user.userId}:sending`
+  const recipientProviderUserId = input.recipientProviderUserId ?? event.user.userId
+  const ticketLockKey = `${tipRaffleIdempotencyPrefix}${tipRaffle.id}:ticket:${event.user.userId}:${recipientProviderUserId}:sending`
   const ticketLockTtlMs = 2 * 60 * 1000 // 2 minutes
   if (!(await getChat().getState().setIfNotExists(ticketLockKey, true, ticketLockTtlMs))) return
   try {
@@ -4224,22 +4325,34 @@ async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount:
       }
       await postSlackEphemeral(
         tipRaffle.provider_id,
-        raw.channel.id,
+        raw.channel?.id ?? tipRaffle.provider_channel_id,
         event.user.userId,
         accessKey.code === 'insufficient_funds'
-          ? 'Ticket not bought. Your wallet has insufficient funds.'
-          : 'Ticket not bought. Try again.',
+          ? 'Tipets not bought. Your wallet has insufficient funds.'
+          : 'Tipets not bought. Try again.',
       )
       return
     }
-    const buyerMemberId = accessKey.memberId
-    if (!buyerMemberId) return
+    const buyerMember = await getConnectedSlackMember(
+      db,
+      tipRaffle.workspace_id,
+      recipientProviderUserId,
+    )
+    if (!buyerMember) {
+      await postSlackEphemeral(
+        tipRaffle.provider_id,
+        raw.channel?.id ?? tipRaffle.provider_channel_id,
+        event.user.userId,
+        'Tipets not bought. The recipient needs to connect to Tipbot first.',
+      )
+      return
+    }
     const escrowMember = await ensureTipRaffleEscrowMember(db, {
       chainId: tipRaffle.chain_id,
       providerId: tipRaffle.provider_id,
       workspaceId: tipRaffle.workspace_id,
     })
-    const ticketIdempotencyKey = `${tipRaffleIdempotencyPrefix}${tipRaffle.id}:ticket:${event.user.userId}:${slackActionInteractionId(event) ?? payload.data.nonce}`
+    const ticketIdempotencyKey = `${tipRaffleIdempotencyPrefix}${tipRaffle.id}:ticket:${event.user.userId}:${recipientProviderUserId}:${slackActionInteractionId(event) ?? payload?.nonce ?? Nanoid.generate()}`
     const result = await Tip.handleTipRequest(env, {
       amount: input.ticketCount * tipRaffle.ticket_amount,
       chainId: tipRaffle.chain_id,
@@ -4292,11 +4405,11 @@ async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount:
       if (result.code === 'pending') return
       await postSlackEphemeral(
         tipRaffle.provider_id,
-        raw.channel.id,
+        raw.channel?.id ?? tipRaffle.provider_channel_id,
         event.user.userId,
         result.code === 'insufficient_funds'
-          ? 'Ticket not bought. Your wallet has insufficient funds.'
-          : 'Ticket not bought. Try again.',
+          ? 'Tipets not bought. Your wallet has insufficient funds.'
+          : 'Tipets not bought. Try again.',
       )
       return
     }
@@ -4304,7 +4417,7 @@ async function handleTipRaffleBuy(event: chat.ActionEvent, input: { ticketCount:
     await db
       .insertInto('tip_raffle_ticket')
       .values({
-        buyer_member_id: buyerMemberId,
+        buyer_member_id: buyerMember.memberId,
         created_at: new Date().toISOString(),
         id: Nanoid.generate(),
         idempotency_key: ticketIdempotencyKey,
@@ -4818,14 +4931,15 @@ function tipAskIdempotencyKey(input: {
   return `${tipAskIdempotencyPrefix}${input.tipAskId}:${input.reaction}:${input.providerUserId}${input.interactionId ? `:${input.interactionId}` : input.nonce ? `:${input.nonce}` : ''}`
 }
 
-function slackActionInteractionId(event: chat.ActionEvent) {
+function slackActionInteractionId(event: chat.ActionEvent | chat.ModalSubmitEvent) {
   const raw = z
     .looseObject({
       actions: z.array(z.looseObject({ action_ts: z.string().min(1).optional() })).optional(),
       trigger_id: z.string().min(1).optional(),
+      view: z.looseObject({ id: z.string().min(1).optional() }).optional(),
     })
     .safeParse(event.raw)
-  return event.triggerId ?? raw.data?.trigger_id ?? raw.data?.actions?.[0]?.action_ts
+  return event.triggerId ?? raw.data?.trigger_id ?? raw.data?.actions?.[0]?.action_ts ?? raw.data?.view?.id
 }
 
 function tipAskAmount(
@@ -4899,12 +5013,12 @@ async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
   )
   const title = `<@${tipRaffle.creator_provider_user_id}> opened a raffle: ${tipRaffle.memo}`
   const entrants = entrantLines.length ? `Entrants: ${entrantLines.join(', ')}` : null
-  const ticketContext = `Ticket: ${formatTipRaffleAmount(tipRaffle.ticket_amount)} · Tickets: ${ticketCount}`
+  const ticketContext = `Tipet: ${formatTipRaffleAmount(tipRaffle.ticket_amount)} · Tipets: ${ticketCount}`
   const summary = (() => {
     if (tipRaffle.status === 'ended') {
       if (!tipRaffle.winner_provider_user_id)
         return [
-          `Ended · No winner · ${ticketCount} ${ticketCount === 1 ? 'ticket' : 'tickets'}`,
+          `Ended · No winner · ${ticketCount} ${ticketCount === 1 ? 'tipet' : 'tipets'}`,
           ticketContext,
           ...(entrants ? [entrants] : []),
         ].join('\n')
@@ -4915,12 +5029,12 @@ async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
       return [
         `Ended · Winner: <@${tipRaffle.winner_provider_user_id}>`,
         `Paid out: ${paidOutText}`,
-        `Winning ticket: #${tipRaffle.winning_ticket_number}`,
+        `Winning tipet: #${tipRaffle.winning_ticket_number}`,
         ticketContext,
         ...(entrants ? [entrants] : []),
         ...(tipRaffle.failed_ticket_count
           ? [
-              `${tipRaffle.failed_ticket_count} ${tipRaffle.failed_ticket_count === 1 ? 'ticket' : 'tickets'} failed payment`,
+              `${tipRaffle.failed_ticket_count} ${tipRaffle.failed_ticket_count === 1 ? 'tipet' : 'tipets'} failed payment`,
             ]
           : []),
       ].join('\n')
@@ -4944,19 +5058,34 @@ async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
       ...(tipRaffle.status === 'open'
         ? [
             {
-              elements: [1, 5].map((ticketCount) => ({
-                action_id: `tip_raffle_buy_${ticketCount}`,
-                text: {
-                  emoji: true,
-                  text: `Buy ${ticketCount}`,
-                  type: 'plain_text',
+              elements: [
+                ...[1, 5].map((ticketCount) => ({
+                  action_id: `tip_raffle_buy_${ticketCount}`,
+                  text: {
+                    emoji: true,
+                    text: `Buy ${ticketCount}`,
+                    type: 'plain_text',
+                  },
+                  type: 'button',
+                  value: JSON.stringify({
+                    nonce: Nanoid.generate(),
+                    tipRaffleId: tipRaffle.id,
+                  }),
+                })),
+                {
+                  action_id: 'tip_raffle_buy_for',
+                  text: {
+                    emoji: true,
+                    text: 'Buy for someone',
+                    type: 'plain_text',
+                  },
+                  type: 'button',
+                  value: JSON.stringify({
+                    nonce: Nanoid.generate(),
+                    tipRaffleId: tipRaffle.id,
+                  }),
                 },
-                type: 'button',
-                value: JSON.stringify({
-                  nonce: Nanoid.generate(),
-                  tipRaffleId: tipRaffle.id,
-                }),
-              })),
+              ],
               type: 'actions',
             },
             {

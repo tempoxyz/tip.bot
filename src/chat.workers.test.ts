@@ -2573,8 +2573,8 @@ test('/tip raffle create modal posts raffle message', async () => {
     ticket_amount: 10_000,
   })
   await expectSlackMessage(`<@${Constants.slack.adminUserId}> opened a raffle: team lunch`)
-  await expectSlackMessage('Ticket: $0.01')
-  await expectSlackMessage('Tickets: 0')
+  await expectSlackMessage('Tipet: $0.01')
+  await expectSlackMessage('Tipets: 0')
 })
 
 test('/tip raffle buy button records tickets and updates message', async () => {
@@ -2624,7 +2624,7 @@ test('/tip raffle buy button records tickets and updates message', async () => {
     .where(
       'tip.idempotency_key',
       '=',
-      `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:tip-raffle-buy-5-trigger`,
+      `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:${Constants.slack.adminUserId}:tip-raffle-buy-5-trigger`,
     )
     .executeTakeFirstOrThrow()
 
@@ -2639,7 +2639,7 @@ test('/tip raffle buy button records tickets and updates message', async () => {
     sender_provider_user_id: Constants.slack.adminUserId,
   })
   await expectSlackMessage('Pot: $0.005')
-  await expectSlackMessage('Ticket: $0.001 · Tickets: 5')
+  await expectSlackMessage('Tipet: $0.001 · Tipets: 5')
   if (!connected.recipientMember) throw new Error('Expected connected recipient.')
   await db
     .insertInto('tip_raffle_ticket')
@@ -2657,7 +2657,82 @@ test('/tip raffle buy button records tickets and updates message', async () => {
   )
   const history = await slack.conversations.history({ channel: Constants.slack.channelId })
   const message = history.messages?.find((message) => message.text?.includes('Pot: $0.015'))
-  expect(message?.text).toMatch(/Ends:[\s\S]*Entrants:[\s\S]*Ticket:/)
+  expect(message?.text).toMatch(/Ends:[\s\S]*Entrants:[\s\S]*Tipet:/)
+})
+
+test('/tip raffle buy for someone records tipets for selected recipient', async () => {
+  await connectTipAccounts()
+  await postSlackInteraction(createRaffleViewSubmissionPayload({ amount: '0.001' }))
+  const tipRaffle = await db
+    .selectFrom('tip_raffle')
+    .selectAll()
+    .where('provider_id', '=', providerId)
+    .executeTakeFirstOrThrow()
+
+  const response = await postSlackInteraction({
+    team: { id: providerId },
+    type: 'view_submission',
+    user: { id: Constants.slack.adminUserId, name: Constants.slack.adminUserName },
+    view: {
+      callback_id: 'tip_raffle_buy_for',
+      id: 'tip-raffle-buy-for-view',
+      private_metadata: JSON.stringify({ tipRaffleId: tipRaffle.id }),
+      state: {
+        values: {
+          recipient: {
+            recipient: {
+              selected_user: Constants.slack.memberUserId,
+              type: 'users_select',
+            },
+          },
+          ticket_count: {
+            ticket_count: {
+              selected_option: {
+                text: { text: '5 tipets', type: 'plain_text' },
+                value: '5',
+              },
+              type: 'static_select',
+            },
+          },
+        },
+      },
+    },
+  })
+  const ticket = await db
+    .selectFrom('tip_raffle_ticket')
+    .innerJoin('member', 'member.id', 'tip_raffle_ticket.buyer_member_id')
+    .select(['member.provider_user_id', 'tip_raffle_ticket.ticket_count'])
+    .where('tip_raffle_ticket.raffle_id', '=', tipRaffle.id)
+    .executeTakeFirstOrThrow()
+  const escrowTip = await db
+    .selectFrom('tip')
+    .innerJoin('member as recipient', 'recipient.id', 'tip.recipient_member_id')
+    .innerJoin('member as sender', 'sender.id', 'tip.sender_member_id')
+    .select([
+      'recipient.provider_user_id as recipient_provider_user_id',
+      'sender.provider_user_id as sender_provider_user_id',
+      'tip.amount',
+    ])
+    .where(
+      'tip.idempotency_key',
+      '=',
+      `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:${Constants.slack.memberUserId}:tip-raffle-buy-for-view`,
+    )
+    .executeTakeFirstOrThrow()
+
+  expect(response.status).toBe(200)
+  expect(ticket).toEqual({
+    provider_user_id: Constants.slack.memberUserId,
+    ticket_count: 5,
+  })
+  expect(escrowTip).toEqual({
+    amount: 5000,
+    recipient_provider_user_id: Constants.slack.botUserId,
+    sender_provider_user_id: Constants.slack.adminUserId,
+  })
+  await expectSlackMessage(
+    `Entrants: <@${Constants.slack.memberUserId}> x5`,
+  )
 })
 
 test('/tip raffle buy button uses raffle chain when workspace network changes after creation', async () => {
@@ -2705,14 +2780,14 @@ test('/tip raffle buy button uses raffle chain when workspace network changes af
     .where(
       'idempotency_key',
       '=',
-      `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:tip-raffle-buy-chain-change-trigger`,
+      `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:${Constants.slack.adminUserId}:tip-raffle-buy-chain-change-trigger`,
     )
     .executeTakeFirstOrThrow()
 
   expect(response.status).toBe(200)
   expect(ticket.ticket_count).toBe(1)
   expect(escrowTip).toEqual({ amount: 1000, chain_id: tipRaffle.chain_id })
-  await expectSlackMessageNotContaining('Ticket not bought. Try again.')
+  await expectSlackMessageNotContaining('Tipets not bought. Try again.')
 })
 
 test('/tip raffle buy button does not record tickets when escrow payment fails', async () => {
@@ -2753,7 +2828,7 @@ test('/tip raffle buy button does not record tickets when escrow payment fails',
 
   expect(response.status).toBe(200)
   expect(ticket).toBeUndefined()
-  await expectSlackMessage('Ticket not bought. Your wallet has insufficient funds.')
+  await expectSlackMessage('Tipets not bought. Your wallet has insufficient funds.')
 })
 
 test('/tip raffle buy button can retry after a failed ticket payment', async () => {
@@ -2824,14 +2899,14 @@ test('/tip raffle buy button can retry after a failed ticket payment', async () 
   expect(retryResponse.status).toBe(200)
   expect(handleTipRequest).toHaveBeenCalledTimes(2)
   expect(handleTipRequest.mock.calls.map((call) => call[1].idempotencyKey)).toEqual([
-    `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:tip-raffle-buy-retry-failed-trigger`,
-    `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:tip-raffle-buy-retry-success-trigger`,
+    `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:${Constants.slack.adminUserId}:tip-raffle-buy-retry-failed-trigger`,
+    `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:${Constants.slack.adminUserId}:tip-raffle-buy-retry-success-trigger`,
   ])
   expect(ticket).toEqual({
-    idempotency_key: `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:tip-raffle-buy-retry-success-trigger`,
+    idempotency_key: `tip_raffle:${tipRaffle.id}:ticket:${Constants.slack.adminUserId}:${Constants.slack.adminUserId}:tip-raffle-buy-retry-success-trigger`,
     ticket_count: 1,
   })
-  await expectSlackMessage('Ticket not bought. Try again.')
+  await expectSlackMessage('Tipets not bought. Try again.')
 })
 
 test('/tip raffle buy button does not spam while ticket payment is pending', async () => {
@@ -2958,7 +3033,7 @@ test('/tip raffle buy button offers refresh when ticket payment requires confirm
   expect(response.status).toBe(200)
   expect(ticket).toBeUndefined()
   await expectSlackMessage('Link expires in 10 minutes')
-  await expectSlackMessageNotContaining('Ticket not bought. Try again.')
+  await expectSlackMessageNotContaining('Tipets not bought. Try again.')
 })
 
 test('/tip raffle cron ends without winner when fewer than two buyers enter', async () => {
@@ -3002,8 +3077,8 @@ test('/tip raffle cron ends without winner when fewer than two buyers enter', as
     winning_ticket_number: null,
   })
   expect(initializeSpy).toHaveBeenCalled()
-  await expectSlackMessage('Ended · No winner · 5 tickets')
-  await expectSlackMessage('Ticket: $0.001 · Tickets: 5')
+  await expectSlackMessage('Ended · No winner · 5 tipets')
+  await expectSlackMessage('Tipet: $0.001 · Tipets: 5')
   await expectSlackMessage(`Entrants: <@${Constants.slack.adminUserId}> x5`)
 })
 
@@ -3051,7 +3126,7 @@ test('/tip raffle cron retries stale settling raffle', async () => {
     winner_member_id: null,
     winning_ticket_number: null,
   })
-  await expectSlackMessage('Ended · No winner · 5 tickets')
+  await expectSlackMessage('Ended · No winner · 5 tipets')
 })
 
 test('/tip raffle cron reuses winner selected before stale settlement retry', async () => {
@@ -3210,7 +3285,7 @@ test('/tip raffle cron retries stale ended raffle message update', async () => {
     .executeTakeFirstOrThrow()
 
   expect(updated.updated_at).not.toBe(updated.ended_at)
-  await expectSlackMessage('Ended · No winner · 0 tickets')
+  await expectSlackMessage('Ended · No winner · 0 tipets')
 })
 
 test('/tip raffle cron skips stale ended raffle message that no longer exists', async () => {
@@ -3259,7 +3334,7 @@ test('/tip raffle cron skips stale ended raffle message that no longer exists', 
 
   expect(rows.find((row) => row.id === missing.id)?.updated_at).not.toBe(missingEndedAt)
   expect(rows.find((row) => row.id === visible.id)?.updated_at).not.toBe(visibleEndedAt)
-  await expectSlackMessage('Ended · No winner · 0 tickets')
+  await expectSlackMessage('Ended · No winner · 0 tipets')
 })
 
 test('/tip raffle closes expired raffle and settles winner payout', async () => {
@@ -3352,7 +3427,7 @@ test('/tip raffle closes expired raffle and settles winner payout', async () => 
   await expectSlackMessage('Paid out: $0.002')
   await expectSlackMessageNotContaining('Paid out: $0.002 / $0.002')
   await expectSlackMessageNotContaining('Paid out: $0.001 / $0.002')
-  await expectSlackMessage('Ticket: $0.001 · Tickets: 2')
+  await expectSlackMessage('Tipet: $0.001 · Tipets: 2')
   await expectSlackMessage(`<@${Constants.slack.adminUserId}> x1`)
   await expectSlackMessage(`<@${Constants.slack.memberUserId}> x1`)
   if (!tipRaffle.provider_message_ts) throw new Error('Expected raffle message timestamp.')
