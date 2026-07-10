@@ -2101,7 +2101,6 @@ describe('/api/confirm/:token', () => {
       botUserId: Constants.slack.botUserId,
       teamName: Constants.slack.teamName,
     })
-    const initialize = vi.spyOn(Chat.getChat(), 'initialize')
     await factory.reaction_tip.insert({
       channel_id: apiChannelId,
       idempotency_key: idempotencyKey,
@@ -2114,6 +2113,7 @@ describe('/api/confirm/:token', () => {
       workspace_id: confirmation.workspace.id,
     })
     const signedTransaction = await signConfirmationTransaction(confirmation)
+    const initialize = vi.spyOn(Chat.getChat(), 'initialize')
 
     const response = await client.api.confirm[':token'].$post({
       json: { address: confirmation.senderRoot.address, signedTransaction },
