@@ -743,6 +743,7 @@ export const api = new Hono<{
         )
           c.executionCtx.waitUntil(
             (async () => {
+              await Chat.getChat().initialize()
               const db = DB.create(c.env.DB)
               const reactionTip = await db
                 .selectFrom('reaction_tip')
