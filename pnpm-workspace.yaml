@@ -2,9 +2,11 @@ allowBuilds:
   better-sqlite3@12.9.0: true
   cpu-features@0.0.10: true
   esbuild@0.27.3: true
+  esbuild@0.28.1: true
   lightningcss@1.32.0: true
   msw: true
   protobufjs@7.5.8: true
+  protobufjs@7.6.3: true
   sharp@0.34.5: true
   ssh2@1.17.0: true
   workerd@1.20260426.1: true
@@ -19,9 +21,9 @@ auditConfig:
 blockExoticSubdeps: true
 catalog:
   # Vite+ dependency aliases.
-  vite: npm:@voidzero-dev/vite-plus-core@0.1.20
-  vite-plus: 0.1.20
-  vitest: npm:@voidzero-dev/vite-plus-test@0.1.20
+  vite: npm:@voidzero-dev/vite-plus-core@0.1.24
+  vite-plus: 0.1.24
+  vitest: npm:@voidzero-dev/vite-plus-test@0.1.24
 dangerouslyAllowAllBuilds: false
 enableGlobalVirtualStore: true
 linkWorkspacePackages: false
@@ -31,26 +33,48 @@ minimumReleaseAgeExclude:
   - mppx
   - tmp
   - viem
+  - '@babel/core@7.29.6'
+  - shell-quote@1.8.4
+  - '@grpc/grpc-js@1.14.4'
+  - esbuild@0.28.1
+  - protobufjs@7.6.3
+  - form-data@4.0.6
+  - tar@7.5.16
+  - vite-plus@0.1.24
+  - launch-editor@2.14.1
+  - hono@4.12.25
+  - undici@7.28.0
+  - js-yaml@4.3.0
+  - ws@8.21.0
 minimumReleaseAgeStrict: true
 overrides:
-  hono: 4.12.21
-  protobufjs: 7.5.8
-  tar: 7.5.11
-  tmp: 0.2.6
+  '@babel/core': 7.29.6
+  '@grpc/grpc-js': 1.14.4
+  esbuild: 0.28.1
+  form-data: 4.0.6
+  hono: 4.12.25
+  js-yaml: 4.3.0
+  launch-editor: 2.14.1
+  protobufjs: 7.6.3
+  shell-quote: 1.8.4
+  tar: 7.5.16
+  tmp: 0.2.7
+  undici: 7.28.0
   uuid: 11.1.1
   vite: 'catalog:'
+  vite-plus: 0.1.24
   vitest: 'catalog:'
-  ws: 8.20.1
+  ws: 8.21.0
 packageExtensions:
   '@cloudflare/vitest-pool-workers@*':
     dependencies:
-      undici: 7.24.8
+      undici: 7.28.0
   '@svgr/core@*':
     dependencies:
       '@svgr/plugin-jsx': 8.1.0
   '@voidzero-dev/vite-plus-core@*':
     dependencies:
-      vite-plus: 0.1.20
+      vite-plus: 0.1.24
   local-pkg@*:
     dependencies:
       '@svgr/core': 8.1.0
