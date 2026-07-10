@@ -2101,6 +2101,7 @@ describe('/api/confirm/:token', () => {
       botUserId: Constants.slack.botUserId,
       teamName: Constants.slack.teamName,
     })
+    const initialize = vi.spyOn(Chat.getChat(), 'initialize')
     await factory.reaction_tip.insert({
       channel_id: apiChannelId,
       idempotency_key: idempotencyKey,
@@ -2128,6 +2129,7 @@ describe('/api/confirm/:token', () => {
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({ ok: true })
+    expect(initialize).toHaveBeenCalledOnce()
     expect(reactionTip.tip_id).toEqual(expect.any(String))
     expect(
       replies.messages?.some((message) =>
