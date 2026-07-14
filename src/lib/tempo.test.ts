@@ -1,5 +1,7 @@
-import { expect, test } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 import * as Tempo from '#/lib/tempo.ts'
+
+afterEach(() => vi.restoreAllMocks())
 
 test('returns supported Tempo chains', () => {
   expect(Tempo.getChain(Tempo.chainLookup.mainnet).id).toBe(Tempo.chainLookup.mainnet)
@@ -79,4 +81,39 @@ test('formats Tempo token symbols and transaction links', () => {
     `/address/${Tempo.addressLookup.pathUsd}`,
   )
   expect(Tempo.formatTxLink(Tempo.chainLookup.testnet, '0xabc')).toContain('/receipt/0xabc')
+})
+
+test('gets token metadata from the Tempo API', async () => {
+  const fetch = vi
+    .fn()
+    .mockResolvedValue(
+      new Response(JSON.stringify({ currency: 'USD', symbol: 'USDC.e' }), { status: 200 }),
+    )
+  vi.stubGlobal('fetch', fetch)
+
+  await expect(
+    Tempo.getTokenMetadata(
+      { TEMPO_API_URL: 'https://api.example' },
+      Tempo.chainLookup.mainnet,
+      Tempo.addressLookup.usdcE,
+    ),
+  ).resolves.toEqual({ currency: 'USD', symbol: 'USDC.e' })
+  expect(fetch).toHaveBeenCalledWith(
+    new URL(
+      `https://api.example/v1/tokens/${Tempo.addressLookup.usdcE}?chainId=${Tempo.chainLookup.mainnet}`,
+    ),
+    { signal: expect.any(AbortSignal) },
+  )
+})
+
+test('falls back when the Tempo API request fails', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })))
+
+  await expect(
+    Tempo.getTokenMetadata(
+      { TEMPO_API_URL: 'https://api.example' },
+      Tempo.chainLookup.mainnet,
+      Tempo.addressLookup.pathUsd,
+    ),
+  ).resolves.toEqual({ currency: 'USD', symbol: 'PathUSD' })
 })

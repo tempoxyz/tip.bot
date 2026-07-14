@@ -7,5 +7,6 @@ declare namespace Cloudflare {
     RPC_CREDENTIALS?: string | undefined
     RPC_URL_MAINNET?: string | undefined
     RPC_URL_TESTNET?: string | undefined
+    TEMPO_API_URL?: string | undefined
   }
 }
