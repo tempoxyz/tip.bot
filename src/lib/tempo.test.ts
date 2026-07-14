@@ -98,12 +98,10 @@ test('gets token metadata from the Tempo API', async () => {
       Tempo.addressLookup.usdcE,
     ),
   ).resolves.toEqual({ currency: 'USD', symbol: 'USDC.e' })
-  expect(fetch).toHaveBeenCalledWith(
-    new URL(
-      `https://api.example/v1/tokens/${Tempo.addressLookup.usdcE}?chainId=${Tempo.chainLookup.mainnet}`,
-    ),
-    { signal: expect.any(AbortSignal) },
+  expect(fetch.mock.calls[0]?.[0]).toBe(
+    `https://api.example/v1/tokens/${Tempo.addressLookup.usdcE}?chainId=${Tempo.chainLookup.mainnet}`,
   )
+  expect(fetch.mock.calls[0]?.[1]).toMatchObject({ signal: expect.any(AbortSignal) })
 })
 
 test('falls back when the Tempo API request fails', async () => {

@@ -1,6 +1,7 @@
 allowBuilds:
   better-sqlite3@12.9.0: true
   cpu-features@0.0.10: true
+  es5-ext: false
   esbuild@0.27.3: true
   esbuild@0.28.1: true
   lightningcss@1.32.0: true
@@ -9,6 +10,7 @@ allowBuilds:
   protobufjs@7.6.3: true
   sharp@0.34.5: true
   ssh2@1.17.0: true
+  vue-demi: false
   workerd@1.20260426.1: true
   workerd@1.20260504.1: true
   workerd@1.20260507.1: true

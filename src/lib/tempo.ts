@@ -1,4 +1,5 @@
 import { Address } from 'ox'
+import { Client } from 'tapimo'
 import { tempo, tempoLocalnet, tempoModerato } from 'viem/tempo/chains'
 
 export const addressLookup = {
@@ -104,14 +105,16 @@ export async function getTokenMetadata(
     if (chainId === chainLookup.localnet) return getTokenMetadataFallback(tokenAddress)
 
     const tokenMetadataTimeoutMs = 1_000 // 1 second
-    const url = new URL(
-      `/v1/tokens/${Address.checksum(tokenAddress)}`,
-      env.TEMPO_API_URL || 'https://api.tempo.xyz',
-    )
-    url.searchParams.set('chainId', String(chainId))
-    const response = await fetch(url, { signal: AbortSignal.timeout(tokenMetadataTimeoutMs) })
-    if (!response.ok) throw new Error(`Tempo API returned ${response.status}.`)
-    const metadata = (await response.json()) as { currency: string; symbol: string }
+    const response = await Client.create({
+      fetch: (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+        fetch(input, { ...init, signal: AbortSignal.timeout(tokenMetadataTimeoutMs) }),
+      url: env.TEMPO_API_URL || undefined,
+    }).v1.tokens[':token'].$get({
+      param: { token: Address.checksum(tokenAddress) },
+      query: { chainId: String(chainId) },
+    })
+    if (response.status !== 200) throw new Error(`Tempo API returned ${response.status}.`)
+    const metadata = await response.json()
     return { currency: metadata.currency, symbol: metadata.symbol }
   } catch {
     return getTokenMetadataFallback(tokenAddress)
