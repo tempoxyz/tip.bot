@@ -30,6 +30,8 @@ on:
         required: false
       SLACK_CONFIG_REFRESH_TOKEN:
         required: false
+      TEMPO_API_KEY:
+        required: true
       TWITTER_OAUTH_CLIENT_ID:
         required: true
       TWITTER_OAUTH_CLIENT_SECRET:
