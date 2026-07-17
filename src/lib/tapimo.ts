@@ -1,13 +1,46 @@
 import '@tanstack/react-start/server-only'
-import { env } from 'cloudflare:workers'
-import { Client } from 'tapimo'
+import { hc } from 'hono/client'
+import type { App } from 'tapimo'
 import * as Tempo from '#/lib/tempo.ts'
 
-export const client = Client.create({
-  apiKey: env.TEMPO_API_KEY,
-})
+// Avoid Tapimo's server-heavy runtime export until it exposes a client-only entrypoint.
+export const client = hc<App.App>('https://api.tempo.xyz')
 
-export async function getTokenMetadata(chainId: number, tokenAddress: string) {
+export async function getTokenBalances(
+  env: Pick<Env, 'TEMPO_API_KEY'>,
+  chainId: number,
+  address: string,
+) {
+  if (chainId === Tempo.chainLookup.localnet) return null
+
+  try {
+    const tokenBalancesTimeoutMs = 1_500 // 1.5 seconds
+    const response = await client.v1.addresses[':address'].balances.$get(
+      {
+        param: { address: address as `0x${string}` },
+        query: { chainId: String(chainId), limit: '200', verified: 'true' },
+      },
+      {
+        init: {
+          headers: { 'tempo-api-key': env.TEMPO_API_KEY },
+          signal: AbortSignal.timeout(tokenBalancesTimeoutMs),
+        },
+      },
+    )
+    if (response.status !== 200) throw new Error(`Tempo API returned ${response.status}.`)
+    return (await response.json()).data.filter((balance) =>
+      Tempo.isAllowedToken(chainId, balance.token.address),
+    )
+  } catch {
+    return null
+  }
+}
+
+export async function getTokenMetadata(
+  env: Pick<Env, 'TEMPO_API_KEY'>,
+  chainId: number,
+  tokenAddress: string,
+) {
   if (chainId === Tempo.chainLookup.localnet) return Tempo.getTokenMetadataFallback(tokenAddress)
 
   try {
@@ -17,7 +50,12 @@ export async function getTokenMetadata(chainId: number, tokenAddress: string) {
         param: { token: tokenAddress as `0x${string}` },
         query: { chainId: String(chainId) },
       },
-      { init: { signal: AbortSignal.timeout(tokenMetadataTimeoutMs) } },
+      {
+        init: {
+          headers: { 'tempo-api-key': env.TEMPO_API_KEY },
+          signal: AbortSignal.timeout(tokenMetadataTimeoutMs),
+        },
+      },
     )
     if (response.status !== 200) throw new Error(`Tempo API returned ${response.status}.`)
     const metadata = await response.json()

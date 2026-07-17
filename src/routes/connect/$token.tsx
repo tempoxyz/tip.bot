@@ -285,7 +285,7 @@ const getConnectData = createServerFn({ method: 'GET' })
 
     const json = (await response.json()) as InferResponseType<typeof endpoint.$get, 200>
     try {
-      const metadata = await Tapimo.getTokenMetadata(json.chainId, json.tokenAddress)
+      const metadata = await Tapimo.getTokenMetadata(env, json.chainId, json.tokenAddress)
       return {
         ...json,
         tokenCurrency: metadata.currency,

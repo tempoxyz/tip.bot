@@ -5,6 +5,7 @@ import { multicall } from 'viem/actions'
 import { Actions } from 'viem/tempo'
 import { z } from 'zod'
 import { formatAmount, formatCurrencyAmount } from '#/lib/format.ts'
+import * as Tapimo from '#/lib/tapimo.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
 import * as DB from '#db/client.ts'
@@ -609,10 +610,11 @@ async function buildHomeView(input: {
         type: 'home',
       }
     })()
+  const accountAddress = member.account_address
 
   const [balances, received, sent, mostTipped, mostTippedBy, recent] = await Promise.all([
     (async () => {
-      // Fetch balances for every token allowed in this workspace, falling back to zero on RPC failures.
+      // Fetch balances for every token allowed in this workspace, falling back to RPC.
       const tokens = [
         { address: Tempo.addressLookup.pathUsd, label: 'PathUSD' },
         { address: Tempo.addressLookup.usdcE, label: 'USDC.e' },
@@ -621,6 +623,17 @@ async function buildHomeView(input: {
         { address: Tempo.addressLookup.betaUsd, label: 'BetaUSD' },
         { address: Tempo.addressLookup.thetaUsd, label: 'ThetaUSD' },
       ].filter((token) => Tempo.isAllowedToken(workspace.chain_id, token.address))
+      const balances = await Tapimo.getTokenBalances(input.env, workspace.chain_id, accountAddress)
+      if (balances)
+        return tokens.map((token) => ({
+          address: token.address,
+          balance: BigInt(
+            balances.find((balance) => Address.isEqual(token.address, balance.token.address))
+              ?.amount ?? 0,
+          ),
+          label: token.label,
+        }))
+
       const client = createClient({
         chain: Tempo.getChain(workspace.chain_id),
         transport: http(Tempo.getRpcUrl(input.env, workspace.chain_id), {
@@ -633,7 +646,7 @@ async function buildHomeView(input: {
           allowFailure: true,
           contracts: tokens.map((token) =>
             Actions.token.getBalance.call({
-              account: member.account_address as Address.Address,
+              account: accountAddress as Address.Address,
               token: token.address as Address.Address,
             }),
           ),
@@ -734,7 +747,7 @@ async function buildHomeView(input: {
 
   return (() => {
     // Build the Home tab for connected members with wallet, balance, stats, and recent tip sections.
-    const explorerUrl = Tempo.explorerLink(workspace.chain_id, member.account_address)
+    const explorerUrl = Tempo.explorerLink(workspace.chain_id, accountAddress)
 
     const balanceFields = [...balances]
       .sort((a, b) => {
@@ -846,7 +859,7 @@ async function buildHomeView(input: {
       blocks: [
         {
           text: {
-            text: `Hi <@${input.slackUserId}>!\n\n*Connected wallet:* <${explorerUrl}|${member.account_address}>`,
+            text: `Hi <@${input.slackUserId}>!\n\n*Connected wallet:* <${explorerUrl}|${accountAddress}>`,
             type: 'mrkdwn',
           },
           type: 'section',
