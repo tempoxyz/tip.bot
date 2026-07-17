@@ -153,8 +153,6 @@
           "SLACK_CLIENT_SECRET",
           "SLACK_SIGNING_SECRET",
           "TEMPO_API_KEY",
-          "TWITTER_OAUTH_CLIENT_ID",
-          "TWITTER_OAUTH_CLIENT_SECRET",
         ],
       },
       "vars": {
