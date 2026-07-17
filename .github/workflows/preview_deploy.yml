@@ -426,6 +426,7 @@ jobs:
             SLACK_CLIENT_ID
             SLACK_CLIENT_SECRET
             SLACK_SIGNING_SECRET
+            TEMPO_API_KEY
             TWITTER_OAUTH_CLIENT_ID
             TWITTER_OAUTH_CLIENT_SECRET
         env:
@@ -435,6 +436,7 @@ jobs:
           SLACK_CLIENT_ID: ${{ steps.slack.outputs.client_id || steps.state.outputs.client_id }}
           SLACK_CLIENT_SECRET: ${{ steps.slack.outputs.client_secret || steps.state.outputs.client_secret }}
           SLACK_SIGNING_SECRET: ${{ steps.slack.outputs.signing_secret || steps.state.outputs.signing_secret }}
+          TEMPO_API_KEY: ${{ secrets.TEMPO_API_KEY }}
           TWITTER_OAUTH_CLIENT_ID: ${{ secrets.TWITTER_OAUTH_CLIENT_ID }}
           TWITTER_OAUTH_CLIENT_SECRET: ${{ secrets.TWITTER_OAUTH_CLIENT_SECRET }}
 

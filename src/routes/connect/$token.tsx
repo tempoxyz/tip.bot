@@ -3,8 +3,8 @@ import { createServerFn } from '@tanstack/react-start'
 import { env } from 'cloudflare:workers'
 import type { InferResponseType } from 'hono/client'
 import * as React from 'react'
-import { createClient, http, parseUnits } from 'viem'
-import { Actions } from 'viem/tempo'
+import { Client } from 'tapimo'
+import { parseUnits } from 'viem'
 import { useConnect, useConnection, useConnectors } from 'wagmi'
 import * as z from 'zod/mini'
 import { api } from '#/api.ts'
@@ -285,17 +285,21 @@ const getConnectData = createServerFn({ method: 'GET' })
 
     const json = (await response.json()) as InferResponseType<typeof endpoint.$get, 200>
     try {
-      const tokenMetadataTimeoutMs = 1_000 // 1 second
-      const metadata = await Actions.token.getMetadata(
-        createClient({
-          chain: Tempo.getChain(json.chainId),
-          transport: http(Tempo.getRpcUrl(env, json.chainId), {
-            retryCount: 0,
-            timeout: tokenMetadataTimeoutMs,
-          }),
-        }),
-        { token: json.tokenAddress },
-      )
+      const metadata = await (async () => {
+        if (json.chainId === Tempo.chainLookup.localnet)
+          return Tempo.getTokenMetadataFallback(json.tokenAddress)
+
+        const tokenMetadataTimeoutMs = 1_000 // 1 second
+        const response = await Client.create({
+          apiKey: env.TEMPO_API_KEY,
+          init: { signal: AbortSignal.timeout(tokenMetadataTimeoutMs) },
+        }).v1.tokens[':token'].$get({
+          param: { token: json.tokenAddress },
+          query: { chainId: String(json.chainId) },
+        })
+        if (response.status !== 200) throw new Error(`Tempo API returned ${response.status}.`)
+        return await response.json()
+      })()
       return {
         ...json,
         tokenCurrency: metadata.currency,
