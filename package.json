@@ -37,7 +37,7 @@
     "@tanstack/router-plugin": "1.167.35",
     "accounts": "^0.14.1",
     "chat": "4.27.0",
-    "hono": "4.12.21",
+    "hono": "4.12.25",
     "kysely": "0.28.17",
     "nanoid": "^5.1.11",
     "ox": "0.14.20",

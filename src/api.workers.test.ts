@@ -2113,6 +2113,7 @@ describe('/api/confirm/:token', () => {
       workspace_id: confirmation.workspace.id,
     })
     const signedTransaction = await signConfirmationTransaction(confirmation)
+    const initialize = vi.spyOn(Chat.getChat(), 'initialize')
 
     const response = await client.api.confirm[':token'].$post({
       json: { address: confirmation.senderRoot.address, signedTransaction },
@@ -2128,6 +2129,7 @@ describe('/api/confirm/:token', () => {
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({ ok: true })
+    expect(initialize).toHaveBeenCalledOnce()
     expect(reactionTip.tip_id).toEqual(expect.any(String))
     expect(
       replies.messages?.some((message) =>
