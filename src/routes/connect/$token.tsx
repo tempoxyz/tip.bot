@@ -285,21 +285,7 @@ const getConnectData = createServerFn({ method: 'GET' })
 
     const json = (await response.json()) as InferResponseType<typeof endpoint.$get, 200>
     try {
-      const metadata = await (async () => {
-        if (json.chainId === Tempo.chainLookup.localnet)
-          return Tempo.getTokenMetadataFallback(json.tokenAddress)
-
-        const tokenMetadataTimeoutMs = 1_000 // 1 second
-        const response = await Tapimo.client.v1.tokens[':token'].$get(
-          {
-            param: { token: json.tokenAddress },
-            query: { chainId: String(json.chainId) },
-          },
-          { init: { signal: AbortSignal.timeout(tokenMetadataTimeoutMs) } },
-        )
-        if (response.status !== 200) throw new Error(`Tempo API returned ${response.status}.`)
-        return await response.json()
-      })()
+      const metadata = await Tapimo.getTokenMetadata(json.chainId, json.tokenAddress)
       return {
         ...json,
         tokenCurrency: metadata.currency,

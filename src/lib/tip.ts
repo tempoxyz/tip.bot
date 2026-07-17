@@ -5,6 +5,7 @@ import * as DB from '#db/client.ts'
 import { replaceEmojiShortcodes } from '#/lib/emoji.ts'
 import { formatAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
+import * as Tapimo from '#/lib/tapimo.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import type { DB as Database } from '#db/types.gen.ts'
 import { AbiFunction, Address, Hash, Hex } from 'ox'
@@ -231,9 +232,9 @@ export async function handleTipRequest(
       ok: false,
     }
 
-  const existing = await getExistingTipResult(env, db, input, tokenAddress)
+  const existing = await getExistingTipResult(db, input, tokenAddress)
   if (existing) return existing
-  const existingPending = await getExistingPendingTipResult(env, db, input, tokenAddress)
+  const existingPending = await getExistingPendingTipResult(db, input, tokenAddress)
   if (existingPending) return existingPending
 
   const sender = await getConnectedMember(db, workspace.id, input.senderProviderUserId)
@@ -284,7 +285,7 @@ export async function handleTipRequest(
     })
 
   if (!recipient)
-    return await createPendingTip(env, db, {
+    return await createPendingTip(db, {
       accessKey,
       amount,
       idempotencyKey: input.idempotencyKey,
@@ -429,7 +430,7 @@ export async function handleTipBatchRequest(
       ok: false,
     }
 
-  const existing = await getExistingTipBatchResult(env, db, input, tokenAddress)
+  const existing = await getExistingTipBatchResult(db, input, tokenAddress)
   if (existing) return existing
 
   const sender = await getConnectedMember(db, workspace.id, input.senderProviderUserId)
@@ -510,7 +511,7 @@ export async function handleTipBatchRequest(
     )) as Extract<TipBatchResult, { ok: false }>
 
   if (connectedTotalAmount === 0) {
-    const queuedTips = await createQueuedBatchTips(env, db, {
+    const queuedTips = await createQueuedBatchTips(db, {
       accessKey,
       amount,
       idempotencyKey: input.idempotencyKey,
@@ -526,11 +527,7 @@ export async function handleTipBatchRequest(
       tokenAddress,
       workspace: executionWorkspace,
     })
-    const tokenMetadata = await Tempo.getTokenMetadata(
-      env,
-      executionWorkspace.chain_id,
-      tokenAddress,
-    )
+    const tokenMetadata = await Tapimo.getTokenMetadata(executionWorkspace.chain_id, tokenAddress)
     return {
       amount: formatAmount(amount),
       chainId: executionWorkspace.chain_id,
@@ -574,7 +571,7 @@ export async function handleTipBatchRequest(
     workspace: executionWorkspace,
   })
   if (result.ok && queueableSkippedRecipients.length) {
-    const queuedTips = await createQueuedBatchTips(env, db, {
+    const queuedTips = await createQueuedBatchTips(db, {
       accessKey,
       amount,
       idempotencyKey: input.idempotencyKey,
@@ -1127,7 +1124,7 @@ export async function claimPendingTip(
     .where('id', '=', input.pendingTipId)
     .executeTakeFirst()
   if (!pending) return null
-  if (pending.status === 'sent') return await getSentPendingTipResult(env, db, pending)
+  if (pending.status === 'sent') return await getSentPendingTipResult(db, pending)
   if (!['pending', 'sending'].includes(pending.status)) return null
 
   const now = new Date().toISOString()
@@ -1254,7 +1251,6 @@ export async function claimPendingTip(
 }
 
 async function getExistingPendingTipResult(
-  env: Env,
   db: DB.Type,
   input: {
     idempotencyKey: string
@@ -1269,7 +1265,7 @@ async function getExistingPendingTipResult(
     .where('idempotency_key', '=', input.idempotencyKey)
     .executeTakeFirst()
   if (!existing || existing.status !== 'pending') return null
-  const tokenMetadata = await Tempo.getTokenMetadata(env, existing.chain_id, existing.token_address)
+  const tokenMetadata = await Tapimo.getTokenMetadata(existing.chain_id, existing.token_address)
   return {
     amount: formatAmount(existing.amount),
     chainId: existing.chain_id,
@@ -1290,7 +1286,6 @@ async function getExistingPendingTipResult(
 }
 
 async function createPendingTip(
-  env: Env,
   db: DB.Type,
   input: {
     accessKey: Database.Selectable.access_key
@@ -1348,11 +1343,7 @@ async function createPendingTip(
       workspace_id: input.workspace.id,
     })
     .execute()
-  const tokenMetadata = await Tempo.getTokenMetadata(
-    env,
-    input.workspace.chain_id,
-    input.tokenAddress,
-  )
+  const tokenMetadata = await Tapimo.getTokenMetadata(input.workspace.chain_id, input.tokenAddress)
   return {
     amount: formatAmount(input.amount),
     chainId: input.workspace.chain_id,
@@ -1373,7 +1364,6 @@ async function createPendingTip(
 }
 
 async function createQueuedBatchTips(
-  env: Env,
   db: DB.Type,
   input: {
     accessKey: Database.Selectable.access_key
@@ -1396,7 +1386,6 @@ async function createQueuedBatchTips(
   for (const recipient of input.recipients) {
     const idempotencyKey = `${input.idempotencyKey}:${recipient.recipientProviderUserId}:pending`
     const existing = await getExistingPendingTipResult(
-      env,
       db,
       {
         idempotencyKey,
@@ -1407,7 +1396,7 @@ async function createQueuedBatchTips(
     )
     const result =
       existing ??
-      (await createPendingTip(env, db, {
+      (await createPendingTip(db, {
         accessKey: input.accessKey,
         amount: input.amount,
         idempotencyKey,
@@ -1557,7 +1546,6 @@ async function updatePendingTipFailed(
 }
 
 async function getSentPendingTipResult(
-  env: Env,
   db: DB.Type,
   pendingTip: Database.Selectable.pending_tip,
 ): Promise<Extract<PendingTipClaimResult, { ok: true }> | null> {
@@ -1569,11 +1557,7 @@ async function getSentPendingTipResult(
     .where('tip.idempotency_key', '=', `pending:${pendingTip.id}`)
     .executeTakeFirst()
   if (!tip?.transaction_hash) return null
-  const tokenMetadata = await Tempo.getTokenMetadata(
-    env,
-    pendingTip.chain_id,
-    pendingTip.token_address,
-  )
+  const tokenMetadata = await Tapimo.getTokenMetadata(pendingTip.chain_id, pendingTip.token_address)
   return {
     amount: formatAmount(pendingTip.amount),
     chainId: pendingTip.chain_id,
@@ -1618,7 +1602,6 @@ async function getConnectedMemberById(db: DB.Type, memberId: string) {
 }
 
 async function getExistingTipResult(
-  env: Env,
   db: DB.Type,
   input: {
     idempotencyKey: string
@@ -1635,11 +1618,7 @@ async function getExistingTipResult(
     .where('tip.idempotency_key', '=', input.idempotencyKey)
     .executeTakeFirst()
   if (existing?.confirmed_at && existing.batch_transaction_hash) {
-    const tokenMetadata = await Tempo.getTokenMetadata(
-      env,
-      existing.chain_id,
-      existing.token_address,
-    )
+    const tokenMetadata = await Tapimo.getTokenMetadata(existing.chain_id, existing.token_address)
     return {
       amount: formatAmount(existing.amount),
       chainId: existing.chain_id,
@@ -1678,7 +1657,6 @@ async function getExistingTipResult(
 }
 
 async function getExistingTipBatchResult(
-  env: Env,
   db: DB.Type,
   input: {
     idempotencyKey: string
@@ -1697,11 +1675,7 @@ async function getExistingTipBatchResult(
       .select('chain_id')
       .where('id', '=', existing.workspace_id)
       .executeTakeFirstOrThrow()
-    const tokenMetadata = await Tempo.getTokenMetadata(
-      env,
-      workspace.chain_id,
-      existing.token_address,
-    )
+    const tokenMetadata = await Tapimo.getTokenMetadata(workspace.chain_id, existing.token_address)
     const recipients = await db
       .selectFrom('tip')
       .innerJoin('member', 'member.id', 'tip.recipient_member_id')
@@ -1857,7 +1831,7 @@ async function submitTipBatch(
     workspace: Database.Selectable.workspace
   },
 ): Promise<TipBatchResult> {
-  const existing = await getExistingTipBatchResult(env, db, input, input.tokenAddress)
+  const existing = await getExistingTipBatchResult(db, input, input.tokenAddress)
   if (existing) return existing
 
   const batchId = Nanoid.generate()
@@ -1935,7 +1909,7 @@ async function submitTipBatch(
     }
   } catch (error) {
     if (!isUniqueConstraintError(error)) throw error
-    const existing = await getExistingTipBatchResult(env, db, input, input.tokenAddress)
+    const existing = await getExistingTipBatchResult(db, input, input.tokenAddress)
     if (existing) return existing
     throw error
   }
@@ -2038,8 +2012,7 @@ async function submitTipBatch(
         })
         .where('id', '=', input.accessKeyId)
         .execute()
-    const tokenMetadata = await Tempo.getTokenMetadata(
-      env,
+    const tokenMetadata = await Tapimo.getTokenMetadata(
       input.workspace.chain_id,
       input.tokenAddress,
     )
@@ -2165,7 +2138,6 @@ async function submitSignedTipBatch(
   },
 ): Promise<TipBatchResult> {
   const existing = await getExistingTipBatchResult(
-    env,
     db,
     {
       idempotencyKey: input.idempotencyKey,
@@ -2295,8 +2267,7 @@ async function submitSignedTipBatch(
       .where('batch_id', '=', batchId)
       .execute()
 
-    const tokenMetadata = await Tempo.getTokenMetadata(
-      env,
+    const tokenMetadata = await Tapimo.getTokenMetadata(
       input.workspace.chain_id,
       input.tokenAddress,
     )
@@ -2355,7 +2326,6 @@ async function submitSignedTip(
   },
 ): Promise<TipResult> {
   const existing = await getExistingTipResult(
-    env,
     db,
     {
       idempotencyKey: input.idempotencyKey,
@@ -2468,8 +2438,7 @@ async function submitSignedTip(
       .where('id', '=', id)
       .execute()
 
-    const tokenMetadata = await Tempo.getTokenMetadata(
-      env,
+    const tokenMetadata = await Tapimo.getTokenMetadata(
       input.workspace.chain_id,
       input.tokenAddress,
     )
