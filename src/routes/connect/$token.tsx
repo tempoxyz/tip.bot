@@ -3,7 +3,6 @@ import { createServerFn } from '@tanstack/react-start'
 import { env } from 'cloudflare:workers'
 import type { InferResponseType } from 'hono/client'
 import * as React from 'react'
-import { Client } from 'tapimo'
 import { parseUnits } from 'viem'
 import { useConnect, useConnection, useConnectors } from 'wagmi'
 import * as z from 'zod/mini'
@@ -13,6 +12,7 @@ import { slackCommand, tipbotImagePath } from '#/lib/app.ts'
 import { getErrorMessage } from '#/lib/error.ts'
 import { formatCurrencyAmount, formatPeriod } from '#/lib/format.ts'
 import { rpc } from '#/lib/rpc.ts'
+import * as Tapimo from '#/lib/tapimo.ts'
 import * as Tempo from '#/lib/tempo.ts'
 
 export const Route = createFileRoute('/connect/$token')({
@@ -290,13 +290,13 @@ const getConnectData = createServerFn({ method: 'GET' })
           return Tempo.getTokenMetadataFallback(json.tokenAddress)
 
         const tokenMetadataTimeoutMs = 1_000 // 1 second
-        const response = await Client.create({
-          apiKey: env.TEMPO_API_KEY,
-          init: { signal: AbortSignal.timeout(tokenMetadataTimeoutMs) },
-        }).v1.tokens[':token'].$get({
-          param: { token: json.tokenAddress },
-          query: { chainId: String(json.chainId) },
-        })
+        const response = await Tapimo.client.v1.tokens[':token'].$get(
+          {
+            param: { token: json.tokenAddress },
+            query: { chainId: String(json.chainId) },
+          },
+          { init: { signal: AbortSignal.timeout(tokenMetadataTimeoutMs) } },
+        )
         if (response.status !== 200) throw new Error(`Tempo API returned ${response.status}.`)
         return await response.json()
       })()
