@@ -7,6 +7,7 @@ settings:
 overrides:
   '@babel/core': 7.29.6
   '@grpc/grpc-js': 1.14.4
+  axios: 1.18.0
   esbuild: 0.28.1
   form-data: 4.0.6
   hono: 4.12.25
@@ -86,7 +87,7 @@ importers:
         version: 19.2.5(react@19.2.5)
       tapimo:
         specifier: 0.5.2
-        version: 0.5.2(9dad723c64cdeec3b4a88992d3ca64f5)
+        version: 0.5.2(0a9fca14114bb98809b2b223454df2b6)
       viem:
         specifier: ^2.50.4
         version: 2.50.4(typescript@6.0.3)(zod@4.4.3)
@@ -2760,7 +2761,7 @@ packages:
     resolution: {integrity: sha512-SDobKBbPIOe0cVL7QxMzGkuUGHvWTdihi9zOrrWaWUgFKe15cwEcwfWmgrcNzjT6kHnNmWuTajPHoIzUjYNYYQ==}
     peerDependencies:
       async-validator: ^4
-      axios: ^1
+      axios: 1.18.0
       change-case: ^5
       drauu: ^0.4
       focus-trap: ^7
@@ -2954,6 +2955,10 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
+  agent-base@6.0.2:
+    resolution: {integrity: sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==}
+    engines: {node: '>= 6.0.0'}
+
   ajv-draft-04@1.0.0:
     resolution: {integrity: sha512-mv00Te6nmYbRp5DCwclxtt7yV/joXJPGS7nM+97GdxvuttCOfgI3K4U25zboyeX0O+myI8ERluxQe5wljMmVIw==}
     peerDependencies:
@@ -3038,8 +3043,8 @@ packages:
   asynckit@0.4.0:
     resolution: {integrity: sha512-Oei9OH4tRh0YqU3GxhX79dM/mwVgvbZJaSNaRk+bshkj0S5cfHcgYakreBjrHwatXKbz+IoIdYLxrKim2MjW0Q==}
 
-  axios@1.16.0:
-    resolution: {integrity: sha512-6hp5CwvTPlN2A31g5dxnwAX0orzM7pmCRDLnZSX772mv8WDqICwFjowHuPs04Mc8deIld1+ejhtaMn5vp6b+1w==}
+  axios@1.18.0:
+    resolution: {integrity: sha512-E32NzpYKp++W7XRe52rHiXV2ehxmh3wbdgO7MHeFM+vqxLBYHzt0ElkiImtOBxtOmyp0yoC8C6uESVV84Y2/hw==}
 
   b4a@1.8.1:
     resolution: {integrity: sha512-aiqre1Nr0B/6DgE2N5vwTc+2/oQZ4Wh1t4NznYY4E00y8LCt6NqdRv81so00oo27D8MVKTpUa/MwUUtBLXCoDw==}
@@ -3962,6 +3967,10 @@ packages:
   http-proxy@1.18.1:
     resolution: {integrity: sha512-7mz/721AbnJwIVbnaSv1Cz3Am0ZLT/UBwkC92VlxhXv/k/BBQfM2fXElQNC27BVGr0uwUpplYPQM9LnaBMR5NQ==}
     engines: {node: '>=8.0.0'}
+
+  https-proxy-agent@5.0.1:
+    resolution: {integrity: sha512-dFcAjpTQFgoLMzC2VwU+C/CbS7uRL0lWmxDITmqm7C+7F0Odmj6s9l6alZc6AELXhrnggM2CeWSXHGOdX2YtwA==}
+    engines: {node: '>= 6'}
 
   human-signals@8.0.1:
     resolution: {integrity: sha512-eKCa6bwnJhvxj14kZk5NCPc6Hb6BdsU9DZcOnmQKSnO1VKrfV0zCvtttPZUsBvjmNDn8rpcJfpwSYnHBjc95MQ==}
@@ -7457,7 +7466,7 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.62.2':
     optional: true
 
-  '@scalar/api-client@3.13.6(axios@1.16.0)(change-case@5.4.4)(idb-keyval@6.2.2)(tailwindcss@4.3.3)(typescript@6.0.3)':
+  '@scalar/api-client@3.13.6(axios@1.18.0)(change-case@5.4.4)(idb-keyval@6.2.2)(tailwindcss@4.3.3)(typescript@6.0.3)':
     dependencies:
       '@headlessui/tailwindcss': 0.2.2(tailwindcss@4.3.3)
       '@headlessui/vue': 1.7.23(vue@3.5.40(typescript@6.0.3))
@@ -7477,7 +7486,7 @@ snapshots:
       '@scalar/use-toasts': 0.10.3(typescript@6.0.3)
       '@scalar/workspace-store': 0.55.5(typescript@6.0.3)
       '@vueuse/core': 13.9.0(vue@3.5.40(typescript@6.0.3))
-      '@vueuse/integrations': 13.9.0(axios@1.16.0)(change-case@5.4.4)(focus-trap@7.8.0)(fuse.js@7.5.0)(idb-keyval@6.2.2)(vue@3.5.40(typescript@6.0.3))
+      '@vueuse/integrations': 13.9.0(axios@1.18.0)(change-case@5.4.4)(focus-trap@7.8.0)(fuse.js@7.5.0)(idb-keyval@6.2.2)(vue@3.5.40(typescript@6.0.3))
       focus-trap: 7.8.0
       fuse.js: 7.5.0
       js-base64: 3.9.1
@@ -7859,6 +7868,7 @@ snapshots:
     transitivePeerDependencies:
       - bufferutil
       - debug
+      - supports-color
       - utf-8-validate
 
   '@slack/types@2.21.0': {}
@@ -7869,7 +7879,7 @@ snapshots:
       '@slack/types': 2.21.0
       '@types/node': 22.19.17
       '@types/retry': 0.12.0
-      axios: 1.16.0
+      axios: 1.18.0
       eventemitter3: 5.0.1
       form-data: 4.0.6
       is-electron: 2.2.2
@@ -7879,6 +7889,7 @@ snapshots:
       retry: 0.13.1
     transitivePeerDependencies:
       - debug
+      - supports-color
 
   '@speed-highlight/core@1.2.15': {}
 
@@ -8766,13 +8777,13 @@ snapshots:
       '@vueuse/shared': 13.9.0(vue@3.5.40(typescript@6.0.3))
       vue: 3.5.40(typescript@6.0.3)
 
-  '@vueuse/integrations@13.9.0(axios@1.16.0)(change-case@5.4.4)(focus-trap@7.8.0)(fuse.js@7.5.0)(idb-keyval@6.2.2)(vue@3.5.40(typescript@6.0.3))':
+  '@vueuse/integrations@13.9.0(axios@1.18.0)(change-case@5.4.4)(focus-trap@7.8.0)(fuse.js@7.5.0)(idb-keyval@6.2.2)(vue@3.5.40(typescript@6.0.3))':
     dependencies:
       '@vueuse/core': 13.9.0(vue@3.5.40(typescript@6.0.3))
       '@vueuse/shared': 13.9.0(vue@3.5.40(typescript@6.0.3))
       vue: 3.5.40(typescript@6.0.3)
     optionalDependencies:
-      axios: 1.16.0
+      axios: 1.18.0
       change-case: 5.4.4
       focus-trap: 7.8.0
       fuse.js: 7.5.0
@@ -8890,6 +8901,12 @@ snapshots:
 
   acorn@8.16.0: {}
 
+  agent-base@6.0.2:
+    dependencies:
+      debug: 4.4.3
+    transitivePeerDependencies:
+      - supports-color
+
   ajv-draft-04@1.0.0(ajv@8.20.0):
     optionalDependencies:
       ajv: 8.20.0
@@ -8970,13 +8987,15 @@ snapshots:
 
   asynckit@0.4.0: {}
 
-  axios@1.16.0:
+  axios@1.18.0:
     dependencies:
       follow-redirects: 1.16.0
       form-data: 4.0.6
+      https-proxy-agent: 5.0.1
       proxy-from-env: 2.1.0
     transitivePeerDependencies:
       - debug
+      - supports-color
 
   b4a@1.8.1: {}
 
@@ -10063,6 +10082,13 @@ snapshots:
       requires-port: 1.0.0
     transitivePeerDependencies:
       - debug
+
+  https-proxy-agent@5.0.1:
+    dependencies:
+      agent-base: 6.0.2
+      debug: 4.4.3
+    transitivePeerDependencies:
+      - supports-color
 
   human-signals@8.0.1: {}
 
@@ -11992,7 +12018,7 @@ snapshots:
 
   tapable@2.3.3: {}
 
-  tapimo@0.5.2(9dad723c64cdeec3b4a88992d3ca64f5):
+  tapimo@0.5.2(0a9fca14114bb98809b2b223454df2b6):
     dependencies:
       '@hono/node-server': 2.0.10(hono@4.12.25)
       '@hono/standard-validator': 0.2.3(@standard-schema/spec@1.1.0)(hono@4.12.25)
@@ -12009,7 +12035,7 @@ snapshots:
       stripe: 19.3.0(@types/node@22.19.17)
       tidx.ts: 0.1.2(typescript@6.0.3)
       viem: 2.54.6(typescript@6.0.3)(zod@4.4.3)
-      vocs: 2.5.3(@cfworker/json-schema@4.1.1)(@tanstack/react-router@1.169.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(@types/react@19.2.14)(@voidzero-dev/vite-plus-core@0.1.24)(@vue/compiler-sfc@3.5.40)(axios@1.16.0)(change-case@5.4.4)(esbuild@0.28.1)(idb-keyval@6.2.2)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(rollup@4.62.2)(typescript@6.0.3)
+      vocs: 2.5.3(@cfworker/json-schema@4.1.1)(@tanstack/react-router@1.169.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(@types/react@19.2.14)(@voidzero-dev/vite-plus-core@0.1.24)(@vue/compiler-sfc@3.5.40)(axios@1.18.0)(change-case@5.4.4)(esbuild@0.28.1)(idb-keyval@6.2.2)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(rollup@4.62.2)(typescript@6.0.3)
       zod: 4.4.3
     transitivePeerDependencies:
       - '@cfworker/json-schema'
@@ -12580,7 +12606,7 @@ snapshots:
     optionalDependencies:
       vite: '@voidzero-dev/vite-plus-core@0.1.24(@types/node@22.19.17)(@voidzero-dev/vite-plus-core@0.1.24)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.1)(typescript@6.0.3)(yaml@2.8.4)'
 
-  vocs@2.5.3(@cfworker/json-schema@4.1.1)(@tanstack/react-router@1.169.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(@types/react@19.2.14)(@voidzero-dev/vite-plus-core@0.1.24)(@vue/compiler-sfc@3.5.40)(axios@1.16.0)(change-case@5.4.4)(esbuild@0.28.1)(idb-keyval@6.2.2)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(rollup@4.62.2)(typescript@6.0.3):
+  vocs@2.5.3(@cfworker/json-schema@4.1.1)(@tanstack/react-router@1.169.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(@types/react@19.2.14)(@voidzero-dev/vite-plus-core@0.1.24)(@vue/compiler-sfc@3.5.40)(axios@1.18.0)(change-case@5.4.4)(esbuild@0.28.1)(idb-keyval@6.2.2)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)(rollup@4.62.2)(typescript@6.0.3):
     dependencies:
       '@base-ui/react': 1.4.1(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@codesandbox/sandpack-react': 2.20.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -12595,7 +12621,7 @@ snapshots:
       '@mdx-js/rollup': 3.1.1(rollup@4.62.2)
       '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       '@remix-run/node-fetch-server': 0.13.3
-      '@scalar/api-client': 3.13.6(axios@1.16.0)(change-case@5.4.4)(idb-keyval@6.2.2)(tailwindcss@4.3.3)(typescript@6.0.3)
+      '@scalar/api-client': 3.13.6(axios@1.18.0)(change-case@5.4.4)(idb-keyval@6.2.2)(tailwindcss@4.3.3)(typescript@6.0.3)
       '@scalar/openapi-parser': 0.28.9
       '@scalar/snippetz': 0.9.22
       '@scalar/workspace-store': 0.54.5(typescript@6.0.3)
