@@ -1,10 +1,8 @@
 import '@tanstack/react-start/server-only'
-import { hc } from 'hono/client'
-import type { App } from 'tapimo'
+import * as Client from 'tapimo/client'
 import * as Tempo from '#/lib/tempo.ts'
 
-// Avoid Tapimo's server-heavy runtime export until it exposes a client-only entrypoint.
-export const client = hc<App.App>('https://api.tempo.xyz')
+export const client = Client.create()
 
 export async function getTokenBalances(
   env: Pick<Env, 'TEMPO_API_KEY'>,
