@@ -30,9 +30,7 @@ on:
         required: false
       SLACK_CONFIG_REFRESH_TOKEN:
         required: false
-      TWITTER_OAUTH_CLIENT_ID:
-        required: true
-      TWITTER_OAUTH_CLIENT_SECRET:
+      TEMPO_API_KEY:
         required: true
 
 permissions:
@@ -426,8 +424,7 @@ jobs:
             SLACK_CLIENT_ID
             SLACK_CLIENT_SECRET
             SLACK_SIGNING_SECRET
-            TWITTER_OAUTH_CLIENT_ID
-            TWITTER_OAUTH_CLIENT_SECRET
+            TEMPO_API_KEY
         env:
           FEE_PAYER_PRIVATE_KEY_MAINNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_MAINNET }}
           FEE_PAYER_PRIVATE_KEY_TESTNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_TESTNET }}
@@ -435,8 +432,7 @@ jobs:
           SLACK_CLIENT_ID: ${{ steps.slack.outputs.client_id || steps.state.outputs.client_id }}
           SLACK_CLIENT_SECRET: ${{ steps.slack.outputs.client_secret || steps.state.outputs.client_secret }}
           SLACK_SIGNING_SECRET: ${{ steps.slack.outputs.signing_secret || steps.state.outputs.signing_secret }}
-          TWITTER_OAUTH_CLIENT_ID: ${{ secrets.TWITTER_OAUTH_CLIENT_ID }}
-          TWITTER_OAUTH_CLIENT_SECRET: ${{ secrets.TWITTER_OAUTH_CLIENT_SECRET }}
+          TEMPO_API_KEY: ${{ secrets.TEMPO_API_KEY }}
 
       - name: Enable Slack event subscriptions
         if: steps.slack.outputs.created == 'true'

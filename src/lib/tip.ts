@@ -5,6 +5,7 @@ import * as DB from '#db/client.ts'
 import { replaceEmojiShortcodes } from '#/lib/emoji.ts'
 import { formatAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
+import * as Tapimo from '#/lib/tapimo.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import type { DB as Database } from '#db/types.gen.ts'
 import { AbiFunction, Address, Hash, Hex } from 'ox'
@@ -526,7 +527,7 @@ export async function handleTipBatchRequest(
       tokenAddress,
       workspace: executionWorkspace,
     })
-    const tokenMetadata = await Tempo.getTokenMetadata(
+    const tokenMetadata = await Tapimo.getTokenMetadata(
       env,
       executionWorkspace.chain_id,
       tokenAddress,
@@ -1269,7 +1270,11 @@ async function getExistingPendingTipResult(
     .where('idempotency_key', '=', input.idempotencyKey)
     .executeTakeFirst()
   if (!existing || existing.status !== 'pending') return null
-  const tokenMetadata = await Tempo.getTokenMetadata(env, existing.chain_id, existing.token_address)
+  const tokenMetadata = await Tapimo.getTokenMetadata(
+    env,
+    existing.chain_id,
+    existing.token_address,
+  )
   return {
     amount: formatAmount(existing.amount),
     chainId: existing.chain_id,
@@ -1348,7 +1353,7 @@ async function createPendingTip(
       workspace_id: input.workspace.id,
     })
     .execute()
-  const tokenMetadata = await Tempo.getTokenMetadata(
+  const tokenMetadata = await Tapimo.getTokenMetadata(
     env,
     input.workspace.chain_id,
     input.tokenAddress,
@@ -1569,7 +1574,7 @@ async function getSentPendingTipResult(
     .where('tip.idempotency_key', '=', `pending:${pendingTip.id}`)
     .executeTakeFirst()
   if (!tip?.transaction_hash) return null
-  const tokenMetadata = await Tempo.getTokenMetadata(
+  const tokenMetadata = await Tapimo.getTokenMetadata(
     env,
     pendingTip.chain_id,
     pendingTip.token_address,
@@ -1635,7 +1640,7 @@ async function getExistingTipResult(
     .where('tip.idempotency_key', '=', input.idempotencyKey)
     .executeTakeFirst()
   if (existing?.confirmed_at && existing.batch_transaction_hash) {
-    const tokenMetadata = await Tempo.getTokenMetadata(
+    const tokenMetadata = await Tapimo.getTokenMetadata(
       env,
       existing.chain_id,
       existing.token_address,
@@ -1697,7 +1702,7 @@ async function getExistingTipBatchResult(
       .select('chain_id')
       .where('id', '=', existing.workspace_id)
       .executeTakeFirstOrThrow()
-    const tokenMetadata = await Tempo.getTokenMetadata(
+    const tokenMetadata = await Tapimo.getTokenMetadata(
       env,
       workspace.chain_id,
       existing.token_address,
@@ -2038,7 +2043,7 @@ async function submitTipBatch(
         })
         .where('id', '=', input.accessKeyId)
         .execute()
-    const tokenMetadata = await Tempo.getTokenMetadata(
+    const tokenMetadata = await Tapimo.getTokenMetadata(
       env,
       input.workspace.chain_id,
       input.tokenAddress,
@@ -2295,7 +2300,7 @@ async function submitSignedTipBatch(
       .where('batch_id', '=', batchId)
       .execute()
 
-    const tokenMetadata = await Tempo.getTokenMetadata(
+    const tokenMetadata = await Tapimo.getTokenMetadata(
       env,
       input.workspace.chain_id,
       input.tokenAddress,
@@ -2468,7 +2473,7 @@ async function submitSignedTip(
       .where('id', '=', id)
       .execute()
 
-    const tokenMetadata = await Tempo.getTokenMetadata(
+    const tokenMetadata = await Tapimo.getTokenMetadata(
       env,
       input.workspace.chain_id,
       input.tokenAddress,

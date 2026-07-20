@@ -7,6 +7,7 @@ import * as Emoji from '#/lib/emoji.ts'
 import { formatAmount, formatCurrencyAmount, formatTipAmount } from '#/lib/format.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Slack from '#/lib/slack.ts'
+import * as Tapimo from '#/lib/tapimo.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
 import { createCloudflareState } from '#/vendor/chatStateCloudflareDO.ts'
@@ -1375,7 +1376,7 @@ const handlers = {
     }
 
     const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
-    const token = await Tempo.getTokenMetadata(env, workspace.chain_id, tokenAddress)
+    const token = await Tapimo.getTokenMetadata(env, workspace.chain_id, tokenAddress)
     if (!('openModal' in event)) {
       await postPrivateReply(
         event,
@@ -1451,7 +1452,7 @@ const handlers = {
     }
 
     const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
-    const token = await Tempo.getTokenMetadata(env, workspace.chain_id, tokenAddress)
+    const token = await Tapimo.getTokenMetadata(env, workspace.chain_id, tokenAddress)
     if (!('openModal' in event)) return
     await event.openModal(
       chat.Modal({
@@ -1695,24 +1696,39 @@ const handlers = {
       return
     }
 
-    const client = createClient({
-      chain: Tempo.getChain(workspace.chain_id),
-      transport: http(Tempo.getRpcUrl(env, workspace.chain_id)),
-    })
     const tokens = workspaceTokenOptions(workspace.chain_id)
-    const balances = await Promise.all(
-      tokens.map(async (token) => {
-        try {
-          const balance = await Actions.token.getBalance(client, {
-            account: member.account_address as Address.Address,
-            token: token.address as Address.Address,
-          })
-          return { balance, label: token.label }
-        } catch {
-          return { balance: 0n, label: token.label }
-        }
-      }),
+    const apiBalances = await Tapimo.getTokenBalances(
+      env,
+      workspace.chain_id,
+      member.account_address,
     )
+    const balances = apiBalances
+      ? tokens.map((token) => ({
+          balance: BigInt(
+            apiBalances.find((balance) => Address.isEqual(token.address, balance.token.address))
+              ?.amount ?? 0,
+          ),
+          label: token.label,
+        }))
+      : await (async () => {
+          const client = createClient({
+            chain: Tempo.getChain(workspace.chain_id),
+            transport: http(Tempo.getRpcUrl(env, workspace.chain_id)),
+          })
+          return await Promise.all(
+            tokens.map(async (token) => {
+              try {
+                const balance = await Actions.token.getBalance(client, {
+                  account: member.account_address as Address.Address,
+                  token: token.address as Address.Address,
+                })
+                return { balance, label: token.label }
+              } catch {
+                return { balance: 0n, label: token.label }
+              }
+            }),
+          )
+        })()
 
     const lines = balances
       .filter((b) => b.balance > 0n)
@@ -4585,7 +4601,7 @@ async function sendTipRaffleEscrowPayout(
     .where('tip.idempotency_key', '=', input.idempotencyKey)
     .executeTakeFirst()
   if (existing?.status === 'confirmed' && existing.transaction_hash) {
-    const token = await Tempo.getTokenMetadata(env, existing.chain_id, existing.token_address)
+    const token = await Tapimo.getTokenMetadata(env, existing.chain_id, existing.token_address)
     return {
       amount: formatAmount(existing.amount),
       chainId: existing.chain_id,
@@ -4722,7 +4738,7 @@ async function sendTipRaffleEscrowPayout(
       .where('id', '=', tipId)
       .execute()
 
-    const token = await Tempo.getTokenMetadata(env, input.chainId, input.tokenAddress)
+    const token = await Tapimo.getTokenMetadata(env, input.chainId, input.tokenAddress)
     return {
       amount: formatAmount(input.amount),
       chainId: input.chainId,
@@ -4869,7 +4885,7 @@ async function selectTipRaffleMessageInput(db: DB.Type, tipRaffleId: string) {
 }
 
 async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
-  const token = await Tempo.getTokenMetadata(env, tipRaffle.chain_id, tipRaffle.token_address)
+  const token = await Tapimo.getTokenMetadata(env, tipRaffle.chain_id, tipRaffle.token_address)
   const formatTipRaffleAmount = (amount: number) => {
     const value = formatAmount(amount)
     return Address.isEqual(
@@ -4976,7 +4992,7 @@ async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
 }
 
 async function tipAskMessage(db: DB.Type, tipAsk: TipAskMessageInput) {
-  const token = await Tempo.getTokenMetadata(env, tipAsk.chain_id, tipAsk.token_address)
+  const token = await Tapimo.getTokenMetadata(env, tipAsk.chain_id, tipAsk.token_address)
   const formatTipAskAmount = (amount: number) => {
     const value = formatAmount(amount)
     return Address.isEqual(
@@ -5292,7 +5308,7 @@ export async function updateReceiptBoostAggregate(
 
   const groupTexts = await Promise.all(
     groups.map(async (group) => {
-      const token = await Tempo.getTokenMetadata(env, group.chainId, group.tokenAddress)
+      const token = await Tapimo.getTokenMetadata(env, group.chainId, group.tokenAddress)
       const amount = formatAmount(group.amount)
       const displayAmount = Address.isEqual(
         Address.checksum(group.tokenAddress),
@@ -6779,7 +6795,7 @@ async function reactionTipAggregateText(
 
   const sentRowTexts = await Promise.all(
     sentRows.map(async (row) => {
-      const token = await Tempo.getTokenMetadata(env, row.chain_id, row.token_address)
+      const token = await Tapimo.getTokenMetadata(env, row.chain_id, row.token_address)
       const amount = formatAmount(row.amount)
       const displayAmount = Address.isEqual(
         Address.checksum(row.token_address),
@@ -6797,7 +6813,7 @@ async function reactionTipAggregateText(
   )
   const queuedRowTexts = await Promise.all(
     queuedRows.map(async (row) => {
-      const token = await Tempo.getTokenMetadata(env, row.chain_id, row.token_address)
+      const token = await Tapimo.getTokenMetadata(env, row.chain_id, row.token_address)
       const amount = formatAmount(row.amount)
       const displayAmount = Address.isEqual(
         Address.checksum(row.token_address),
@@ -6822,7 +6838,7 @@ async function reactionTipAggregateText(
   )
   const sentPendingRowTexts = await Promise.all(
     sentPendingRows.map(async (row) => {
-      const token = await Tempo.getTokenMetadata(env, row.chain_id, row.token_address)
+      const token = await Tapimo.getTokenMetadata(env, row.chain_id, row.token_address)
       const amount = formatAmount(row.amount)
       const displayAmount = Address.isEqual(
         Address.checksum(row.token_address),
@@ -7006,7 +7022,7 @@ export async function updateSlackPendingTipMessage(db: DB.Type, result: Tip.Pend
     return
   }
   if (!result.pendingTip.provider_message_ts) return
-  const tokenMetadata = await Tempo.getTokenMetadata(
+  const tokenMetadata = await Tapimo.getTokenMetadata(
     env,
     result.pendingTip.chain_id,
     result.pendingTip.token_address,

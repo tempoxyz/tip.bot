@@ -1,6 +1,4 @@
 import { Address } from 'ox'
-import { createClient, http } from 'viem'
-import { Actions } from 'viem/tempo'
 import { tempo, tempoLocalnet, tempoModerato } from 'viem/tempo/chains'
 
 export const addressLookup = {
@@ -95,30 +93,6 @@ export function getTokenAddress(chainId: number, value: string) {
   })()
   if (tokenAddress && isAllowedToken(chainId, tokenAddress)) return tokenAddress
   return null
-}
-
-export async function getTokenMetadata(
-  env: Pick<Env, 'RPC_URL_MAINNET' | 'RPC_URL_TESTNET'>,
-  chainId: number,
-  tokenAddress: string,
-) {
-  try {
-    const token = Address.checksum(tokenAddress)
-    const tokenMetadataTimeoutMs = 1_000 // 1 second
-    const metadata = await Actions.token.getMetadata(
-      createClient({
-        chain: getChain(chainId),
-        transport: http(getRpcUrl(env, chainId), {
-          retryCount: 0,
-          timeout: tokenMetadataTimeoutMs,
-        }),
-      }),
-      { token },
-    )
-    return { currency: metadata.currency, symbol: metadata.symbol }
-  } catch {
-    return getTokenMetadataFallback(tokenAddress)
-  }
 }
 
 export function getTokenMetadataFallback(tokenAddress: string) {

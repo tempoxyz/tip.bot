@@ -3,8 +3,7 @@ import { createServerFn } from '@tanstack/react-start'
 import { env } from 'cloudflare:workers'
 import type { InferResponseType } from 'hono/client'
 import * as React from 'react'
-import { createClient, http, parseUnits } from 'viem'
-import { Actions } from 'viem/tempo'
+import { parseUnits } from 'viem'
 import { useConnect, useConnection, useConnectors } from 'wagmi'
 import * as z from 'zod/mini'
 import { api } from '#/api.ts'
@@ -13,6 +12,7 @@ import { slackCommand, tipbotImagePath } from '#/lib/app.ts'
 import { getErrorMessage } from '#/lib/error.ts'
 import { formatCurrencyAmount, formatPeriod } from '#/lib/format.ts'
 import { rpc } from '#/lib/rpc.ts'
+import * as Tapimo from '#/lib/tapimo.ts'
 import * as Tempo from '#/lib/tempo.ts'
 
 export const Route = createFileRoute('/connect/$token')({
@@ -285,17 +285,7 @@ const getConnectData = createServerFn({ method: 'GET' })
 
     const json = (await response.json()) as InferResponseType<typeof endpoint.$get, 200>
     try {
-      const tokenMetadataTimeoutMs = 1_000 // 1 second
-      const metadata = await Actions.token.getMetadata(
-        createClient({
-          chain: Tempo.getChain(json.chainId),
-          transport: http(Tempo.getRpcUrl(env, json.chainId), {
-            retryCount: 0,
-            timeout: tokenMetadataTimeoutMs,
-          }),
-        }),
-        { token: json.tokenAddress },
-      )
+      const metadata = await Tapimo.getTokenMetadata(env, json.chainId, json.tokenAddress)
       return {
         ...json,
         tokenCurrency: metadata.currency,

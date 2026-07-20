@@ -102,6 +102,7 @@ export default defineConfig({
                     SLACK_CLIENT_ID: process.env.SLACK_CLIENT_ID ?? '',
                     SLACK_CLIENT_SECRET: process.env.SLACK_CLIENT_SECRET ?? '',
                     SLACK_SIGNING_SECRET: process.env.SLACK_SIGNING_SECRET ?? '',
+                    TEMPO_API_KEY: process.env.TEMPO_API_KEY ?? '',
                   }
                 : {}),
               SLACK_API_URL: process.env.SLACK_API_URL ?? config.vars?.SLACK_API_URL,
