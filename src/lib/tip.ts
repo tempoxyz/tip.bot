@@ -11,13 +11,23 @@ import type { DB as Database } from '#db/types.gen.ts'
 import { AbiFunction, Address, Hash, Hex } from 'ox'
 import { TxEnvelopeTempo } from 'ox/tempo'
 import { KeyAuthorization } from 'ox/tempo'
-import { BaseError, InsufficientFundsError, createClient, http } from 'viem'
+import {
+  BaseError,
+  HttpRequestError,
+  InsufficientFundsError,
+  RpcRequestError,
+  TimeoutError,
+  createClient,
+  http,
+} from 'viem'
 import { sendTransactionSync } from 'viem/actions'
 import { privateKeyToAccount } from 'viem/accounts'
-import { Account as TempoAccount, Actions } from 'viem/tempo'
+import { Account as TempoAccount, Actions, withRelay } from 'viem/tempo'
 import { getNodeError } from 'viem/utils'
 
 export { defaultReactionTipConfigs } from '#/lib/constants.ts'
+
+const tempoSponsorUrl = 'https://api.tempo.xyz/rpc/sponsor'
 
 export type TipResult =
   | {
@@ -1955,10 +1965,26 @@ async function submitTipBatch(
     const account = TempoAccount.fromSecp256k1(input.accessKeyPrivateKey, {
       access: input.sender.account.address as `0x${string}`,
     })
+    const chain = Tempo.getChain(input.workspace.chain_id)
+    const transport = http(Tempo.getRpcUrl(env, input.workspace.chain_id))
     const client = createClient({
-      chain: Tempo.getChain(input.workspace.chain_id),
-      transport: http(Tempo.getRpcUrl(env, input.workspace.chain_id)),
+      chain,
+      transport,
     })
+    const sponsorClient =
+      input.workspace.chain_id === Tempo.chainLookup.localnet
+        ? client
+        : createClient({
+            chain,
+            transport: withRelay(
+              transport,
+              http(tempoSponsorUrl, {
+                fetchOptions: { headers: { 'tempo-api-key': env.TEMPO_API_KEY } },
+                retryCount: 0,
+                timeout: 5_000, // 5 seconds
+              }),
+            ),
+          })
     const totalAmount = input.amount * input.connectedRecipients.length
     const balance = await Actions.token.getBalance(client, {
       account: input.sender.account.address as Address.Address,
@@ -1988,7 +2014,13 @@ async function submitTipBatch(
         keyAuthorization: input.authorizationUsedAt ? undefined : input.keyAuthorization,
         nonceKey: 'expiring' as const,
       }
-      if (!feePayerPrivateKey)
+      const feePayer =
+        input.workspace.chain_id === Tempo.chainLookup.localnet
+          ? feePayerPrivateKey
+            ? privateKeyToAccount(feePayerPrivateKey)
+            : null
+          : true
+      if (!feePayer)
         return [
           await sendTransactionSync(client, {
             ...parameters,
@@ -1999,14 +2031,14 @@ async function submitTipBatch(
 
       try {
         return [
-          await sendTransactionSync(client, {
+          await sendTransactionSync(sponsorClient, {
             ...parameters,
-            feePayer: privateKeyToAccount(feePayerPrivateKey),
+            feePayer,
           } as never),
           'sponsor' as const,
         ] as const
       } catch (error) {
-        if (!isInsufficientFundsError(error)) throw error
+        if (!isInsufficientFundsError(error) && !isTempoSponsorError(error)) throw error
         return [
           await sendTransactionSync(client, {
             ...parameters,
@@ -2669,6 +2701,19 @@ function isInsufficientFundsError(error: unknown) {
         InsufficientFundsError || isInsufficientFundsMessage(error.message)
     )
   return false
+}
+
+function isTempoSponsorError(error: unknown) {
+  if (!(error instanceof BaseError)) return false
+  return Boolean(
+    error.walk(
+      (cause) =>
+        (cause instanceof HttpRequestError ||
+          cause instanceof RpcRequestError ||
+          cause instanceof TimeoutError) &&
+        cause.url === tempoSponsorUrl,
+    ),
+  )
 }
 
 function isUniqueConstraintError(error: unknown) {
