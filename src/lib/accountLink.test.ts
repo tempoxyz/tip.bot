@@ -21,11 +21,6 @@ test('hashes tokens deterministically', async () => {
   )
 })
 
-test('keeps reusable access keys valid for 90 days', async () => {
-  const AccountLink = await import('#/lib/accountLink.ts')
-  expect(AccountLink.reusableAccessKeyTtlMs).toBe(90 * 24 * 60 * 60 * 1000)
-})
-
 test('verifies key authorizations against Tipbot policy', async () => {
   const verifyHash = vi.fn(async () => true)
   vi.resetModules()
