@@ -1890,7 +1890,7 @@ describe('/api/confirm/:token', () => {
     const workspace = await ensureTwitterTestWorkspace()
     mockTwitterUser({ id: 'twitter-confirm-recipient', username: 'alice' })
     const token = await Confirmation.encrypt(env, {
-      accessKeyExpiresAt: new Date(Date.now() + AccountLink.reusableAccessKeyTtlMs).toISOString(), // 30 days
+      accessKeyExpiresAt: new Date(Date.now() + AccountLink.reusableAccessKeyTtlMs).toISOString(), // 90 days
       amount: 5_000_000,
       chainId: workspace.chain_id,
       expiresAt: new Date(Date.now() + AccountLink.confirmationLinkTtlMs).toISOString(), // 10 minutes
@@ -2611,7 +2611,7 @@ async function createConfirmationToken(
       ? {
           accessKeyExpiresAt: new Date(
             Date.now() + AccountLink.reusableAccessKeyTtlMs,
-          ).toISOString(), // 30 days
+          ).toISOString(), // 90 days
         }
       : {}),
     amount,
