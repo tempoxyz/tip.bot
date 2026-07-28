@@ -1023,7 +1023,7 @@ const modalSubmits = {
       }),
       { account: creator.address as Address.Address, token: tokenAddress as Address.Address },
     )
-    if (BigInt(amount) > balance) {
+    if (BigInt(amount) > balance.amount) {
       await postConnectLink(
         {
           channel: getChat().channel(`slack:${metadata.channelId}`),
@@ -1722,7 +1722,7 @@ const handlers = {
                   account: member.account_address as Address.Address,
                   token: token.address as Address.Address,
                 })
-                return { balance, label: token.label }
+                return { balance: balance.amount, label: token.label }
               } catch {
                 return { balance: 0n, label: token.label }
               }

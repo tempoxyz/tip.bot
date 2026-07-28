@@ -659,7 +659,7 @@ export async function checkReusableTipAccessKey(
       account: sender.account.address as Address.Address,
       token: tokenAddress as Address.Address,
     })
-    if (balance < BigInt(input.amount)) return { code: 'insufficient_funds', ok: false }
+    if (balance.amount < BigInt(input.amount)) return { code: 'insufficient_funds', ok: false }
     return { memberId: sender.member.id, ok: true }
   }
 
@@ -1990,7 +1990,7 @@ async function submitTipBatch(
       account: input.sender.account.address as Address.Address,
       token: input.tokenAddress as Address.Address,
     })
-    if (balance < BigInt(totalAmount)) throw new InsufficientFundsError()
+    if (balance.amount < BigInt(totalAmount)) throw new InsufficientFundsError()
 
     const calls = input.connectedRecipients.map((recipient) =>
       Actions.token.transfer.call({
@@ -2308,7 +2308,7 @@ async function submitSignedTipBatch(
       account: input.sender.account.address as Address.Address,
       token: input.tokenAddress as Address.Address,
     })
-    if (balance < BigInt(input.payload.amount * input.connectedRecipients.length))
+    if (balance.amount < BigInt(input.payload.amount * input.connectedRecipients.length))
       throw new InsufficientFundsError()
 
     const receipt = (await client.request({
@@ -2479,7 +2479,7 @@ async function submitSignedTip(
       account: input.sender.account.address as Address.Address,
       token: input.tokenAddress as Address.Address,
     })
-    if (balance < BigInt(input.payload.amount)) throw new InsufficientFundsError()
+    if (balance.amount < BigInt(input.payload.amount)) throw new InsufficientFundsError()
 
     const receipt = (await client.request({
       method: 'eth_sendRawTransactionSync' as never,
