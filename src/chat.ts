@@ -1023,7 +1023,7 @@ const modalSubmits = {
       }),
       { account: creator.address as Address.Address, token: tokenAddress as Address.Address },
     )
-    if (BigInt(amount) > balance) {
+    if (BigInt(amount) > balance.amount) {
       await postConnectLink(
         {
           channel: getChat().channel(`slack:${metadata.channelId}`),
@@ -1722,7 +1722,7 @@ const handlers = {
                   account: member.account_address as Address.Address,
                   token: token.address as Address.Address,
                 })
-                return { balance, label: token.label }
+                return { balance: balance.amount, label: token.label }
               } catch {
                 return { balance: 0n, label: token.label }
               }
@@ -6072,7 +6072,9 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
   const linkUrl = `https://${env.HOST}/connect/${token}`
   const linkText = `${accountId ? 'Refresh Tipbot connection' : 'Connect to Tipbot'}: ${linkUrl}\n${linkDescription}`
   const linkExpiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString() // 10 minutes
-  const accessKeyExpiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
+  const accessKeyExpiresAt = new Date(
+    now.getTime() + AccountLink.reusableAccessKeyTtlMs,
+  ).toISOString()
   await ctx.db
     .deleteFrom('account_link_token')
     .where('member_id', '=', member.id)

@@ -8,7 +8,7 @@ import * as Tempo from '#/lib/tempo.ts'
 export const reusableAccessKeyLimit = 10_000_000
 export const reusableAccessKeyLimitText = '10'
 export const reusableAccessKeyPeriodSeconds = 24 * 60 * 60 // 1 day
-export const reusableAccessKeyTtlMs = 30 * 24 * 60 * 60 * 1000 // 30 days
+export const reusableAccessKeyTtlMs = 90 * 24 * 60 * 60 * 1000 // 90 days
 export const confirmationLinkTtlMs = 10 * 60 * 1000 // 10 minutes
 
 export async function hashToken(env: Pick<Env, 'SECRET_KEY'>, token: string) {

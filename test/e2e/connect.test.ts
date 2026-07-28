@@ -1,4 +1,4 @@
-import type { APIRequestContext } from '@playwright/test'
+import type { APIRequestContext, APIResponse } from '@playwright/test'
 import type { Kysely } from 'kysely'
 import { WebClient } from '@slack/web-api'
 import * as AccessKey from '#/lib/accessKey.ts'
@@ -284,13 +284,25 @@ async function installSlack(
   if (!callbackLocation) throw new Error('Expected Slack OAuth callback redirect location.')
 
   const callbackUrl = new URL(callbackLocation)
-  const callbackResponse = await request.get(
-    app.url(`${callbackUrl.pathname}${callbackUrl.search}` as `/api/${string}`),
-    {
-      maxRedirects: 0,
-    },
-  )
-  expect(callbackResponse.status(), await callbackResponse.text()).toBe(302)
+  let callbackResponse: APIResponse | undefined
+  let callbackResponseText = ''
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    callbackResponse = await request.get(
+      app.url(`${callbackUrl.pathname}${callbackUrl.search}` as `/api/${string}`),
+      {
+        maxRedirects: 0,
+      },
+    )
+    callbackResponseText = await callbackResponse.text()
+    if (callbackResponse.status() === 302) break
+    if (
+      !callbackResponseText.includes('D1_ERROR') ||
+      !callbackResponseText.includes('internal error')
+    )
+      break
+    await new Promise((resolve) => setTimeout(resolve, 100)) // 100 milliseconds
+  }
+  expect(callbackResponse?.status(), callbackResponseText).toBe(302)
 }
 
 async function postSlashCommand(app: { url: (path: `/api/${string}`) => string }, text: string) {
