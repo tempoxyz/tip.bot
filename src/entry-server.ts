@@ -1,9 +1,11 @@
 import serverEntry from '@tanstack/react-start/server-entry'
 import { Kv as AccountsKv } from 'accounts/server'
 import { api } from '#/api.ts'
+import * as Chat from '#/chat.ts'
 import { closeExpired } from '#/crons/close.ts'
 import { rpc } from '#/lib/rpc.ts'
 import { processPendingTipMessage } from '#/queues/pendingTip.ts'
+import { processSlackReactionMessage } from '#/queues/slackReaction.ts'
 import { z } from 'zod'
 
 export default {
@@ -23,17 +25,25 @@ export default {
       if (previewApex) return batch.queue.replace(`-${previewApex}`, '')
       return batch.queue
     })()
-    const queue = z.parse(z.enum([processPendingTipMessage.queueName]), queueName)
-    const handler = { [processPendingTipMessage.queueName]: processPendingTipMessage }[queue]
+    const queue = z.parse(
+      z.enum([processPendingTipMessage.queueName, processSlackReactionMessage.queueName]),
+      queueName,
+    )
+    const handler = {
+      [processPendingTipMessage.queueName]: processPendingTipMessage,
+      [processSlackReactionMessage.queueName]: processSlackReactionMessage,
+    }[queue]
     for (const message of batch.messages) {
       try {
         await handler(message as never)
         message.ack()
       } catch (error) {
-        if (queue === processPendingTipMessage.queueName && message.attempts >= 3)
-          console.error('Pending tip queue message reached DLQ threshold:', message.body)
+        if (message.attempts >= 3)
+          console.error(`${queue} queue message reached DLQ threshold:`, message.id)
         console.error(`Queue message ${message.id} failed:`, error)
-        message.retry()
+        message.retry(
+          error instanceof Chat.RetrySlackReactionError ? { delaySeconds: 45 } : {}, // 45 seconds
+        )
       }
     }
   },
@@ -46,7 +56,7 @@ export default {
     const task = crons[controller.cron as keyof typeof crons]
     if (task) ctx.waitUntil(task(env, ctx))
   },
-} satisfies ExportedHandler<Env, processPendingTipMessage.Body>
+} satisfies ExportedHandler<Env, processPendingTipMessage.Body | processSlackReactionMessage.Body>
 
 declare module '@tanstack/react-start' {
   interface Register {
