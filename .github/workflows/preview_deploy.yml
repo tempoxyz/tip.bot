@@ -465,12 +465,11 @@ jobs:
           for attempt in 1 2 3 4 5 6; do
             RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.icon.set \
               -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
-              -H "Content-Type: application/x-www-form-urlencoded" \
-              --data-urlencode "app_id=${APP_ID}" \
-              --data-urlencode "url=https://${PREVIEW_HOST}/tipbot-preview.png")
+              -F "app_id=${APP_ID}" \
+              -F "file=@public/tipbot-preview.png")
             OK=$(echo "$RESPONSE" | jq -r '.ok')
             ERROR=$(echo "$RESPONSE" | jq -r '.error // empty')
-            if [ "$OK" = "true" ] || { [ "$ERROR" != "internal_error" ] && [ "$ERROR" != "icon_not_accessible" ]; } || [ "$attempt" = "6" ]; then break; fi
+            if [ "$OK" = "true" ] || [ "$ERROR" != "internal_error" ] || [ "$attempt" = "6" ]; then break; fi
             sleep 5 # 5 seconds
           done
           OK=$(echo "$RESPONSE" | jq -r '.ok')
