@@ -54,6 +54,7 @@ jobs:
           secrets: |
             FEE_PAYER_PRIVATE_KEY_MAINNET
             FEE_PAYER_PRIVATE_KEY_TESTNET
+            RPC_CREDENTIALS
             SECRET_KEY
             SLACK_CLIENT_ID
             SLACK_CLIENT_SECRET
@@ -69,6 +70,7 @@ jobs:
         env:
           FEE_PAYER_PRIVATE_KEY_MAINNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_MAINNET }}
           FEE_PAYER_PRIVATE_KEY_TESTNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_TESTNET }}
+          RPC_CREDENTIALS: ${{ secrets.RPC_CREDENTIALS }}
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
           SLACK_APP_ID: ${{ vars.SLACK_APP_ID }}
           SLACK_CLIENT_ID: ${{ secrets.SLACK_CLIENT_ID }}
