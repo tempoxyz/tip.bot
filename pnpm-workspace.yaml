@@ -21,6 +21,9 @@ auditConfig:
   # versions vulnerable with no patched release, so ignore until a fix exists.
   ignoreGhsas:
     - GHSA-rmmr-r34h-pfm5
+    # No patched image-size release is published yet.
+    - GHSA-5p2g-fcmc-qvqq
+    - GHSA-w3rx-r6r6-pgpr
 blockExoticSubdeps: true
 catalog:
   # Vite+ dependency aliases.
@@ -46,13 +49,17 @@ minimumReleaseAgeExclude:
   - form-data@4.0.6
   - vite-plus@0.1.24
   - launch-editor@2.14.1
-  - hono@4.12.27
-  - fast-uri@3.1.4
+  - hono@4.12.34
+  - fast-uri@3.1.5
+  - ip-address@10.3.1
+  - nanoid@3.3.17
+  - nanoid@5.1.16
+  - postcss@8.5.23
   - sharp@0.35.0
-  - brace-expansion@5.0.8
+  - brace-expansion@5.0.9
   - tar@7.5.21
-  - undici@7.28.0
-  - js-yaml@4.3.0
+  - undici@7.29.0
+  - js-yaml@4.3.1
   - ws@8.21.0
 minimumReleaseAgeStrict: true
 overrides:
@@ -60,19 +67,23 @@ overrides:
   '@grpc/grpc-js': 1.14.4
   axios: 1.18.0
   '@hono/node-server@<2.0.5': 2.0.10
-  brace-expansion: 5.0.8
+  brace-expansion: 5.0.9
   esbuild: 0.28.1
   form-data: 4.0.6
-  fast-uri: 3.1.4
-  hono: 4.12.27
-  js-yaml: 4.3.0
+  fast-uri: 3.1.5
+  hono: 4.12.34
+  ip-address: 10.3.1
+  js-yaml: 4.3.1
   launch-editor: 2.14.1
+  nanoid@<3.3.17: 3.3.17
+  'nanoid@>=4.0.0 <5.1.16': 5.1.16
+  postcss: 8.5.23
   protobufjs: 7.6.5
   shell-quote: 1.10.0
   sharp: 0.35.0
   tar: 7.5.21
   tmp: 0.2.7
-  undici: 7.28.0
+  undici: 7.29.0
   uuid: 11.1.1
   vite: 'catalog:'
   vite-plus: 0.1.24
@@ -81,7 +92,7 @@ overrides:
 packageExtensions:
   '@cloudflare/vitest-pool-workers@*':
     dependencies:
-      undici: 7.28.0
+      undici: 7.29.0
   '@svgr/core@*':
     dependencies:
       '@svgr/plugin-jsx': 8.1.0
