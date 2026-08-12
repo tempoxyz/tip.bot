@@ -6207,6 +6207,10 @@ test('reaction tipping aggregates sent and queued messages together', async () =
     reaction: 'money_with_wings',
     userId: Constants.slack.adminUserId,
   })
+
+  expect(sent.status).toBe(200)
+  await expectSlackThreadMessage(parentTs, 'tipped $0.001', { channelId, wait: true })
+
   const queued = await postSlackReaction({
     channelId,
     eventTs: `${reply.ts}-reaction`,
@@ -6216,7 +6220,6 @@ test('reaction tipping aggregates sent and queued messages together', async () =
     userId: Constants.slack.adminUserId,
   })
 
-  expect(sent.status).toBe(200)
   expect(queued.status).toBe(200)
   await expect
     .poll(
