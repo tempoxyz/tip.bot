@@ -32,6 +32,28 @@ jobs:
       - name: Setup pnpm
         uses: ./.github/actions/setup-pnpm
 
+      - name: Setup production Queues
+        run: |
+          QUEUES=$(node -e '
+            const text = require("node:fs").readFileSync("wrangler.jsonc", "utf8")
+              .replace(/(?<=^[^"]*(?:"[^"]*"[^"]*)*)\/\/.*$/gm, "")
+              .replace(/,(\s*[\]}])/g, "$1")
+            const queues = JSON.parse(text).env.production.queues
+            const names = new Set([
+              ...queues.producers.map((producer) => producer.queue),
+              ...queues.consumers.flatMap((consumer) =>
+                consumer.dead_letter_queue ? [consumer.queue, consumer.dead_letter_queue] : [consumer.queue],
+              ),
+            ])
+            for (const name of names) console.log(name)
+          ')
+          for QUEUE in $QUEUES; do
+            pnpm exec wrangler queues create "$QUEUE" 2>/dev/null || true
+          done
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
       - name: Run migrations
         run: pnpm exec wrangler d1 migrations apply tipbot --env production --remote
         env:

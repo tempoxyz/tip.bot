@@ -54,7 +54,7 @@ jobs:
           QUEUE_PR_NUMBERS=$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues" \
             | jq -r '.result[].queue_name // empty' \
-            | sed -n 's/^tipbot-pending-tip-pr\([0-9][0-9]*\)\(-dlq\)\?$/\1/p' || true)
+            | sed -n 's/^tipbot-\(pending-tip\|slack-reaction\)-pr\([0-9][0-9]*\)\(-dlq\)\?$/\2/p' || true)
           COMMENT_PR_NUMBERS=$(gh api "repos/${{ github.repository }}/issues/comments" --paginate \
             --jq '.[] | select(.body | contains("tipbot-preview")) | .issue_url | split("/")[-1]' \
             2>/dev/null || true)
