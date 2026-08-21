@@ -1,0 +1,14 @@
+# Lets this repository's workflows mint a short-lived token that can write
+# repository Actions secrets, so setup-slack-config-token can persist the
+# rotated SLACK_CONFIG_REFRESH_TOKEN after calling Slack's tooling.tokens.rotate
+# (rotation invalidates the previous refresh token, so the new one must be
+# stored immediately). Replaces the SLACK_GH_TOKEN fine-grained PAT.
+#
+# refs/heads/main covers the production deploy and the scheduled preview sweep;
+# pull_request covers preview deploy/destroy runs.
+subject:
+  - repo:tempoxyz@211589300/tip.bot@1232143975:ref:refs/heads/main
+  - repo:tempoxyz@211589300/tip.bot@1232143975:pull_request
+
+permissions:
+  secrets: write
