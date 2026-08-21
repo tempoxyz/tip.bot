@@ -7,12 +7,9 @@
 # Jobs that reference a GitHub environment present it as their OIDC subject
 # instead of the ref/event form. All jobs that rotate the token run in an
 # environment: environment:production covers the production Slack app update,
-# and environment:preview covers the preview deploy/destroy/sweep jobs. The
-# refs/heads/main and pull_request subjects cover rotation from any future job
-# that runs without an environment.
+# and environment:preview covers the preview deploy/destroy/sweep jobs. A job
+# without an environment cannot mint; add its subject here if one ever needs to.
 subject:
-  - repo:tempoxyz@211589300/tip.bot@1232143975:ref:refs/heads/main
-  - repo:tempoxyz@211589300/tip.bot@1232143975:pull_request
   - repo:tempoxyz@211589300/tip.bot@1232143975:environment:preview
   - repo:tempoxyz@211589300/tip.bot@1232143975:environment:production
 
