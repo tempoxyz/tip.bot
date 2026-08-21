@@ -2,9 +2,6 @@ name: Setup Slack config token
 description: Setup a Slack app config token, rotating the repo refresh token when needed
 
 inputs:
-  github-token:
-    description: GitHub token with repository secrets write permission
-    required: false
   slack-config-refresh-token:
     description: Slack app config refresh token
     required: false
@@ -20,11 +17,21 @@ outputs:
 runs:
   using: composite
   steps:
+    # Rotating the refresh token requires writing it back to repository
+    # secrets. The calling job must grant `id-token: write`; authorization is
+    # the slack-config trust policy in .github/sts/.
+    - name: Mint GitHub token
+      if: inputs.slack-config-access-token == '' && inputs.slack-config-refresh-token != ''
+      id: github_token
+      uses: tempoxyz/gh-actions/actions/github-sts@dd1014bf8244fded7a501e701cafab240a4f9f0e # main
+      with:
+        policy: slack-config
+
     - name: Setup Slack config token
       id: token
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.github-token }}
+        GH_TOKEN: ${{ steps.github_token.outputs.token }}
         SLACK_CONFIG_REFRESH_TOKEN: ${{ inputs.slack-config-refresh-token }}
         SLACK_CONFIG_ACCESS_TOKEN: ${{ inputs.slack-config-access-token }}
       run: |
@@ -38,11 +45,11 @@ runs:
           exit 1
         fi
         if [ -z "$GH_TOKEN" ]; then
-          echo "Missing github-token. Rotating SLACK_CONFIG_REFRESH_TOKEN requires a GitHub token with repository secrets read/write permission."
+          echo "Missing GitHub token. Rotating SLACK_CONFIG_REFRESH_TOKEN requires a token with repository secrets read/write permission."
           exit 1
         fi
         gh api "repos/${{ github.repository }}/actions/secrets/public-key" > /dev/null || {
-          echo "github-token cannot read repository Actions secrets. For a fine-grained PAT, grant Repository permissions > Secrets: Read and write. For a classic PAT, grant repo scope."
+          echo "GitHub token cannot read repository Actions secrets. Confirm the slack-config trust policy grants secrets: write and the STS app installation holds the repository Secrets permission."
           exit 1
         }
         RESPONSE=$(curl -fsS -X POST https://slack.com/api/tooling.tokens.rotate \

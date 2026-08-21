@@ -2,7 +2,7 @@
 # repository Actions secrets, so setup-slack-config-token can persist the
 # rotated SLACK_CONFIG_REFRESH_TOKEN after calling Slack's tooling.tokens.rotate
 # (rotation invalidates the previous refresh token, so the new one must be
-# stored immediately). Replaces the SLACK_GH_TOKEN fine-grained PAT.
+# stored immediately).
 #
 # Jobs that reference a GitHub environment present it as their OIDC subject
 # instead of the ref/event form. All jobs that rotate the token run in an

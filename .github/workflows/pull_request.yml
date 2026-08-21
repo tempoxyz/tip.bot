@@ -25,6 +25,7 @@ jobs:
     needs: check
     permissions:
       contents: read
+      id-token: write
       issues: write
       pull-requests: write
     uses: ./.github/workflows/preview_deploy.yml
@@ -40,5 +41,4 @@ jobs:
       SECRET_KEY: ${{ secrets.SECRET_KEY }}
       SLACK_CONFIG_ACCESS_TOKEN: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
       SLACK_CONFIG_REFRESH_TOKEN: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
-      SLACK_GH_TOKEN: ${{ secrets.SLACK_GH_TOKEN }}
       TEMPO_API_KEY: ${{ secrets.TEMPO_API_KEY }}
