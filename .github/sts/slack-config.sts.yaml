@@ -5,10 +5,13 @@
 # stored immediately). Replaces the SLACK_GH_TOKEN fine-grained PAT.
 #
 # refs/heads/main covers the production deploy and the scheduled preview sweep;
-# pull_request covers preview deploy/destroy runs.
+# pull_request covers preview deploy/destroy runs. Jobs that reference a GitHub
+# environment present it as their OIDC subject instead of the ref/event form,
+# so environment:preview covers the jobs running in the preview environment.
 subject:
   - repo:tempoxyz@211589300/tip.bot@1232143975:ref:refs/heads/main
   - repo:tempoxyz@211589300/tip.bot@1232143975:pull_request
+  - repo:tempoxyz@211589300/tip.bot@1232143975:environment:preview
 
 permissions:
   secrets: write
