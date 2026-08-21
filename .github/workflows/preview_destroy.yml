@@ -10,6 +10,7 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write
   issues: write
   pull-requests: write
 
@@ -58,7 +59,6 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/setup-slack-config-token
         with:
-          github-token: ${{ secrets.SLACK_GH_TOKEN }}
           slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
           slack-config-access-token: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
 
