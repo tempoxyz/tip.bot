@@ -9,20 +9,43 @@ concurrency:
   group: slack-config-ci
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  id-token: write
-  issues: write
-  pull-requests: write
+permissions: {}
 
 env:
   WRANGLER_SEND_METRICS: false
 
 jobs:
+  authorize:
+    name: Authorize
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Mint organization membership token
+        id: member_token
+        uses: tempoxyz/gh-actions/actions/github-sts@dd1014bf8244fded7a501e701cafab240a4f9f0e # main
+        with:
+          policy: workflow-member
+
+      - name: Check triggering actor organization membership
+        env:
+          ACTOR: ${{ github.triggering_actor }}
+          GH_TOKEN: ${{ steps.member_token.outputs.token }}
+        run: gh api --silent "orgs/tempoxyz/members/${ACTOR}"
+
   sweep:
     name: Sweep Orphaned Previews
+    if: always() && (github.event_name == 'schedule' || needs.authorize.result == 'success')
+    needs: authorize
     runs-on: ubuntu-latest
     environment: preview
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
