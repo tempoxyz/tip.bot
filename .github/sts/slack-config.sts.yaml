@@ -13,5 +13,8 @@ subject:
   - repo:tempoxyz@211589300/tip.bot@1232143975:environment:preview
   - repo:tempoxyz@211589300/tip.bot@1232143975:environment:production
 
+claim_pattern:
+  job_workflow_ref: tempoxyz/tip\.bot/\.github/workflows/(preview_deploy|preview_destroy|preview_sweep|production)\.yml@refs/heads/main
+
 permissions:
   secrets: write

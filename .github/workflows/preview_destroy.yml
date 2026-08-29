@@ -1,18 +1,14 @@
 name: Preview Destroy
 
-on:
-  pull_request:
+on: # zizmor: ignore[dangerous-triggers] Runs main's workflow and checkout; PR code is never checked out.
+  pull_request_target:
     types: [closed, converted_to_draft]
 
 concurrency:
   group: slack-config-ci
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  id-token: write
-  issues: write
-  pull-requests: write
+permissions: {}
 
 env:
   PREVIEW_APEX: pr${{ github.event.pull_request.number }}
@@ -21,11 +17,35 @@ env:
   WRANGLER_SEND_METRICS: false
 
 jobs:
+  authorize:
+    name: Authorize
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Mint organization membership token
+        id: member_token
+        uses: tempoxyz/gh-actions/actions/github-sts@dd1014bf8244fded7a501e701cafab240a4f9f0e # main
+        with:
+          policy: workflow-member
+
+      - name: Check triggering actor organization membership
+        env:
+          ACTOR: ${{ github.triggering_actor }}
+          GH_TOKEN: ${{ steps.member_token.outputs.token }}
+        run: gh api --silent "orgs/tempoxyz/members/${ACTOR}"
+
   destroy:
     name: Destroy
-    if: contains(fromJSON('["COLLABORATOR", "MEMBER", "OWNER"]'), github.event.pull_request.author_association)
+    needs: authorize
     runs-on: ubuntu-latest
     environment: preview
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+      pull-requests: write
     steps:
       - name: Read preview state
         id: state
