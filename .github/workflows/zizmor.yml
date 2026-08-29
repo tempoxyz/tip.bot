@@ -1,7 +1,7 @@
 name: zizmor
 
-on: # zizmor: ignore[dangerous-triggers] Loads from main and audits PR code without secrets or write permissions.
-  pull_request_target:
+on:
+  pull_request:
     branches: ['**']
   push:
     branches: [main]
@@ -20,8 +20,6 @@ jobs:
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
 
       - name: Run zizmor
         uses: zizmorcore/zizmor-action@b572f7b1a1c2d41efaab43d504f68d215c3cd727 # v0.5.4

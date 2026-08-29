@@ -1,0 +1,69 @@
+name: Preview
+
+on: # zizmor: ignore[dangerous-triggers] Loads from main and authorizes the triggering actor before checking out PR code.
+  workflow_run:
+    workflows: [Pull Request]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  authorize:
+    name: Authorize
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      pr_number: ${{ steps.pr.outputs.number }}
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: read
+    steps:
+      - name: Mint organization membership token
+        id: member_token
+        uses: tempoxyz/gh-actions/actions/github-sts@dd1014bf8244fded7a501e701cafab240a4f9f0e # main
+        with:
+          policy: workflow-member
+
+      - name: Check triggering actor organization membership
+        env:
+          ACTOR: ${{ github.run_attempt != '1' && github.triggering_actor || github.event.workflow_run.triggering_actor.login }}
+          GH_TOKEN: ${{ steps.member_token.outputs.token }}
+        run: gh api --silent "orgs/tempoxyz/members/${ACTOR}"
+
+      - name: Resolve pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          NUMBER=$(gh api "repos/${{ github.repository }}/commits/${HEAD_SHA}/pulls" \
+            --jq 'map(select(.state == "open" and .draft == false)) | first | .number // empty')
+          if [ -z "$NUMBER" ]; then
+            echo "No open, ready pull request found for ${HEAD_SHA}."
+            exit 1
+          fi
+          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
+
+  preview:
+    name: Preview
+    needs: authorize
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+      pull-requests: write
+    uses: ./.github/workflows/preview_deploy.yml
+    with:
+      pr_number: ${{ needs.authorize.outputs.pr_number }}
+      sha: ${{ github.event.workflow_run.head_sha }}
+      twitter_bot_handle: ${{ vars.TWITTER_BOT_HANDLE || 'tipbotgg' }}
+    secrets:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      FEE_PAYER_PRIVATE_KEY_MAINNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_MAINNET }}
+      FEE_PAYER_PRIVATE_KEY_TESTNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_TESTNET }}
+      SECRET_KEY: ${{ secrets.SECRET_KEY }}
+      SLACK_CONFIG_ACCESS_TOKEN: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
+      SLACK_CONFIG_REFRESH_TOKEN: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
+      TEMPO_API_KEY: ${{ secrets.TEMPO_API_KEY }}
