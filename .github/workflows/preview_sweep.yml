@@ -1,9 +1,10 @@
 name: Preview Sweep
 
 on:
+  repository_dispatch:
+    types: [preview_sweep]
   schedule:
     - cron: '0 0 * * *' # Daily at midnight UTC
-  workflow_dispatch:
 
 concurrency:
   group: slack-config-ci
@@ -17,7 +18,7 @@ env:
 jobs:
   authorize:
     name: Authorize
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'repository_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
