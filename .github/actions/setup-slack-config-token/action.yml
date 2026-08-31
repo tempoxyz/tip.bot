@@ -23,7 +23,7 @@ runs:
     - name: Mint GitHub token
       if: inputs.slack-config-access-token == '' && inputs.slack-config-refresh-token != ''
       id: github_token
-      uses: tempoxyz/gh-actions/actions/github-sts@dd1014bf8244fded7a501e701cafab240a4f9f0e # main
+      uses: tempoxyz/gh-actions/actions/github-sts@8819cf80bdcb39c36c34700e3f2ecc08bde54f23 # main
       with:
         policy: slack-config
 
