@@ -1,0 +1,5 @@
+rules:
+  # Pins to tempoxyz/gh-actions (including its vendored third-party actions) cannot carry a
+  # version comment that matches a tag, because that repository publishes no tags.
+  ref-version-mismatch:
+    disable: true
