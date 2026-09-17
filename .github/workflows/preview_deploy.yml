@@ -54,6 +54,9 @@ jobs:
     outputs:
       should_deploy: ${{ steps.pr.outputs.should_deploy }}
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@05c669ce878b8719779a28fe7375ba85822403f8
+
       - name: Check PR state
         id: pr
         env:
@@ -80,6 +83,9 @@ jobs:
       group: slack-config-ci
       cancel-in-progress: false
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@05c669ce878b8719779a28fe7375ba85822403f8
+
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
@@ -297,6 +303,7 @@ jobs:
             SIGNING_SECRET=$(echo "$RESPONSE" | jq -r '.credentials.signing_secret')
             echo "::add-mask::$CLIENT_SECRET"
             echo "::add-mask::$SIGNING_SECRET"
+            # shellcheck disable=SC2129
             echo "created=true" >> "$GITHUB_OUTPUT"
             echo "client_id=$CLIENT_ID" >> "$GITHUB_OUTPUT"
             echo "client_secret=$CLIENT_SECRET" >> "$GITHUB_OUTPUT"
@@ -378,6 +385,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
+          # shellcheck disable=SC2016
           QUEUES=$(node -e '
             const text = require("node:fs").readFileSync("wrangler.jsonc", "utf8")
               .replace(/(?<=^[^"]*(?:"[^"]*"[^"]*)*)\/\/.*$/gm, "")

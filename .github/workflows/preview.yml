@@ -19,6 +19,9 @@ jobs:
       id-token: write
       pull-requests: read
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@05c669ce878b8719779a28fe7375ba85822403f8
+
       - name: Mint organization membership token
         id: member_token
         uses: tempoxyz/gh-actions/actions/github-sts@c0292122e255def866c64c55e5844d1e7d5fe7ad # main
