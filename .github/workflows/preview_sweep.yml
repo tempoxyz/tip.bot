@@ -24,6 +24,9 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@05c669ce878b8719779a28fe7375ba85822403f8
+
       - name: Mint organization membership token
         id: member_token
         uses: tempoxyz/gh-actions/actions/github-sts@c0292122e255def866c64c55e5844d1e7d5fe7ad # main
@@ -48,6 +51,9 @@ jobs:
       issues: write
       pull-requests: write
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@05c669ce878b8719779a28fe7375ba85822403f8
+
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
@@ -74,6 +80,7 @@ jobs:
           WORKERS=$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts" \
             | jq -r '.result[].id // empty' | grep '^tipbot-pr[0-9][0-9]*$' || true)
+          # shellcheck disable=SC2001
           WORKER_PR_NUMBERS=$(echo "$WORKERS" | sed 's/^tipbot-pr//' || true)
           QUEUE_PR_NUMBERS=$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues" \
