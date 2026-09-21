@@ -1071,6 +1071,45 @@ export const api = new Hono<{
     )
       return new Response('Invalid signature', { status: 401 })
 
+    const reaction = (() => {
+      let payload: unknown
+      try {
+        payload = JSON.parse(body)
+      } catch {
+        return null
+      }
+      const parsed = z
+        .object({
+          authorizations: Slack.reactionEventSchema.shape.authorizations,
+          event: Slack.reactionEventSchema.omit({
+            authorizations: true,
+            event_id: true,
+            team_id: true,
+          }),
+          event_id: z.string().min(1),
+          team_id: z.string().min(1),
+          type: z.literal('event_callback'),
+        })
+        .safeParse(payload)
+      if (!parsed.success) return null
+      return Slack.reactionEventSchema.parse({
+        ...parsed.data.event,
+        authorizations: parsed.data.authorizations,
+        event_id: parsed.data.event_id,
+        team_id: parsed.data.team_id,
+      })
+    })()
+    if (reaction) {
+      if (reaction.type === 'reaction_removed') return new Response('', { status: 200 })
+      try {
+        await c.env.SLACK_REACTION_QUEUE.send(reaction)
+        return new Response('', { status: 200 })
+      } catch (error) {
+        console.error('Failed to enqueue signed Slack reaction event:', error)
+        return new Response('Queue unavailable', { status: 503 })
+      }
+    }
+
     const params = request.headers
       .get('content-type')
       ?.includes('application/x-www-form-urlencoded')
@@ -1124,30 +1163,7 @@ export const api = new Hono<{
           actions ?? '',
         ].join(':')
       })()
-      if (interaction) return interaction
-      if (params) return null
-
-      // Dedupe reaction Events API retries by Slack event_id. Chat SDK already
-      // dedupes message events, so keep this scoped to reactions only.
-      let payload: unknown
-      try {
-        payload = JSON.parse(body)
-      } catch {
-        return null
-      }
-      const parsed = z
-        .object({
-          event: z.looseObject({ type: z.string().min(1) }).optional(),
-          event_id: z.string().min(1).optional(),
-          type: z.string().min(1).optional(),
-        })
-        .safeParse(payload)
-      if (!parsed.success) return null
-      if (parsed.data.type !== 'event_callback') return null
-      if (!parsed.data.event_id) return null
-      if (!['reaction_added', 'reaction_removed'].includes(parsed.data.event?.type ?? ''))
-        return null
-      return `slack:webhook:${parsed.data.event_id}`
+      return interaction
     })()
     if (duplicateKey) {
       await Chat.getChat().initialize()
