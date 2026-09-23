@@ -110,7 +110,7 @@ peerDependencyRules:
     - vite
     - vitest
   allowedVersions:
-    accounts: 0.14.1
+    accounts: 0.15.2
     vite: '*'
     vitest: '*'
 strictDepBuilds: true
