@@ -55,7 +55,7 @@ jobs:
       should_deploy: ${{ steps.pr.outputs.should_deploy }}
     steps:
       - name: Secure runner
-        uses: tempoxyz/gh-actions/actions/secure-runner@bd66336ead0e97e3939428f526dc61fb43db0996 # 2026-09-25T20-13-44Z-bd66336e
+        uses: tempoxyz/gh-actions/actions/secure-runner@ee2960a6cc25d99bda45614135bfe1197d879bac # 2026-09-26T06-46-03Z-ee2960a6
 
       - name: Check PR state
         id: pr
@@ -84,7 +84,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Secure runner
-        uses: tempoxyz/gh-actions/actions/secure-runner@bd66336ead0e97e3939428f526dc61fb43db0996 # 2026-09-25T20-13-44Z-bd66336e
+        uses: tempoxyz/gh-actions/actions/secure-runner@ee2960a6cc25d99bda45614135bfe1197d879bac # 2026-09-26T06-46-03Z-ee2960a6
 
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
@@ -417,7 +417,7 @@ jobs:
           SLACK_APP_ID: ${{ steps.slack.outputs.app_id }}
 
       - name: Deploy preview
-        uses: tempoxyz/gh-actions/vendor/cloudflare/wrangler-action@bd66336ead0e97e3939428f526dc61fb43db0996 # 2026-09-25T20-13-44Z-bd66336e
+        uses: tempoxyz/gh-actions/vendor/cloudflare/wrangler-action@ee2960a6cc25d99bda45614135bfe1197d879bac # 2026-09-26T06-46-03Z-ee2960a6
         with:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
