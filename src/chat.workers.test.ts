@@ -3463,7 +3463,9 @@ test('@Tipbot mention connect link completion connects local workspace account',
     accessKeyAddress: link.access_key_address,
     chainId: link.chain_id,
     expiresAt: link.access_key_expires_at,
-    tokenAddress: Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
+    tokenAddress: Address.checksum(
+      link.default_token_address ?? Tempo.getDefaultTokenAddress(link.chain_id),
+    ),
   })
 
   const completeResponse = await client.api.account.link[':token'].$post({
@@ -3716,7 +3718,9 @@ test('@Tipbot mention connect link completion notifies Slack Connect external ac
     accessKeyAddress: link.access_key_address,
     chainId: link.chain_id,
     expiresAt: link.access_key_expires_at,
-    tokenAddress: Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
+    tokenAddress: Address.checksum(
+      link.default_token_address ?? Tempo.getDefaultTokenAddress(link.chain_id),
+    ),
   })
 
   const completeResponse = await client.api.account.link[':token'].$post({
@@ -4527,7 +4531,9 @@ test('@Tipbot mention claims Slack Connect pending tip when recipient connects',
         accessKeyAddress: link.access_key_address,
         chainId: link.chain_id,
         expiresAt: link.access_key_expires_at,
-        tokenAddress: Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
+        tokenAddress: Address.checksum(
+          link.default_token_address ?? Tempo.getDefaultTokenAddress(link.chain_id),
+        ),
       }),
     },
     param: { token },
