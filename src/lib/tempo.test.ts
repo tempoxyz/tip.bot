@@ -25,11 +25,19 @@ test('returns optional RPC URLs by chain', () => {
   expect(Tempo.getRpcUrl({}, 1)).toBe(undefined)
 })
 
+test('returns default token by chain', () => {
+  expect(Tempo.getDefaultTokenAddress(Tempo.chainLookup.mainnet)).toBe(Tempo.addressLookup.ousd)
+  expect(Tempo.getDefaultTokenAddress(Tempo.chainLookup.testnet)).toBe(Tempo.addressLookup.pathUsd)
+  expect(Tempo.getDefaultTokenAddress(Tempo.chainLookup.localnet)).toBe(Tempo.addressLookup.pathUsd)
+})
+
 test('checks allowed tokens by chain', () => {
+  expect(Tempo.isAllowedToken(Tempo.chainLookup.mainnet, Tempo.addressLookup.ousd)).toBe(true)
   expect(Tempo.isAllowedToken(Tempo.chainLookup.mainnet, Tempo.addressLookup.pathUsd)).toBe(true)
   expect(Tempo.isAllowedToken(Tempo.chainLookup.mainnet, Tempo.addressLookup.usdcE)).toBe(true)
   expect(Tempo.isAllowedToken(Tempo.chainLookup.mainnet, Tempo.addressLookup.usdt0)).toBe(true)
   expect(Tempo.isAllowedToken(Tempo.chainLookup.mainnet, Tempo.addressLookup.alphaUsd)).toBe(false)
+  expect(Tempo.isAllowedToken(Tempo.chainLookup.testnet, Tempo.addressLookup.ousd)).toBe(false)
   expect(Tempo.isAllowedToken(Tempo.chainLookup.testnet, Tempo.addressLookup.pathUsd)).toBe(true)
   expect(Tempo.isAllowedToken(Tempo.chainLookup.testnet, Tempo.addressLookup.alphaUsd)).toBe(true)
   expect(Tempo.isAllowedToken(Tempo.chainLookup.testnet, Tempo.addressLookup.betaUsd)).toBe(true)
@@ -39,6 +47,7 @@ test('checks allowed tokens by chain', () => {
 })
 
 test('resolves supported token aliases', () => {
+  expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'OUSD')).toBe(Tempo.addressLookup.ousd)
   expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'USDC.e')).toBe(Tempo.addressLookup.usdcE)
   expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'usdc')).toBe(Tempo.addressLookup.usdcE)
   expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'USDT')).toBe(Tempo.addressLookup.usdt0)
@@ -47,6 +56,10 @@ test('resolves supported token aliases', () => {
 })
 
 test('formats Tempo token symbols and transaction links', () => {
+  expect(Tempo.getTokenMetadataFallback(Tempo.addressLookup.ousd)).toEqual({
+    currency: 'USD',
+    symbol: 'OUSD',
+  })
   expect(Tempo.getTokenMetadataFallback(Tempo.addressLookup.pathUsd)).toEqual({
     currency: 'USD',
     symbol: 'PathUSD',

@@ -832,7 +832,8 @@ const actions = {
     }
 
     const reactionTipConfigs = await getReactionTipConfigs(DB.create(env.DB), workspace.id)
-    const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
+    const tokenAddress =
+      workspace.default_token_address ?? Tempo.getDefaultTokenAddress(workspace.chain_id)
     const tokenOptions = workspaceTokenOptions(workspace.chain_id)
     const tokenValue =
       tokenOptions.find((option) => option.address.toLowerCase() === tokenAddress.toLowerCase())
@@ -1014,7 +1015,7 @@ const modalSubmits = {
     if (!creator) return
 
     const tokenAddress = Address.checksum(
-      workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+      workspace.default_token_address ?? Tempo.getDefaultTokenAddress(workspace.chain_id),
     )
     const balance = await Actions.token.getBalance(
       createClient({
@@ -1167,7 +1168,8 @@ const modalSubmits = {
     if (!installation) return
 
     const now = new Date()
-    const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
+    const tokenAddress =
+      workspace.default_token_address ?? Tempo.getDefaultTokenAddress(workspace.chain_id)
     const tipRaffle = {
       chain_id: workspace.chain_id,
       created_at: now.toISOString(),
@@ -1375,7 +1377,8 @@ const handlers = {
       return
     }
 
-    const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
+    const tokenAddress =
+      workspace.default_token_address ?? Tempo.getDefaultTokenAddress(workspace.chain_id)
     const token = await Tapimo.getTokenMetadata(env, workspace.chain_id, tokenAddress)
     if (!('openModal' in event)) {
       await postPrivateReply(
@@ -1451,7 +1454,8 @@ const handlers = {
       return
     }
 
-    const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
+    const tokenAddress =
+      workspace.default_token_address ?? Tempo.getDefaultTokenAddress(workspace.chain_id)
     const token = await Tapimo.getTokenMetadata(env, workspace.chain_id, tokenAddress)
     if (!('openModal' in event)) return
     await event.openModal(
@@ -1579,7 +1583,8 @@ const handlers = {
       provider_id: ctx.provider.id,
       provider_message_ts: 'pending',
       requester_member_id: requester.memberId,
-      token_address: workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+      token_address:
+        workspace.default_token_address ?? Tempo.getDefaultTokenAddress(workspace.chain_id),
       updated_at: now,
       workspace_id: workspace.id,
     } satisfies DB_gen.Insertable.tip_ask
@@ -2590,6 +2595,7 @@ const tipRaffleDurationOptions = [
   { label: '7 days', ms: 7 * 24 * 60 * 60 * 1000, value: '7d' }, // 7 days
 ] as const
 const tokenOptions = [
+  { address: Tempo.addressLookup.ousd, label: 'OUSD', value: 'OUSD' },
   { address: Tempo.addressLookup.pathUsd, label: 'PathUSD', value: 'pathUSD' },
   { address: Tempo.addressLookup.usdcE, label: 'USDC.e', value: 'USDC.e' },
   { address: Tempo.addressLookup.usdt0, label: 'USDT0', value: 'USDT0' },
@@ -4608,7 +4614,9 @@ async function sendTipRaffleEscrowPayout(
       feePayer: 'sender',
       isDefaultToken: Address.isEqual(
         Address.checksum(existing.token_address),
-        Address.checksum(existing.default_token_address ?? Tempo.addressLookup.pathUsd),
+        Address.checksum(
+          existing.default_token_address ?? Tempo.getDefaultTokenAddress(existing.chain_id),
+        ),
       ),
       memo: existing.memo,
       ok: true,
@@ -4745,7 +4753,9 @@ async function sendTipRaffleEscrowPayout(
       feePayer: 'sender',
       isDefaultToken: Address.isEqual(
         Address.checksum(input.tokenAddress),
-        Address.checksum(workspace.default_token_address ?? Tempo.addressLookup.pathUsd),
+        Address.checksum(
+          workspace.default_token_address ?? Tempo.getDefaultTokenAddress(workspace.chain_id),
+        ),
       ),
       memo: input.memo,
       ok: true,
@@ -4890,7 +4900,10 @@ async function tipRaffleMessage(db: DB.Type, tipRaffle: TipRaffleMessageInput) {
     const value = formatAmount(amount)
     return Address.isEqual(
       Address.checksum(tipRaffle.token_address),
-      Address.checksum(tipRaffle.workspace_default_token_address ?? Tempo.addressLookup.pathUsd),
+      Address.checksum(
+        tipRaffle.workspace_default_token_address ??
+          Tempo.getDefaultTokenAddress(tipRaffle.chain_id),
+      ),
     )
       ? formatCurrencyAmount(value, token.currency)
       : formatTipAmount(value, token.currency, token.symbol)
@@ -4997,7 +5010,9 @@ async function tipAskMessage(db: DB.Type, tipAsk: TipAskMessageInput) {
     const value = formatAmount(amount)
     return Address.isEqual(
       Address.checksum(tipAsk.token_address),
-      Address.checksum(tipAsk.workspace_default_token_address ?? Tempo.addressLookup.pathUsd),
+      Address.checksum(
+        tipAsk.workspace_default_token_address ?? Tempo.getDefaultTokenAddress(tipAsk.chain_id),
+      ),
     )
       ? formatCurrencyAmount(value, token.currency)
       : formatTipAmount(value, token.currency, token.symbol)
@@ -5312,7 +5327,7 @@ export async function updateReceiptBoostAggregate(
       const amount = formatAmount(group.amount)
       const displayAmount = Address.isEqual(
         Address.checksum(group.tokenAddress),
-        Address.checksum(group.defaultTokenAddress ?? Tempo.addressLookup.pathUsd),
+        Address.checksum(group.defaultTokenAddress ?? Tempo.getDefaultTokenAddress(group.chainId)),
       )
         ? formatCurrencyAmount(amount, token.currency)
         : formatTipAmount(amount, token.currency, token.symbol)
@@ -6056,7 +6071,9 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
       (row) =>
         !row.token_address ||
         row.token_address.toLowerCase() ===
-          (workspace.default_token_address ?? Tempo.addressLookup.pathUsd).toLowerCase(),
+          (
+            workspace.default_token_address ?? Tempo.getDefaultTokenAddress(workspace.chain_id)
+          ).toLowerCase(),
     )
     if (accessKey && !ctx.forceConnectRefresh) {
       await postPrivateReply(event, event.user, 'Already connected', { threadTs: ctx.threadTs })
@@ -6801,7 +6818,7 @@ async function reactionTipAggregateText(
       const amount = formatAmount(row.amount)
       const displayAmount = Address.isEqual(
         Address.checksum(row.token_address),
-        Address.checksum(row.default_token_address ?? Tempo.addressLookup.pathUsd),
+        Address.checksum(row.default_token_address ?? Tempo.getDefaultTokenAddress(row.chain_id)),
       )
         ? formatCurrencyAmount(amount, token.currency)
         : formatTipAmount(amount, token.currency, token.symbol)
@@ -6819,7 +6836,7 @@ async function reactionTipAggregateText(
       const amount = formatAmount(row.amount)
       const displayAmount = Address.isEqual(
         Address.checksum(row.token_address),
-        Address.checksum(row.default_token_address ?? Tempo.addressLookup.pathUsd),
+        Address.checksum(row.default_token_address ?? Tempo.getDefaultTokenAddress(row.chain_id)),
       )
         ? formatCurrencyAmount(amount, token.currency)
         : formatTipAmount(amount, token.currency, token.symbol)
@@ -6844,7 +6861,7 @@ async function reactionTipAggregateText(
       const amount = formatAmount(row.amount)
       const displayAmount = Address.isEqual(
         Address.checksum(row.token_address),
-        Address.checksum(row.default_token_address ?? Tempo.addressLookup.pathUsd),
+        Address.checksum(row.default_token_address ?? Tempo.getDefaultTokenAddress(row.chain_id)),
       )
         ? formatCurrencyAmount(amount, token.currency)
         : formatTipAmount(amount, token.currency, token.symbol)
@@ -7036,7 +7053,9 @@ export async function updateSlackPendingTipMessage(db: DB.Type, result: Tip.Pend
     .executeTakeFirst()
   const amount = Address.isEqual(
     Address.checksum(result.pendingTip.token_address),
-    Address.checksum(workspace?.default_token_address ?? Tempo.addressLookup.pathUsd),
+    Address.checksum(
+      workspace?.default_token_address ?? Tempo.getDefaultTokenAddress(result.pendingTip.chain_id),
+    ),
   )
     ? formatCurrencyAmount(formatAmount(result.pendingTip.amount), tokenMetadata.currency)
     : formatTipAmount(
@@ -7320,7 +7339,8 @@ async function configCard(
   options?: { canEdit?: boolean; updated?: boolean },
 ) {
   const reactionTipConfigs = await getReactionTipConfigs(db, workspace.id)
-  const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
+  const tokenAddress =
+    workspace.default_token_address ?? Tempo.getDefaultTokenAddress(workspace.chain_id)
   const token = Tempo.getTokenMetadataFallback(tokenAddress)
   const networkLabel = workspace.chain_id === Tempo.chainLookup.mainnet ? 'Mainnet' : 'Testnet'
   return {
@@ -7429,7 +7449,8 @@ function configFallbackText(
   reactionTipConfigs: ReactionTipConfig[],
   options?: { updated?: boolean },
 ) {
-  const tokenAddress = workspace.default_token_address ?? Tempo.addressLookup.pathUsd
+  const tokenAddress =
+    workspace.default_token_address ?? Tempo.getDefaultTokenAddress(workspace.chain_id)
   return `Setting Value\nNetwork ${configNetworkLabel(workspace)}\nDefault token ${configToken(workspace).symbol} ${Tempo.explorerLink(workspace.chain_id, tokenAddress)}\nDefault amount ${formatAmount(workspace.default_amount)}\nReaction tips ${reactionTipConfigsText(reactionTipConfigs)}${options?.updated ? '\nWorkspace settings updated' : ''}`
 }
 
@@ -7439,7 +7460,7 @@ function configNetworkLabel(workspace: DB_gen.Selectable.workspace) {
 
 function configToken(workspace: DB_gen.Selectable.workspace) {
   return Tempo.getTokenMetadataFallback(
-    workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+    workspace.default_token_address ?? Tempo.getDefaultTokenAddress(workspace.chain_id),
   )
 }
 

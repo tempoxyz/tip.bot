@@ -10,7 +10,6 @@ import { Address, Hex } from 'ox'
 import { z } from 'zod'
 
 export const twitterProviderId = 'x'
-const twitterDefaultTokenAddress = Address.checksum(Tempo.addressLookup.usdcE)
 const twitterStorageProvider = 'slack'
 const twitterMaxTipRecipients = 10
 const unboundWalletAddress = Address.checksum('0x0000000000000000000000000000000000000000')
@@ -1132,15 +1131,10 @@ function getTwitterDefaultTokenAddress(workspace: {
   chain_id: number
   default_token_address: string | null
 }) {
-  const fallback = getTwitterDefaultTokenAddressForChain(workspace.chain_id)
+  const fallback = Tempo.getDefaultTokenAddress(workspace.chain_id)
   const tokenAddress = Address.checksum(workspace.default_token_address ?? fallback)
   if (Tempo.isAllowedToken(workspace.chain_id, tokenAddress)) return tokenAddress
   return fallback
-}
-
-function getTwitterDefaultTokenAddressForChain(chainId: number) {
-  if (chainId === Tempo.chainLookup.mainnet) return twitterDefaultTokenAddress
-  return Address.checksum(Tempo.addressLookup.pathUsd)
 }
 
 async function getTweetByUrl(env: Env, tweetUrl: string) {
@@ -1301,7 +1295,7 @@ async function ensureTwitterWorkspace(db: DB.Type, now: string) {
       chain_id: Tempo.chainLookup.mainnet,
       created_at: now,
       default_amount: 1000,
-      default_token_address: twitterDefaultTokenAddress,
+      default_token_address: Tempo.addressLookup.ousd,
       id,
       installed_at: now,
       name: 'X',

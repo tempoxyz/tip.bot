@@ -7362,7 +7362,7 @@ describe('/tip config', () => {
         },
         { timeout: 10_000 }, // 10 seconds
       )
-      .toEqual(['pathUSD', 'USDC.e', 'USDT0'])
+      .toEqual(['OUSD', 'pathUSD', 'USDC.e', 'USDT0'])
     fetchSpy.mockRestore()
   }, 20_000) // 20 seconds
 

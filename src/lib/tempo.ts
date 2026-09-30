@@ -1,9 +1,11 @@
 import { Address } from 'ox'
 import { tempo, tempoLocalnet, tempoModerato } from 'viem/tempo/chains'
+import { ousd } from 'viem/tokens'
 
 export const addressLookup = {
   alphaUsd: Address.checksum('0x20c0000000000000000000000000000000000001'),
   betaUsd: Address.checksum('0x20c0000000000000000000000000000000000002'),
+  ousd: Address.checksum(ousd.addresses[tempo.id]),
   pathUsd: Address.checksum('0x20c0000000000000000000000000000000000000'),
   thetaUsd: Address.checksum('0x20c0000000000000000000000000000000000003'),
   usdcE: Address.checksum('0x20C000000000000000000000b9537d11c60E8b50'),
@@ -60,12 +62,20 @@ export function explorerLink(chainId: number, address: string) {
   return `${chain.blockExplorers?.default.url ?? chain.rpcUrls.default.http[0]}/address/${address}`
 }
 
+export function getDefaultTokenAddress(chainId: number) {
+  if (chainId === chainLookup.mainnet) return addressLookup.ousd
+  return addressLookup.pathUsd
+}
+
 export function isAllowedToken(chainId: number, tokenAddress: string) {
   const token = Address.checksum(tokenAddress)
   if (chainId === chainLookup.mainnet)
-    return [addressLookup.pathUsd, addressLookup.usdcE, addressLookup.usdt0].some((allowed) =>
-      Address.isEqual(token, allowed),
-    )
+    return [
+      addressLookup.ousd,
+      addressLookup.pathUsd,
+      addressLookup.usdcE,
+      addressLookup.usdt0,
+    ].some((allowed) => Address.isEqual(token, allowed))
   if (chainId === chainLookup.testnet || chainId === chainLookup.localnet)
     return [
       addressLookup.pathUsd,
@@ -82,6 +92,7 @@ export function getTokenAddress(chainId: number, value: string) {
 
   const normalized = value.toLowerCase().replace(/[.\-_\s]/g, '')
   const tokenAddress = (() => {
+    if (normalized === 'ousd' || normalized === 'openusd') return addressLookup.ousd
     if (normalized === 'pathusd' || normalized === 'path' || normalized === 'usd')
       return addressLookup.pathUsd
     if (normalized === 'usdce' || normalized === 'usdc') return addressLookup.usdcE
@@ -96,6 +107,8 @@ export function getTokenAddress(chainId: number, value: string) {
 }
 
 export function getTokenMetadataFallback(tokenAddress: string) {
+  if (Address.isEqual(Address.checksum(tokenAddress), addressLookup.ousd))
+    return { currency: 'USD', symbol: ousd.symbol }
   if (Address.isEqual(Address.checksum(tokenAddress), addressLookup.pathUsd))
     return { currency: 'USD', symbol: 'PathUSD' }
   if (Address.isEqual(Address.checksum(tokenAddress), addressLookup.alphaUsd))
