@@ -28,7 +28,7 @@ test('returns optional RPC URLs by chain', () => {
 test('returns default token by chain', () => {
   expect(Tempo.addressLookup.ousd).toBe('0x20c0000000000000000000006a37DA5C996874BE')
   expect(Tempo.getDefaultTokenAddress(Tempo.chainLookup.mainnet)).toBe(Tempo.addressLookup.ousd)
-  expect(Tempo.getDefaultTokenAddress(Tempo.chainLookup.testnet)).toBe(Tempo.addressLookup.pathUsd)
+  expect(Tempo.getDefaultTokenAddress(Tempo.chainLookup.testnet)).toBe(Tempo.addressLookup.ousd)
   expect(Tempo.getDefaultTokenAddress(Tempo.chainLookup.localnet)).toBe(Tempo.addressLookup.pathUsd)
 })
 
@@ -38,7 +38,8 @@ test('checks allowed tokens by chain', () => {
   expect(Tempo.isAllowedToken(Tempo.chainLookup.mainnet, Tempo.addressLookup.usdcE)).toBe(true)
   expect(Tempo.isAllowedToken(Tempo.chainLookup.mainnet, Tempo.addressLookup.usdt0)).toBe(true)
   expect(Tempo.isAllowedToken(Tempo.chainLookup.mainnet, Tempo.addressLookup.alphaUsd)).toBe(false)
-  expect(Tempo.isAllowedToken(Tempo.chainLookup.testnet, Tempo.addressLookup.ousd)).toBe(false)
+  expect(Tempo.isAllowedToken(Tempo.chainLookup.testnet, Tempo.addressLookup.ousd)).toBe(true)
+  expect(Tempo.isAllowedToken(Tempo.chainLookup.localnet, Tempo.addressLookup.ousd)).toBe(false)
   expect(Tempo.isAllowedToken(Tempo.chainLookup.testnet, Tempo.addressLookup.pathUsd)).toBe(true)
   expect(Tempo.isAllowedToken(Tempo.chainLookup.testnet, Tempo.addressLookup.alphaUsd)).toBe(true)
   expect(Tempo.isAllowedToken(Tempo.chainLookup.testnet, Tempo.addressLookup.betaUsd)).toBe(true)
@@ -50,7 +51,8 @@ test('checks allowed tokens by chain', () => {
 test('resolves supported token aliases', () => {
   expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'OUSD')).toBe(Tempo.addressLookup.ousd)
   expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'OpenUSD')).toBe(Tempo.addressLookup.ousd)
-  expect(Tempo.getTokenAddress(Tempo.chainLookup.testnet, 'ousd')).toBe(null)
+  expect(Tempo.getTokenAddress(Tempo.chainLookup.testnet, 'ousd')).toBe(Tempo.addressLookup.ousd)
+  expect(Tempo.getTokenAddress(Tempo.chainLookup.localnet, 'ousd')).toBe(null)
   expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'USDC.e')).toBe(Tempo.addressLookup.usdcE)
   expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'usdc')).toBe(Tempo.addressLookup.usdcE)
   expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'USDT')).toBe(Tempo.addressLookup.usdt0)

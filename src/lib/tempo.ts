@@ -1,11 +1,10 @@
 import { Address } from 'ox'
 import { tempo, tempoLocalnet, tempoModerato } from 'viem/tempo/chains'
-import { ousd } from 'viem/tokens'
 
 export const addressLookup = {
   alphaUsd: Address.checksum('0x20c0000000000000000000000000000000000001'),
   betaUsd: Address.checksum('0x20c0000000000000000000000000000000000002'),
-  ousd: Address.checksum(ousd.addresses[tempo.id]),
+  ousd: Address.checksum('0x20c0000000000000000000006a37DA5C996874BE'),
   pathUsd: Address.checksum('0x20c0000000000000000000000000000000000000'),
   thetaUsd: Address.checksum('0x20c0000000000000000000000000000000000003'),
   usdcE: Address.checksum('0x20C000000000000000000000b9537d11c60E8b50'),
@@ -26,7 +25,7 @@ export function getChain(chainId: number) {
 }
 
 export function getDefaultTokenAddress(chainId: number) {
-  if (chainId === chainLookup.mainnet) return addressLookup.ousd
+  if (chainId === chainLookup.mainnet || chainId === chainLookup.testnet) return addressLookup.ousd
   return addressLookup.pathUsd
 }
 
@@ -76,7 +75,15 @@ export function isAllowedToken(chainId: number, tokenAddress: string) {
       addressLookup.usdcE,
       addressLookup.usdt0,
     ].some((allowed) => Address.isEqual(token, allowed))
-  if (chainId === chainLookup.testnet || chainId === chainLookup.localnet)
+  if (chainId === chainLookup.testnet)
+    return [
+      addressLookup.ousd,
+      addressLookup.pathUsd,
+      addressLookup.alphaUsd,
+      addressLookup.betaUsd,
+      addressLookup.thetaUsd,
+    ].some((allowed) => Address.isEqual(token, allowed))
+  if (chainId === chainLookup.localnet)
     return [
       addressLookup.pathUsd,
       addressLookup.alphaUsd,
