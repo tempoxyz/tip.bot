@@ -35,7 +35,7 @@
     "@tanstack/react-router": "1.169.2",
     "@tanstack/react-start": "1.167.65",
     "@tanstack/router-plugin": "1.167.35",
-    "accounts": "^0.15.2",
+    "accounts": "0.18.4",
     "chat": "4.27.0",
     "hono": "4.13.7",
     "kysely": "0.28.17",
@@ -45,7 +45,7 @@
     "react-dom": "19.2.5",
     "tapimo": "0.5.2",
     "viem": "^2.57.1",
-    "wagmi": "^3.6.14",
+    "wagmi": "^3.7.7",
     "zod": "4.4.3"
   },
   "devDependencies": {
