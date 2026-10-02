@@ -39,32 +39,34 @@ minimumReleaseAgeExclude:
   - tmp
   - viem
   - '@babel/core@7.29.6'
-  - axios@1.18.0
+  - axios@1.20.0
   - shell-quote@1.10.0
-  - '@grpc/grpc-js@1.14.4'
+  - '@grpc/grpc-js@1.14.5'
   - esbuild@0.28.1
   - protobufjs@7.6.5
   - form-data@4.0.6
   - vite-plus@0.1.24
   - launch-editor@2.14.1
-  - ip-address@10.3.1
+  - ip-address@10.7.1
   - nanoid@3.3.18
   - nanoid@5.1.16
   - postcss@8.5.23
-  - brace-expansion@5.0.9
+  - brace-expansion@5.0.12
+  - fast-uri@3.1.8
   - tar@7.5.21
   - undici@7.29.1
   - ws@8.21.0
 minimumReleaseAgeStrict: true
 overrides:
   '@babel/core': 7.29.6
-  '@grpc/grpc-js': 1.14.4
-  axios: 1.18.0
+  '@grpc/grpc-js': 1.14.5
+  axios: 1.20.0
   '@hono/node-server@<2.0.5': 2.0.10
-  brace-expansion: 5.0.9
+  brace-expansion: 5.0.12
   esbuild: 0.28.1
+  fast-uri: 3.1.8
   form-data: 4.0.6
-  ip-address: 10.3.1
+  ip-address: 10.7.1
   launch-editor: 2.14.1
   nanoid@<3.3.18: 3.3.18
   'nanoid@>=4.0.0 <5.1.16': 5.1.16
