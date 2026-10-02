@@ -616,6 +616,7 @@ async function buildHomeView(input: {
     (async () => {
       // Fetch balances for every token allowed in this workspace, falling back to RPC.
       const tokens = [
+        { address: Tempo.addressLookup.ousd, label: 'OUSD' },
         { address: Tempo.addressLookup.pathUsd, label: 'PathUSD' },
         { address: Tempo.addressLookup.usdcE, label: 'USDC.e' },
         { address: Tempo.addressLookup.usdt0, label: 'USDT0' },
