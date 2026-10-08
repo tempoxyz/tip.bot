@@ -9,6 +9,7 @@ import * as z from 'zod/mini'
 import { api } from '#/api.ts'
 import { WalletProviders } from '#/components/WalletProviders.tsx'
 import { slackCommand, tipbotImagePath } from '#/lib/app.ts'
+import { isLostWalletSession } from '#/lib/confirmationWallet.ts'
 import { getErrorMessage } from '#/lib/error.ts'
 import { formatCurrencyAmount } from '#/lib/format.ts'
 import { rpc } from '#/lib/rpc.ts'
@@ -61,6 +62,7 @@ function ConfirmPanel(props: {
   const connectors = useConnectors()
   const data = props.data
   const [error, setError] = React.useState<string | null>(null)
+  const [reconnectRequired, setReconnectRequired] = React.useState(false)
   const [status, setStatus] = React.useState<'idle' | 'confirming' | 'sent'>('idle')
   const [transactionHash, setTransactionHash] = React.useState<string | null>(null)
   const recipients: Array<{
@@ -85,11 +87,27 @@ function ConfirmPanel(props: {
     setError(null)
     setTransactionHash(null)
     setStatus('confirming')
+    const connector = connection.connector ?? connectors[0]
+    let hadWalletAccount = false
+    let phase: 'wallet' | 'submit' = 'wallet'
     try {
-      const connector = connection.connector ?? connectors[0]
       if (!connector) throw new Error('Tempo Wallet is unavailable.')
+      // Reset stale local provider state only after the wallet invalidated it.
+      // Reconnection is a separate user attempt, never an automatic payment retry.
+      if (reconnectRequired) await connector.disconnect()
+      const initialProvider = (await connector.getProvider()) as {
+        request: (parameters: { method: string }) => Promise<unknown>
+      }
+      const initialAccounts = await initialProvider
+        .request({ method: 'eth_accounts' })
+        .catch(() => undefined)
+      hadWalletAccount = Array.isArray(initialAccounts) && initialAccounts.length > 0
       const account = await (async () => {
-        if (data.kind === 'reusable_access_key' && connection.status === 'connected') {
+        if (
+          !reconnectRequired &&
+          data.kind === 'reusable_access_key' &&
+          connection.status === 'connected'
+        ) {
           const result = await authorizeAccessKey(connector, data)
           return {
             address: result.rootAddress,
@@ -98,6 +116,7 @@ function ConfirmPanel(props: {
         }
         if (
           data.kind === 'onetime_payment' &&
+          !reconnectRequired &&
           connection.status === 'connected' &&
           connection.address
         )
@@ -110,7 +129,7 @@ function ConfirmPanel(props: {
                   authorizeAccessKey: getAuthorizeAccessKey(data),
                   showDeposit: { amount: '1', token: 'USDC.e' },
                 }
-              : { method: 'register', showDeposit: { amount: '1', token: 'USDC.e' } },
+              : { showDeposit: { amount: '1', token: 'USDC.e' } },
           chainId: data.chainId,
           connector,
           withCapabilities: true,
@@ -122,6 +141,7 @@ function ConfirmPanel(props: {
         }
         return result.accounts[0]
       })()
+      setReconnectRequired(false)
       if (
         data.kind === 'onetime_payment' &&
         account.address.toLowerCase() !== data.transactionRequest?.from.toLowerCase()
@@ -146,6 +166,7 @@ function ConfirmPanel(props: {
       const keyAuthorization = account.capabilities.keyAuthorization
       if (data.kind === 'reusable_access_key' && !keyAuthorization)
         throw new Error('Tempo Wallet did not approve this payment.')
+      phase = 'submit'
       const response = await rpc.api.confirm[':token'].$post({
         json: {
           address: account.address,
@@ -162,6 +183,22 @@ function ConfirmPanel(props: {
       setStatus('sent')
     } catch (error) {
       setStatus('idle')
+      if (phase === 'wallet' && hadWalletAccount && connector) {
+        const provider = await connector.getProvider().catch(() => undefined)
+        if (
+          provider &&
+          (await isLostWalletSession(
+            error,
+            provider as { request: (parameters: { method: string }) => Promise<unknown> },
+          ))
+        ) {
+          setReconnectRequired(true)
+          setError(
+            'Your wallet session expired. Select Confirm payment to reconnect and try again.',
+          )
+          return
+        }
+      }
       setError(getErrorMessage(error, 'Payment failed.'))
     }
   }
