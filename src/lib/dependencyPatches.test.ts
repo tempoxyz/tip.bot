@@ -62,3 +62,40 @@ function box(type: string, payload: Buffer) {
   header.write(type, 4)
   return Buffer.concat([header, payload])
 }
+
+const routerRequire = createRequire(require.resolve('@tanstack/router-plugin'))
+const chokidarRequire = createRequire(routerRequire.resolve('chokidar'))
+const braces = chokidarRequire('braces') as {
+  compile: (input: unknown) => string
+  expand: (input: unknown) => string[]
+  parse: (input: string) => unknown
+  stringify: (input: unknown) => string
+}
+
+test('patched braces rejects excessive pattern nesting without exhausting the stack', () => {
+  for (const pattern of [
+    '{'.repeat(2000) + 'a,b' + '}'.repeat(2000),
+    '('.repeat(2000) + 'a' + ')'.repeat(2000),
+    '{'.repeat(2000),
+  ])
+    for (const method of [braces.parse, braces.compile, braces.expand, braces.stringify])
+      expect(() => method(pattern)).toThrow('Brace nesting exceeds 128 levels')
+})
+
+test('patched braces bounds recursive walkers for caller-provided ASTs', () => {
+  let ast: { type: string; nodes: unknown[] } = { type: 'root', nodes: [] }
+  for (let i = 0; i < 1000; i++) ast = { type: 'root', nodes: [ast] }
+  for (const method of [braces.compile, braces.expand, braces.stringify])
+    expect(() => method(structuredClone(ast))).toThrow('Brace nesting exceeds 128 levels')
+})
+
+test('patched braces preserves ordinary glob behavior', () => {
+  expect(braces.expand('src/{a,b}/{1..2}.ts')).toEqual([
+    'src/a/1.ts',
+    'src/a/2.ts',
+    'src/b/1.ts',
+    'src/b/2.ts',
+  ])
+  expect(braces.compile('src/{a,b}.ts')).toBe('src/(a|b).ts')
+  expect(braces.stringify(braces.parse('src/{a,b}.ts'))).toBe('src/{a,b}.ts')
+})

@@ -22,6 +22,9 @@ auditConfig:
     # Keep these version-based audit exceptions only while that patch is applied.
     - GHSA-5p2g-fcmc-qvqq
     - GHSA-w3rx-r6r6-pgpr
+    # No published fix; bounded parser and AST walkers in braces@3.0.3.patch.
+    # Regression coverage: src/lib/dependencyPatches.test.ts.
+    - GHSA-vfj7-8cjw-p6xm
 blockExoticSubdeps: true
 catalog:
   # Vite+ dependency aliases.
@@ -58,6 +61,21 @@ minimumReleaseAgeExclude:
   - ws@8.21.0
 minimumReleaseAgeStrict: true
 overrides:
+  '@modelcontextprotocol/sdk': 1.31.0
+  '@vue/compiler-core': 3.5.42
+  '@vue/compiler-dom': 3.5.42
+  '@vue/compiler-sfc': 3.5.42
+  '@vue/compiler-ssr': 3.5.42
+  '@vue/reactivity': 3.5.42
+  '@vue/runtime-core': 3.5.42
+  '@vue/runtime-dom': 3.5.42
+  '@vue/server-renderer': 3.5.42
+  '@vue/shared': 3.5.42
+  vue: 3.5.42
+  proxy-addr: 2.0.8
+  seroval: 1.6.3
+  source-map-js: 1.2.2
+  tinypool: 2.1.2
   '@babel/core': 7.29.6
   '@grpc/grpc-js': 1.14.5
   axios: 1.20.0
@@ -72,9 +90,9 @@ overrides:
   'nanoid@>=4.0.0 <5.1.16': 5.1.16
   postcss: 8.5.23
   protobufjs: 7.6.5
-  shell-quote: 1.10.0
+  shell-quote: 1.11.0
   # Miniflare pins an older sharp; keep the patched release until it upgrades.
-  sharp: 0.35.4
+  sharp: 0.35.5
   tar: 7.5.21
   tmp: 0.2.7
   # remark-mdx-frontmatter still requires toml ^3.0.0; both advisories need 4.2.0.
@@ -104,6 +122,7 @@ patchedDependencies:
   # TODO: Remove when TanStack Start server entry no longer eagerly resolves virtual router modules during Worker test startup.
   # Related: https://github.com/cloudflare/workers-sdk/issues/11100
   '@tanstack/react-start@1.167.65': config/patches/@tanstack__react-start@1.167.65.patch
+  braces@3.0.3: config/patches/braces@3.0.3.patch
   emulate@0.5.0: config/patches/emulate@0.5.0.patch
   image-size@2.0.2: config/patches/image-size@2.0.2.patch
   prool@0.2.4: config/patches/prool@0.2.4.patch
