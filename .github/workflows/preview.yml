@@ -56,7 +56,7 @@ jobs:
       id-token: write
       issues: write
       pull-requests: write
-    uses: ./.github/workflows/preview_deploy.yml
+    uses: ./.github/workflows/preview_deploy.yml # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
     with:
       pr_number: ${{ needs.authorize.outputs.pr_number }}
       sha: ${{ github.event.workflow_run.head_sha }}

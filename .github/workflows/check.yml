@@ -33,7 +33,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm
+        uses: ./.github/actions/setup-pnpm # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
       - name: Audit dependencies
         run: pnpm audit
@@ -83,7 +83,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm
+        uses: ./.github/actions/setup-pnpm # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
       - name: Test unit
         run: pnpm test --project unit --run
@@ -105,7 +105,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm
+        uses: ./.github/actions/setup-pnpm # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
       - name: Cache Tempo Docker image
         id: docker-cache
@@ -152,10 +152,10 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm
+        uses: ./.github/actions/setup-pnpm # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
       - name: Setup Playwright
-        uses: ./.github/actions/setup-playwright
+        uses: ./.github/actions/setup-playwright # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
       - name: Build native dependencies
         run: |

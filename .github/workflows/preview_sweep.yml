@@ -62,7 +62,7 @@ jobs:
       - name: Setup Slack config token
         id: slack_token
         continue-on-error: true
-        uses: ./.github/actions/setup-slack-config-token
+        uses: ./.github/actions/setup-slack-config-token # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
         with:
           slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
           slack-config-access-token: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}

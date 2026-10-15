@@ -38,7 +38,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: ./.github/workflows/check.yml
+    uses: ./.github/workflows/check.yml # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
   deploy:
     name: Deploy
@@ -58,7 +58,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm
+        uses: ./.github/actions/setup-pnpm # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
       - name: Run migrations
         run: pnpm exec wrangler d1 migrations apply tipbot --env production --remote
@@ -134,11 +134,11 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm
+        uses: ./.github/actions/setup-pnpm # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
       - name: Setup Slack config token
         id: slack_token
-        uses: ./.github/actions/setup-slack-config-token
+        uses: ./.github/actions/setup-slack-config-token # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
         with:
           slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
           slack-config-access-token: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
