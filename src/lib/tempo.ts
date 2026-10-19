@@ -1,13 +1,15 @@
 import { Address } from 'ox'
 import { tempo, tempoLocalnet, tempoModerato } from 'viem/tempo/chains'
+import { alphausd, betausd, pathusd, thetausd, usdce, usdt0 as core_usdt0 } from 'viem/tokens'
+import { getAddress } from 'viem'
 
 export const addressLookup = {
-  alphaUsd: Address.checksum('0x20c0000000000000000000000000000000000001'),
-  betaUsd: Address.checksum('0x20c0000000000000000000000000000000000002'),
-  pathUsd: Address.checksum('0x20c0000000000000000000000000000000000000'),
-  thetaUsd: Address.checksum('0x20c0000000000000000000000000000000000003'),
-  usdcE: Address.checksum('0x20C000000000000000000000b9537d11c60E8b50'),
-  usdt0: Address.checksum('0x20c00000000000000000000014f22ca97301eb73'),
+  alphaUsd: Address.checksum(alphausd(42431).address),
+  betaUsd: Address.checksum(betausd(42431).address),
+  pathUsd: Address.checksum(pathusd(42431).address),
+  thetaUsd: Address.checksum(thetausd(42431).address),
+  usdcE: Address.checksum(getAddress(usdce(4217).address)),
+  usdt0: Address.checksum(core_usdt0(4217).address),
 } as const
 
 export const chainLookup = {
