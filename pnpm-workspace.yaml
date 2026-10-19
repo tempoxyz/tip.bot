@@ -58,6 +58,15 @@ minimumReleaseAgeExclude:
   - ws@8.21.0
 minimumReleaseAgeStrict: true
 overrides:
+  # Keep transitive releases past the supply-chain cooldown.
+  baseline-browser-mapping: 2.11.21
+  caniuse-lite: 1.0.30001810
+  electron-to-chromium: 1.5.425
+  node-releases: 2.0.55
+  seroval-plugins: 1.6.8
+  '@tanstack/router-generator>zod': 4.6.5
+  '@tanstack/router-plugin>zod': 4.6.5
+  '@tanstack/start-plugin-core>zod': 4.6.5
   '@modelcontextprotocol/sdk': 1.31.0
   '@vue/compiler-core': 3.5.42
   '@vue/compiler-dom': 3.5.42
