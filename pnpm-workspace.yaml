@@ -27,9 +27,9 @@ auditConfig:
 blockExoticSubdeps: true
 catalog:
   # Vite+ dependency aliases.
-  vite: npm:@voidzero-dev/vite-plus-core@1.2.0
-  vite-plus: 1.2.0
-  vitest: 5.0.4
+  vite: npm:@voidzero-dev/vite-plus-core@1.3.0
+  vite-plus: 1.3.0
+  vitest: 5.0.5
 dangerouslyAllowAllBuilds: false
 enableGlobalVirtualStore: true
 linkWorkspacePackages: false
@@ -104,7 +104,7 @@ overrides:
   undici: 7.29.1
   uuid: 11.1.1
   vite: 'catalog:'
-  vite-plus: 1.2.0
+  vite-plus: 1.3.0
   vitest: 'catalog:'
   ws: 8.21.0
 packageExtensions:
@@ -116,7 +116,7 @@ packageExtensions:
       '@svgr/plugin-jsx': 8.1.0
   '@voidzero-dev/vite-plus-core@*':
     dependencies:
-      vite-plus: 1.2.0
+      vite-plus: 1.3.0
   local-pkg@*:
     dependencies:
       '@svgr/core': 8.1.0
