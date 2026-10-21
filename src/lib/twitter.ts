@@ -1177,7 +1177,8 @@ async function findProofTweet(env: Env, proof: string, authorId: string) {
 }
 
 async function getTweet(env: Env, tweetId: string) {
-  const url = new URL(`/2/tweets/${tweetId}`, env.TWITTER_API_URL)
+  // Ensure the tweetId path parameter is URL-encoded
+  const url = new URL(`/2/tweets/${encodeURIComponent(tweetId)}`, env.TWITTER_API_URL)
   url.searchParams.set('tweet.fields', 'author_id,created_at')
   url.searchParams.set('expansions', 'author_id')
   url.searchParams.set('user.fields', 'username')
@@ -1200,7 +1201,11 @@ async function getTweet(env: Env, tweetId: string) {
 }
 
 export async function getUserByUsername(env: Env, username: string) {
-  const url = new URL(`/2/users/by/username/${username.replace(/^@+/, '')}`, env.TWITTER_API_URL)
+  // Encode the username segment to prevent unencoded slashes or reserved characters from altering the request path
+  const url = new URL(
+    `/2/users/by/username/${encodeURIComponent(username.replace(/^@+/, ''))}`,
+    env.TWITTER_API_URL,
+  )
   url.searchParams.set('user.fields', 'name,profile_image_url,username')
   const json = z.parse(
     z.object({
