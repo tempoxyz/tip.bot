@@ -210,6 +210,9 @@ export default defineConfig({
         }),
         test: {
           fileParallelism: false,
+          // TODO: Remove when @cloudflare/vitest-plugin is upgraded to 1.4.3, which supports Vitest's filesystem module cache.
+          // https://github.com/cloudflare/workers-sdk/pull/16163
+          fsModuleCache: false,
           include: ['src/**/*.workers.test.ts'],
           name: 'workers',
           globalSetup: ['test/workers.global.setup.ts'],
