@@ -16,6 +16,7 @@ allowBuilds:
   workerd@1.20260504.1: true
   workerd@1.20260507.1: true
   workerd@1.20260511.1: true
+  workerd@1.20261006.1: true
 auditConfig:
   ignoreGhsas:
     # Fixed locally by config/patches/image-size@2.0.2.patch; no upstream release yet.
