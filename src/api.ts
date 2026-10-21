@@ -115,7 +115,9 @@ export const api = new Hono<{
       chainName: Tempo.getChainName(link.chain_id),
       expiresAt: link.expires_at,
       ok: true as const,
-      tokenAddress: Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
+      tokenAddress: Address.checksum(
+        link.default_token_address ?? Tempo.getDefaultTokenAddress(link.chain_id),
+      ),
     })
   })
   .post(
@@ -176,7 +178,9 @@ export const api = new Hono<{
           expiresAt: link.access_key_expires_at,
           keyAuthorization: body.keyAuthorization,
           rootAddress: body.address,
-          tokenAddress: Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
+          tokenAddress: Address.checksum(
+            link.default_token_address ?? Tempo.getDefaultTokenAddress(link.chain_id),
+          ),
         })
         const now = new Date().toISOString()
         const existingAccount = await c.var.db
@@ -252,7 +256,9 @@ export const api = new Hono<{
           .where(
             'token_address',
             '=',
-            Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
+            Address.checksum(
+              link.default_token_address ?? Tempo.getDefaultTokenAddress(link.chain_id),
+            ),
           )
           .execute()
         await c.var.db
@@ -274,7 +280,7 @@ export const api = new Hono<{
             id: Nanoid.generate(),
             revoked_at: null,
             token_address: Address.checksum(
-              link.default_token_address ?? Tempo.addressLookup.pathUsd,
+              link.default_token_address ?? Tempo.getDefaultTokenAddress(link.chain_id),
             ),
             updated_at: now,
           })

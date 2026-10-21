@@ -1509,7 +1509,7 @@ describe('/api/account/link/:token', () => {
       accessKeyAddress: pending.accessKey.address,
       accessKeyPublicKey: pending.accessKey.publicKey,
       ok: true,
-      tokenAddress: Tempo.addressLookup.pathUsd,
+      tokenAddress: Tempo.getDefaultTokenAddress(pending.workspace.chain_id),
     })
   })
 
@@ -1906,7 +1906,8 @@ describe('/api/confirm/:token', () => {
       recipientProviderUserId: 'twitter-confirm-recipient',
       senderProviderUserId: 'twitter-confirm-sender',
       source: 'mention',
-      tokenAddress: workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+      tokenAddress:
+        workspace.default_token_address ?? Tempo.getDefaultTokenAddress(workspace.chain_id),
       workspaceId: workspace.id,
     })
 
@@ -1973,7 +1974,8 @@ describe('/api/confirm/:token', () => {
       recipientProviderUserId,
       senderProviderUserId,
       source: 'mention',
-      tokenAddress: workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+      tokenAddress:
+        workspace.default_token_address ?? Tempo.getDefaultTokenAddress(workspace.chain_id),
       workspaceId: workspace.id,
     } satisfies Confirmation.Payload
     const token = await Confirmation.encrypt(env, payload)
@@ -3106,7 +3108,8 @@ async function signKeyAuthorization(
     chainId: pending.workspace.chain_id,
     expiresAt: pending.link.access_key_expires_at,
     tokenAddress: Address.checksum(
-      pending.workspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+      pending.workspace.default_token_address ??
+        Tempo.getDefaultTokenAddress(pending.workspace.chain_id),
     ),
   })
 }
