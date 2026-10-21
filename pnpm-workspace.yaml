@@ -17,6 +17,7 @@ allowBuilds:
   workerd@1.20260507.1: true
   workerd@1.20260511.1: true
   workerd@1.20261006.1: true
+  workerd@1.20261012.1: true
 auditConfig:
   ignoreGhsas:
     # Fixed locally by config/patches/image-size@2.0.2.patch; no upstream release yet.
@@ -26,9 +27,9 @@ auditConfig:
 blockExoticSubdeps: true
 catalog:
   # Vite+ dependency aliases.
-  vite: npm:@voidzero-dev/vite-plus-core@1.1.0
-  vite-plus: 1.1.0
-  vitest: 5.0.3
+  vite: npm:@voidzero-dev/vite-plus-core@1.3.0
+  vite-plus: 1.3.0
+  vitest: 5.0.5
 dangerouslyAllowAllBuilds: false
 enableGlobalVirtualStore: true
 linkWorkspacePackages: false
@@ -39,14 +40,12 @@ minimumReleaseAgeExclude:
   - tapimo
   - tmp
   - viem
-  - '@babel/core@7.29.6'
   - axios@1.20.0
   - shell-quote@1.10.0
   - '@grpc/grpc-js@1.14.5'
   - esbuild@0.28.1
   - protobufjs@7.6.5
   - form-data@4.0.6
-  - vite-plus@1.1.0
   - launch-editor@2.14.2
   - ip-address@10.7.1
   - nanoid@3.3.18
@@ -59,7 +58,7 @@ minimumReleaseAgeExclude:
   - ws@8.21.0
 minimumReleaseAgeStrict: true
 overrides:
-  '@modelcontextprotocol/sdk': 1.32.0
+  '@modelcontextprotocol/sdk': 1.32.1
   '@vue/compiler-core': 3.5.42
   '@vue/compiler-dom': 3.5.42
   '@vue/compiler-sfc': 3.5.42
@@ -71,10 +70,10 @@ overrides:
   '@vue/shared': 3.5.42
   vue: 3.5.42
   proxy-addr: 2.0.8
-  seroval: 1.6.7
+  seroval: 1.6.9
   source-map-js: 1.2.2
   tinypool: 2.1.2
-  '@babel/core': 7.29.6
+  '@babel/core': 7.29.7
   '@grpc/grpc-js': 1.14.5
   axios: 1.20.0
   '@hono/node-server@<2.0.5': 2.0.10
@@ -105,7 +104,7 @@ overrides:
   undici: 7.29.1
   uuid: 11.1.1
   vite: 'catalog:'
-  vite-plus: 1.1.0
+  vite-plus: 1.3.0
   vitest: 'catalog:'
   ws: 8.21.0
 packageExtensions:
@@ -117,7 +116,7 @@ packageExtensions:
       '@svgr/plugin-jsx': 8.1.0
   '@voidzero-dev/vite-plus-core@*':
     dependencies:
-      vite-plus: 1.1.0
+      vite-plus: 1.3.0
   local-pkg@*:
     dependencies:
       '@svgr/core': 8.1.0
@@ -126,7 +125,7 @@ patchedDependencies:
   '@slack/web-api@7.15.2': config/patches/@slack__web-api@7.15.2.patch
   # TODO: Remove when TanStack Start server entry no longer eagerly resolves virtual router modules during Worker test startup.
   # Related: https://github.com/cloudflare/workers-sdk/issues/11100
-  '@tanstack/react-start@1.168.60': config/patches/@tanstack__react-start@1.168.60.patch
+  '@tanstack/react-start@1.169.2': config/patches/@tanstack__react-start@1.169.2.patch
   emulate@0.5.0: config/patches/emulate@0.5.0.patch
   image-size@2.0.2: config/patches/image-size@2.0.2.patch
   prool@0.2.4: config/patches/prool@0.2.4.patch

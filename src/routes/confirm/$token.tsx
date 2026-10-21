@@ -351,7 +351,7 @@ function ConfirmPanel(props: {
 }
 
 const getConfirmData = createServerFn({ method: 'GET' })
-  .inputValidator(z.string().check(z.minLength(1)))
+  .validator(z.string().check(z.minLength(1)))
   .handler(async ({ data }) => {
     const endpoint = rpc.api.confirm[':token']
     const response = await api.fetch(new Request(endpoint.$url({ param: { token: data } })), env)
