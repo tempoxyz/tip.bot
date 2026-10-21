@@ -25,9 +25,9 @@ auditConfig:
 blockExoticSubdeps: true
 catalog:
   # Vite+ dependency aliases.
-  vite: npm:@voidzero-dev/vite-plus-core@0.1.24
-  vite-plus: 0.1.24
-  vitest: npm:@voidzero-dev/vite-plus-test@0.1.24
+  vite: npm:@voidzero-dev/vite-plus-core@1.1.0
+  vite-plus: 1.1.0
+  vitest: 5.0.3
 dangerouslyAllowAllBuilds: false
 enableGlobalVirtualStore: true
 linkWorkspacePackages: false
@@ -45,8 +45,8 @@ minimumReleaseAgeExclude:
   - esbuild@0.28.1
   - protobufjs@7.6.5
   - form-data@4.0.6
-  - vite-plus@0.1.24
-  - launch-editor@2.14.1
+  - vite-plus@1.1.0
+  - launch-editor@2.14.2
   - ip-address@10.7.1
   - nanoid@3.3.18
   - nanoid@5.1.16
@@ -58,7 +58,7 @@ minimumReleaseAgeExclude:
   - ws@8.21.0
 minimumReleaseAgeStrict: true
 overrides:
-  '@modelcontextprotocol/sdk': 1.31.0
+  '@modelcontextprotocol/sdk': 1.32.0
   '@vue/compiler-core': 3.5.42
   '@vue/compiler-dom': 3.5.42
   '@vue/compiler-sfc': 3.5.42
@@ -80,9 +80,10 @@ overrides:
   brace-expansion: 5.0.12
   esbuild: 0.28.1
   fast-uri: 3.1.8
+  follow-redirects: 1.16.1
   form-data: 4.0.6
   ip-address: 10.7.1
-  launch-editor: 2.14.1
+  launch-editor: 2.14.2
   nanoid@<3.3.18: 3.3.18
   'nanoid@>=4.0.0 <5.1.16': 5.1.16
   postcss: 8.5.23
@@ -97,11 +98,11 @@ overrides:
   undici: 7.29.1
   uuid: 11.1.1
   vite: 'catalog:'
-  vite-plus: 0.1.24
+  vite-plus: 1.1.0
   vitest: 'catalog:'
   ws: 8.21.0
 packageExtensions:
-  '@cloudflare/vitest-pool-workers@*':
+  '@cloudflare/vitest-plugin@*':
     dependencies:
       undici: 7.29.1
   '@svgr/core@*':
@@ -109,7 +110,7 @@ packageExtensions:
       '@svgr/plugin-jsx': 8.1.0
   '@voidzero-dev/vite-plus-core@*':
     dependencies:
-      vite-plus: 0.1.24
+      vite-plus: 1.1.0
   local-pkg@*:
     dependencies:
       '@svgr/core': 8.1.0
