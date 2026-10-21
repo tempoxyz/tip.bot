@@ -65,7 +65,9 @@ beforeEach(async () => {
 function isExpectedApiWorkerLog(args: unknown[]) {
   const message = typeof args[0] === 'string' ? args[0] : ''
   return (
-    message.startsWith('Twitter webhook ') || message.startsWith('Twitter OAuth callback failed:')
+    message.startsWith('Failed to enqueue signed Slack reaction event:') ||
+    message.startsWith('Twitter webhook ') ||
+    message.startsWith('Twitter OAuth callback failed:')
   )
 }
 
@@ -1322,6 +1324,81 @@ describe('/api/chat/slack', () => {
     await Promise.all(waitUntil)
 
     expect(response.status).toBe(401)
+  })
+
+  test('durably enqueues signed Slack reaction additions before acknowledging', async () => {
+    const sendSpy = vi.spyOn(env.SLACK_REACTION_QUEUE, 'send').mockResolvedValue({
+      metadata: { metrics: { backlogBytes: 0, backlogCount: 0 } },
+    })
+    const body = slackReactionBody('reaction_added')
+
+    const response = await client.api.chat.slack.$post(
+      {},
+      {
+        headers: {
+          ...(await createSlackHeaders(body, env.SLACK_SIGNING_SECRET)),
+          'content-type': 'application/json',
+        },
+        init: { body },
+      },
+    )
+
+    expect(response.status).toBe(200)
+    expect(sendSpy).toHaveBeenCalledWith({
+      event_id: 'EvReactionQueue',
+      event_ts: '1700000000.000002',
+      item: {
+        channel: Constants.slack.channelId,
+        ts: '1700000000.000001',
+        type: 'message',
+      },
+      item_user: Constants.slack.memberUserId,
+      reaction: 'money_with_wings',
+      team_id: Constants.slack.teamId,
+      type: 'reaction_added',
+      user: Constants.slack.adminUserId,
+    })
+    expect(executionCtx.waitUntil).not.toHaveBeenCalled()
+  })
+
+  test('acknowledges Slack reaction removals without enqueueing', async () => {
+    const sendSpy = vi.spyOn(env.SLACK_REACTION_QUEUE, 'send')
+    const body = slackReactionBody('reaction_removed')
+
+    const response = await client.api.chat.slack.$post(
+      {},
+      {
+        headers: {
+          ...(await createSlackHeaders(body, env.SLACK_SIGNING_SECRET)),
+          'content-type': 'application/json',
+        },
+        init: { body },
+      },
+    )
+
+    expect(response.status).toBe(200)
+    expect(sendSpy).not.toHaveBeenCalled()
+    expect(executionCtx.waitUntil).not.toHaveBeenCalled()
+  })
+
+  test('asks Slack to retry when reaction enqueueing fails', async () => {
+    vi.spyOn(env.SLACK_REACTION_QUEUE, 'send').mockRejectedValue(new Error('Queue unavailable'))
+    const body = slackReactionBody('reaction_added')
+
+    const response = await client.api.chat.slack.$post(
+      {},
+      {
+        headers: {
+          ...(await createSlackHeaders(body, env.SLACK_SIGNING_SECRET)),
+          'content-type': 'application/json',
+        },
+        init: { body },
+      },
+    )
+
+    expect(response.status).toBe(503)
+    expect(await response.text()).toBe('Queue unavailable')
+    expect(executionCtx.waitUntil).not.toHaveBeenCalled()
   })
 
   test('publishes workspace missing Home tab on app_home_opened', async () => {
@@ -3075,6 +3152,26 @@ function slackFetchBodyParams(body: BodyInit | null | undefined) {
   if (body instanceof URLSearchParams) return body
   if (typeof body === 'string') return new URLSearchParams(body)
   return new URLSearchParams()
+}
+
+function slackReactionBody(type: 'reaction_added' | 'reaction_removed') {
+  return JSON.stringify({
+    event: {
+      event_ts: '1700000000.000002',
+      item: {
+        channel: Constants.slack.channelId,
+        ts: '1700000000.000001',
+        type: 'message',
+      },
+      item_user: Constants.slack.memberUserId,
+      reaction: 'money_with_wings',
+      type,
+      user: Constants.slack.adminUserId,
+    },
+    event_id: 'EvReactionQueue',
+    team_id: Constants.slack.teamId,
+    type: 'event_callback',
+  })
 }
 
 async function slackFetchBodyJson(
