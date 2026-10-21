@@ -2042,13 +2042,7 @@ describe('/api/confirm/:token', () => {
   }, 20_000) // 20 seconds
 
   test('posts confirmed mention payment receipts in the source thread and clears status', async () => {
-    const originalFetch = globalThis.fetch
-    const fetchCalls: Parameters<typeof fetch>[] = []
-    globalThis.fetch = ((input, init) => {
-      fetchCalls.push([input, init])
-      return originalFetch(input, init)
-    }) as typeof fetch
-    const fetchSpy = { mock: { calls: fetchCalls } }
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
     try {
       const parent = await slack.chat.postMessage({
         channel: apiChannelId,
@@ -2083,7 +2077,7 @@ describe('/api/confirm/:token', () => {
       ).toBe(true)
       await expectSlackAssistantStatusCall(fetchSpy, apiChannelId, parent.ts, '')
     } finally {
-      globalThis.fetch = originalFetch
+      fetchSpy.mockRestore()
     }
   }, 20_000) // 20 seconds
 
