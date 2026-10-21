@@ -16,21 +16,19 @@ allowBuilds:
   workerd@1.20260504.1: true
   workerd@1.20260507.1: true
   workerd@1.20260511.1: true
+  workerd@1.20261006.1: true
 auditConfig:
   ignoreGhsas:
     # Fixed locally by config/patches/image-size@2.0.2.patch; no upstream release yet.
     # Keep these version-based audit exceptions only while that patch is applied.
     - GHSA-5p2g-fcmc-qvqq
     - GHSA-w3rx-r6r6-pgpr
-    # No published fix; bounded parser and AST walkers in braces@3.0.3.patch.
-    # Regression coverage: src/lib/dependencyPatches.test.ts.
-    - GHSA-vfj7-8cjw-p6xm
 blockExoticSubdeps: true
 catalog:
   # Vite+ dependency aliases.
-  vite: npm:@voidzero-dev/vite-plus-core@0.1.24
-  vite-plus: 0.1.24
-  vitest: npm:@voidzero-dev/vite-plus-test@0.1.24
+  vite: npm:@voidzero-dev/vite-plus-core@1.1.0
+  vite-plus: 1.1.0
+  vitest: 5.0.3
 dangerouslyAllowAllBuilds: false
 enableGlobalVirtualStore: true
 linkWorkspacePackages: false
@@ -48,8 +46,8 @@ minimumReleaseAgeExclude:
   - esbuild@0.28.1
   - protobufjs@7.6.5
   - form-data@4.0.6
-  - vite-plus@0.1.24
-  - launch-editor@2.14.1
+  - vite-plus@1.1.0
+  - launch-editor@2.14.2
   - ip-address@10.7.1
   - nanoid@3.3.18
   - nanoid@5.1.16
@@ -61,7 +59,7 @@ minimumReleaseAgeExclude:
   - ws@8.21.0
 minimumReleaseAgeStrict: true
 overrides:
-  '@modelcontextprotocol/sdk': 1.31.0
+  '@modelcontextprotocol/sdk': 1.32.0
   '@vue/compiler-core': 3.5.42
   '@vue/compiler-dom': 3.5.42
   '@vue/compiler-sfc': 3.5.42
@@ -73,19 +71,26 @@ overrides:
   '@vue/shared': 3.5.42
   vue: 3.5.42
   proxy-addr: 2.0.8
-  seroval: 1.6.3
+  seroval: 1.6.7
   source-map-js: 1.2.2
   tinypool: 2.1.2
   '@babel/core': 7.29.6
   '@grpc/grpc-js': 1.14.5
   axios: 1.20.0
   '@hono/node-server@<2.0.5': 2.0.10
+  # Keep browser compatibility data on established releases for CI's package-age policy.
+  baseline-browser-mapping: 2.11.21
+  browserslist: 4.28.9
+  caniuse-lite: 1.0.30001810
+  electron-to-chromium: 1.5.425
+  node-releases: 2.0.55
   brace-expansion: 5.0.12
   esbuild: 0.28.1
   fast-uri: 3.1.8
+  follow-redirects: 1.16.1
   form-data: 4.0.6
   ip-address: 10.7.1
-  launch-editor: 2.14.1
+  launch-editor: 2.14.2
   nanoid@<3.3.18: 3.3.18
   'nanoid@>=4.0.0 <5.1.16': 5.1.16
   postcss: 8.5.23
@@ -100,11 +105,11 @@ overrides:
   undici: 7.29.1
   uuid: 11.1.1
   vite: 'catalog:'
-  vite-plus: 0.1.24
+  vite-plus: 1.1.0
   vitest: 'catalog:'
   ws: 8.21.0
 packageExtensions:
-  '@cloudflare/vitest-pool-workers@*':
+  '@cloudflare/vitest-plugin@*':
     dependencies:
       undici: 7.29.1
   '@svgr/core@*':
@@ -112,7 +117,7 @@ packageExtensions:
       '@svgr/plugin-jsx': 8.1.0
   '@voidzero-dev/vite-plus-core@*':
     dependencies:
-      vite-plus: 0.1.24
+      vite-plus: 1.1.0
   local-pkg@*:
     dependencies:
       '@svgr/core': 8.1.0
@@ -121,8 +126,7 @@ patchedDependencies:
   '@slack/web-api@7.15.2': config/patches/@slack__web-api@7.15.2.patch
   # TODO: Remove when TanStack Start server entry no longer eagerly resolves virtual router modules during Worker test startup.
   # Related: https://github.com/cloudflare/workers-sdk/issues/11100
-  '@tanstack/react-start@1.167.65': config/patches/@tanstack__react-start@1.167.65.patch
-  braces@3.0.3: config/patches/braces@3.0.3.patch
+  '@tanstack/react-start@1.168.60': config/patches/@tanstack__react-start@1.168.60.patch
   emulate@0.5.0: config/patches/emulate@0.5.0.patch
   image-size@2.0.2: config/patches/image-size@2.0.2.patch
   prool@0.2.4: config/patches/prool@0.2.4.patch

@@ -171,7 +171,7 @@ export default defineConfig({
           __SLACK_APP_ID__: JSON.stringify(''),
         },
         plugins: lazyPlugins(async () => {
-          const workers = await import('@cloudflare/vitest-pool-workers')
+          const workers = await import('@cloudflare/vitest-plugin')
           const path = await import('node:path')
           const { setupVitestOutputFilter } = await import('./config/vitest.ts')
           const envMod = await import('./test/env.ts')

@@ -191,11 +191,13 @@ type AttrsValidation<key extends keyof DB, value extends readonly Record<string,
 }
 
 type RequiredForeignKeys<type> = {
-  [key in keyof type as key extends `${string}_id`
-    ? null extends type[key]
-      ? never
-      : key extends 'id' | 'chain_id' | 'credential_id'
+  [
+    key in keyof type as key extends `${string}_id`
+      ? null extends type[key]
         ? never
-        : key
-    : never]-?: type[key]
+        : key extends 'id' | 'chain_id' | 'credential_id'
+          ? never
+          : key
+      : never
+  ]-?: type[key]
 }
