@@ -1,0 +1,20 @@
+# Lets this repository's workflows mint a short-lived token that can write
+# repository Actions secrets, so setup-slack-config-token can persist the
+# rotated SLACK_CONFIG_REFRESH_TOKEN after calling Slack's tooling.tokens.rotate
+# (rotation invalidates the previous refresh token, so the new one must be
+# stored immediately).
+#
+# Jobs that reference a GitHub environment present it as their OIDC subject
+# instead of the ref/event form. All jobs that rotate the token run in an
+# environment: environment:production covers the production Slack app update,
+# and environment:preview covers the preview deploy/destroy/sweep jobs. A job
+# without an environment cannot mint; add its subject here if one ever needs to.
+subject:
+  - repo:tempoxyz@211589300/tip.bot@1232143975:environment:preview
+  - repo:tempoxyz@211589300/tip.bot@1232143975:environment:production
+
+claim_pattern:
+  job_workflow_ref: tempoxyz/tip\.bot/\.github/workflows/(preview_deploy|preview_destroy|preview_sweep|production)\.yml@refs/heads/main
+
+permissions:
+  secrets: write

@@ -1,0 +1,12 @@
+# Allows secret-bearing workflows loaded from main to check whether the actor
+# who ultimately triggered the run is a current tempoxyz organization member.
+# The token grants only organization membership visibility.
+subject:
+  - repo:tempoxyz@211589300/tip.bot@1232143975:pull_request
+  - repo:tempoxyz@211589300/tip.bot@1232143975:ref:refs/heads/main
+
+claim_pattern:
+  job_workflow_ref: tempoxyz/tip\.bot/\.github/workflows/(preview|preview_destroy|preview_sweep|production)\.yml@refs/heads/main
+
+permissions:
+  members: read

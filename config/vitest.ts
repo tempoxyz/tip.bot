@@ -1,6 +1,6 @@
 import process from 'node:process'
 
-// @cloudflare/vitest-pool-workers currently forwards these harmless dependency/runtime logs.
+// @cloudflare/vitest-plugin currently forwards these harmless dependency/runtime logs.
 const ignoredTestOutput = [
   '[chat-sdk',
   'disconnected: WebSocket peer disconnected',

@@ -22,8 +22,6 @@ on:
         required: true
       FEE_PAYER_PRIVATE_KEY_TESTNET:
         required: true
-      SLACK_GH_TOKEN:
-        required: false
       SECRET_KEY:
         required: true
       SLACK_CONFIG_ACCESS_TOKEN:
@@ -35,6 +33,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
   issues: write
   pull-requests: write
 
@@ -55,6 +54,9 @@ jobs:
     outputs:
       should_deploy: ${{ steps.pr.outputs.should_deploy }}
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
       - name: Check PR state
         id: pr
         env:
@@ -81,6 +83,9 @@ jobs:
       group: slack-config-ci
       cancel-in-progress: false
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
@@ -88,13 +93,12 @@ jobs:
           ref: ${{ inputs.sha }}
 
       - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm
+        uses: ./.github/actions/setup-pnpm # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
       - name: Setup Slack config token
         id: slack_token
-        uses: ./.github/actions/setup-slack-config-token
+        uses: ./.github/actions/setup-slack-config-token # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
         with:
-          github-token: ${{ secrets.SLACK_GH_TOKEN }}
           slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
           slack-config-access-token: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
 
@@ -299,6 +303,7 @@ jobs:
             SIGNING_SECRET=$(echo "$RESPONSE" | jq -r '.credentials.signing_secret')
             echo "::add-mask::$CLIENT_SECRET"
             echo "::add-mask::$SIGNING_SECRET"
+            # shellcheck disable=SC2129
             echo "created=true" >> "$GITHUB_OUTPUT"
             echo "client_id=$CLIENT_ID" >> "$GITHUB_OUTPUT"
             echo "client_secret=$CLIENT_SECRET" >> "$GITHUB_OUTPUT"
@@ -380,6 +385,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
+          # shellcheck disable=SC2016
           QUEUES=$(node -e '
             const text = require("node:fs").readFileSync("wrangler.jsonc", "utf8")
               .replace(/(?<=^[^"]*(?:"[^"]*"[^"]*)*)\/\/.*$/gm, "")
@@ -411,7 +417,7 @@ jobs:
           SLACK_APP_ID: ${{ steps.slack.outputs.app_id }}
 
       - name: Deploy preview
-        uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # v3.14.1
+        uses: tempoxyz/gh-actions/vendor/cloudflare/wrangler-action@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
         with:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -465,12 +471,11 @@ jobs:
           for attempt in 1 2 3 4 5 6; do
             RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.icon.set \
               -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
-              -H "Content-Type: application/x-www-form-urlencoded" \
-              --data-urlencode "app_id=${APP_ID}" \
-              --data-urlencode "url=https://${PREVIEW_HOST}/tipbot-preview.png")
+              -F "app_id=${APP_ID}" \
+              -F "file=@public/tipbot-preview.png")
             OK=$(echo "$RESPONSE" | jq -r '.ok')
             ERROR=$(echo "$RESPONSE" | jq -r '.error // empty')
-            if [ "$OK" = "true" ] || { [ "$ERROR" != "internal_error" ] && [ "$ERROR" != "icon_not_accessible" ]; } || [ "$attempt" = "6" ]; then break; fi
+            if [ "$OK" = "true" ] || [ "$ERROR" != "internal_error" ] || [ "$attempt" = "6" ]; then break; fi
             sleep 5 # 5 seconds
           done
           OK=$(echo "$RESPONSE" | jq -r '.ok')

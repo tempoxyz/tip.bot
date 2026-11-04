@@ -7,12 +7,6 @@ on:
         default: false
         required: false
         type: boolean
-  workflow_dispatch:
-    inputs:
-      skip_workers:
-        default: false
-        required: false
-        type: boolean
 
 permissions:
   contents: read
@@ -26,14 +20,20 @@ jobs:
   verify:
     name: Verify
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm
+        uses: ./.github/actions/setup-pnpm # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
       - name: Audit dependencies
         run: pnpm audit
@@ -70,14 +70,20 @@ jobs:
   test-unit:
     name: Test Unit
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm
+        uses: ./.github/actions/setup-pnpm # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
       - name: Test unit
         run: pnpm test --project unit --run
@@ -86,14 +92,20 @@ jobs:
     name: Test Workers
     if: inputs.skip_workers != true
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm
+        uses: ./.github/actions/setup-pnpm # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
       - name: Cache Tempo Docker image
         id: docker-cache
@@ -127,20 +139,27 @@ jobs:
   e2e:
     name: E2E
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm
+        uses: ./.github/actions/setup-pnpm # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
       - name: Setup Playwright
-        uses: ./.github/actions/setup-playwright
+        uses: ./.github/actions/setup-playwright # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
       - name: Build native dependencies
         run: |
+          # shellcheck disable=SC2015
           (cd node_modules/better-sqlite3 && ./node_modules/.bin/prebuild-install || node-gyp rebuild --release)
           node -e "new (require('better-sqlite3'))(':memory:').close()"
 

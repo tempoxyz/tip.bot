@@ -10,11 +10,35 @@ env:
   WRANGLER_SEND_METRICS: false
 
 jobs:
-  check:
-    name: Check
+  authorize:
+    name: Authorize
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-    uses: ./.github/workflows/check.yml
+      id-token: write
+    steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
+      - name: Mint organization membership token
+        id: member_token
+        uses: tempoxyz/gh-actions/actions/github-sts@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+        with:
+          policy: workflow-member
+
+      - name: Check triggering actor organization membership
+        env:
+          ACTOR: ${{ github.triggering_actor }}
+          GH_TOKEN: ${{ steps.member_token.outputs.token }}
+        run: gh api --silent "orgs/tempoxyz/members/${ACTOR}"
+
+  check:
+    name: Check
+    needs: authorize
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/check.yml # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
   deploy:
     name: Deploy
@@ -23,14 +47,18 @@ jobs:
     environment: production
     permissions:
       contents: read
+      id-token: write
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm
+        uses: ./.github/actions/setup-pnpm # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
       - name: Setup production Queues
         run: |
@@ -67,7 +95,7 @@ jobs:
           SLACK_APP_ID: ${{ vars.SLACK_APP_ID }}
 
       - name: Deploy to Production
-        uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # v3.14.1
+        uses: tempoxyz/gh-actions/vendor/cloudflare/wrangler-action@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -76,6 +104,7 @@ jobs:
           secrets: |
             FEE_PAYER_PRIVATE_KEY_MAINNET
             FEE_PAYER_PRIVATE_KEY_TESTNET
+            RPC_CREDENTIALS
             SECRET_KEY
             SLACK_CLIENT_ID
             SLACK_CLIENT_SECRET
@@ -91,6 +120,7 @@ jobs:
         env:
           FEE_PAYER_PRIVATE_KEY_MAINNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_MAINNET }}
           FEE_PAYER_PRIVATE_KEY_TESTNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_TESTNET }}
+          RPC_CREDENTIALS: ${{ secrets.RPC_CREDENTIALS }}
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
           SLACK_APP_ID: ${{ vars.SLACK_APP_ID }}
           SLACK_CLIENT_ID: ${{ secrets.SLACK_CLIENT_ID }}
@@ -115,20 +145,23 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+      id-token: write
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm
+        uses: ./.github/actions/setup-pnpm # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
       - name: Setup Slack config token
         id: slack_token
-        uses: ./.github/actions/setup-slack-config-token
+        uses: ./.github/actions/setup-slack-config-token # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
         with:
-          github-token: ${{ secrets.SLACK_GH_TOKEN }}
           slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
           slack-config-access-token: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
 

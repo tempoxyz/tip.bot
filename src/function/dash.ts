@@ -17,7 +17,7 @@ export const getDashboardData = createServerFn({ method: 'GET' }).handler(async 
 })
 
 export const disconnectDashboardAccount = createServerFn({ method: 'POST' })
-  .inputValidator(z.object({ identityId: z.string().check(z.minLength(1)) }))
+  .validator(z.object({ identityId: z.string().check(z.minLength(1)) }))
   .handler(async ({ data }) => {
     const session = await auth.getSession(getRequest())
     if (!session) throw new Error('Connect your wallet to manage connected accounts.')

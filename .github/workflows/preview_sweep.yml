@@ -1,28 +1,59 @@
 name: Preview Sweep
 
 on:
+  repository_dispatch:
+    types: [preview_sweep]
   schedule:
     - cron: '0 0 * * *' # Daily at midnight UTC
-  workflow_dispatch:
 
 concurrency:
   group: slack-config-ci
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  issues: write
-  pull-requests: write
+permissions: {}
 
 env:
   WRANGLER_SEND_METRICS: false
 
 jobs:
+  authorize:
+    name: Authorize
+    if: github.event_name == 'repository_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
+      - name: Mint organization membership token
+        id: member_token
+        uses: tempoxyz/gh-actions/actions/github-sts@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+        with:
+          policy: workflow-member
+
+      - name: Check triggering actor organization membership
+        env:
+          ACTOR: ${{ github.triggering_actor }}
+          GH_TOKEN: ${{ steps.member_token.outputs.token }}
+        run: gh api --silent "orgs/tempoxyz/members/${ACTOR}"
+
   sweep:
     name: Sweep Orphaned Previews
+    if: always() && (github.event_name == 'schedule' || needs.authorize.result == 'success')
+    needs: authorize
     runs-on: ubuntu-latest
     environment: preview
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+      pull-requests: write
     steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
@@ -31,9 +62,8 @@ jobs:
       - name: Setup Slack config token
         id: slack_token
         continue-on-error: true
-        uses: ./.github/actions/setup-slack-config-token
+        uses: ./.github/actions/setup-slack-config-token # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
         with:
-          github-token: ${{ secrets.SLACK_GH_TOKEN }}
           slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
           slack-config-access-token: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
 
@@ -50,6 +80,7 @@ jobs:
           WORKERS=$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts" \
             | jq -r '.result[].id // empty' | grep '^tipbot-pr[0-9][0-9]*$' || true)
+          # shellcheck disable=SC2001
           WORKER_PR_NUMBERS=$(echo "$WORKERS" | sed 's/^tipbot-pr//' || true)
           QUEUE_PR_NUMBERS=$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues" \
