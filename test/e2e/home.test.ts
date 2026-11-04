@@ -9,7 +9,10 @@ test('visitor starts slack install from the home page', async ({ app, page }) =>
 
   const addToSlack = page.getByRole('link', { name: 'Add to Slack' })
   await expect(addToSlack).toHaveAttribute('href', '/install/slack')
-  await expect(page.getByRole('button', { name: 'Dashboard' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Dashboard' })).toHaveAttribute(
+    'href',
+    '/api/auth/start',
+  )
   await expect(page.getByRole('link', { name: 'Connect X' })).toHaveAttribute('href', '/link/x')
 
   await addToSlack.click()
@@ -30,5 +33,23 @@ test('visitor is redirected from dashboard without auth', async ({ app, page }) 
   await page.goto(app.url({ to: '/dash' }))
 
   await expect(page).toHaveURL(app.url({ to: '/' }))
-  await expect(page.getByRole('button', { name: 'Dashboard' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Dashboard' })).toBeVisible()
+})
+
+test('visitor signs in to the dashboard with Tempo ID, then signs out', async ({ app, page }) => {
+  await app.tempoId.signIn(page)
+  await page.goto(app.url({ to: '/' }))
+
+  await page.getByRole('link', { name: 'Dashboard' }).click()
+  await app.tempoId.approve(page)
+
+  await expect(page).toHaveURL(app.url({ to: '/dash' }))
+  await expect(page.getByText('Wallet', { exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: /^0x[0-9a-fA-F]{40}$/ })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Sign out' }).click()
+
+  await expect(page).toHaveURL(app.url({ to: '/' }))
+  await page.goto(app.url({ to: '/dash' }))
+  await expect(page).toHaveURL(app.url({ to: '/' }))
 })

@@ -1,4 +1,4 @@
-import { Hono } from 'hono'
+import { type Context, Hono } from 'hono'
 import { Address, Base64, Hex } from 'ox'
 import * as chat from 'chat'
 import { z } from 'zod'
@@ -15,26 +15,235 @@ import * as Tip from '#/lib/tip.ts'
 import * as Twitter from '#/lib/twitter.ts'
 import * as DB from '#db/client.ts'
 
-export const api = new Hono<{
+type AppEnv = {
   Bindings: Env
   Variables: {
     db: DB.Type
   }
-}>()
+}
+
+export const api = new Hono<AppEnv>()
   .use(async (c, next) => {
     c.set('db', DB.create(c.env.DB))
     await next()
   })
-  .get('/api/auth/start', async (c) => c.redirect(await TempoId.start(c), 302))
+  .get('/api/auth/start', async (c) =>
+    c.redirect(await TempoId.start(c, { intent: { kind: 'dash' } }), 302),
+  )
   .get('/api/auth/callback', async (c) => {
-    // A callback without the session cookie, such as after it expired, starts the sign-in again.
-    if (!(await TempoId.complete(c))) return c.redirect('/api/auth/start', 302)
-    return c.redirect('/dash', 302)
+    const result = await TempoId.complete(c).catch((error) => {
+      console.error('Tempo ID callback failed:', error)
+      return undefined
+    })
+    if (!result) return c.redirect('/', 302)
+    const intent = result.intent
+    if (intent.kind === 'dash') return c.redirect('/dash', 302)
+
+    const key = await TempoId.adopt(c.env, result.session)
+    if (intent.kind === 'link') {
+      // The link verifies the key authorization against the access key that its row names.
+      await c.var.db
+        .updateTable('account_link_token')
+        .set({
+          access_key_address: key.address,
+          access_key_ciphertext: key.ciphertext,
+          access_key_public_key: key.publicKey,
+        })
+        .where('token_hash', '=', await AccountLink.hashToken(c.env, intent.token))
+        .where('used_at', 'is', null)
+        .execute()
+      const response = await linkAccount(c, {
+        address: key.rootAddress,
+        keyAuthorization: key.keyAuthorization,
+        token: intent.token,
+      })
+      return c.redirect(await getResultUrl(`/connect/${intent.token}`, response), 302)
+    }
+    if (intent.kind === 'confirm') {
+      const response = await confirmPayment(c, {
+        accessKey: { address: key.address, privateKey: key.privateKey },
+        address: key.rootAddress,
+        keyAuthorization: key.keyAuthorization,
+        token: intent.token,
+      })
+      return c.redirect(await getResultUrl(`/confirm/${intent.token}`, response), 302)
+    }
+
+    // An X link verifies the key authorization against the access key that its challenge names.
+    await c.var.db
+      .updateTable('provider_link_challenge')
+      .set({
+        access_key_address: key.address,
+        access_key_ciphertext: key.ciphertext,
+        access_key_public_key: key.publicKey,
+      })
+      .where('id', '=', intent.challengeId)
+      .where('used_at', 'is', null)
+      .execute()
+    const redirectUrl = new URL('/link/x', c.req.url)
+    try {
+      if (intent.kind === 'x_oauth') {
+        const oauth = await Twitter.createOAuthAuthorizationUrl(c.env, {
+          address: key.rootAddress,
+          challengeId: intent.challengeId,
+          keyAuthorization: key.keyAuthorization,
+          redirectUri: new URL('/api/link/twitter/oauth/callback', c.req.url).toString(),
+        })
+        return c.redirect(oauth.authorizationUrl, 302)
+      }
+      const proof = await Twitter.createProof(c.env, {
+        address: key.rootAddress,
+        challengeId: intent.challengeId,
+        keyAuthorization: key.keyAuthorization,
+      })
+      redirectUrl.searchParams.set('challenge', intent.challengeId)
+      redirectUrl.searchParams.set('proof', proof.proof)
+      return c.redirect(redirectUrl.toString(), 302)
+    } catch (error) {
+      console.error('Twitter link after Tempo ID failed:', error)
+      redirectUrl.searchParams.set('error', 'link_failed')
+      return c.redirect(redirectUrl.toString(), 302)
+    }
   })
   .post('/api/auth/logout', async (c) => {
     await TempoId.end(c)
     return c.redirect('/', 303)
   })
+  .get('/api/account/link/:token/start', async (c) => {
+    const link = await c.var.db
+      .selectFrom('account_link_token')
+      .innerJoin('member', 'member.id', 'account_link_token.member_id')
+      .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+      .select([
+        'account_link_token.access_key_expires_at',
+        'account_link_token.expires_at',
+        'account_link_token.used_at',
+        'workspace.chain_id',
+        'workspace.default_token_address',
+      ])
+      .where(
+        'account_link_token.token_hash',
+        '=',
+        await AccountLink.hashToken(c.env, c.req.param('token')),
+      )
+      .executeTakeFirst()
+    if (!link || link.used_at || Date.now() > new Date(link.expires_at).getTime())
+      return c.redirect(`/connect/${c.req.param('token')}`, 302)
+
+    const url = await TempoId.start(c, {
+      accessKey: TempoId.permissions({
+        chainId: link.chain_id,
+        expiresAt: link.access_key_expires_at,
+        limit: BigInt(AccountLink.reusableAccessKeyLimit),
+        periodSeconds: AccountLink.reusableAccessKeyPeriodSeconds,
+        tokenAddress: link.default_token_address ?? Tempo.addressLookup.pathUsd,
+      }),
+      funding: TempoId.funding(link.chain_id),
+      intent: { kind: 'link', token: c.req.param('token') },
+    })
+    return c.redirect(url, 302)
+  })
+  .post('/api/account/link/:token/resolve', async (c) => {
+    // Connects again with the session's access key, and moves the wallet off the other account.
+    const session = await TempoId.get(c)
+    if (!session?.key) return c.redirect(`/api/account/link/${c.req.param('token')}/start`, 303)
+    const key = await TempoId.adopt(c.env, session)
+    const response = await linkAccount(c, {
+      address: key.rootAddress,
+      disconnectExistingAccount: true,
+      keyAuthorization: key.keyAuthorization,
+      token: c.req.param('token'),
+    })
+    return c.redirect(await getResultUrl(`/connect/${c.req.param('token')}`, response), 303)
+  })
+  .get('/api/confirm/:token/start', async (c) => {
+    try {
+      const data = await Tip.getConfirmationData(c.env, c.req.param('token'))
+      const payload = data.payload
+      const accessKey = await (async () => {
+        if (payload.kind === 'reusable_access_key')
+          return TempoId.permissions({
+            chainId: payload.chainId,
+            expiresAt: payload.accessKeyExpiresAt ?? payload.expiresAt,
+            limit: BigInt(payload.accessKeyLimit ?? AccountLink.reusableAccessKeyLimit),
+            periodSeconds: AccountLink.reusableAccessKeyPeriodSeconds,
+            tokenAddress: payload.tokenAddress,
+          })
+        // A one-time payment authorizes an access key for this payment alone: its total, to its
+        // recipients, until the link expires.
+        const recipients = await Tip.getConfirmationRecipientAddresses(
+          c.env,
+          c.req.param('token'),
+        )
+        return TempoId.permissions({
+          chainId: payload.chainId,
+          expiresAt: payload.expiresAt,
+          limit: BigInt(payload.amount) * BigInt(recipients.length),
+          periodSeconds: AccountLink.confirmationLinkTtlMs / 1000, // 10 minutes
+          recipients,
+          tokenAddress: payload.tokenAddress,
+        })
+      })()
+      const url = await TempoId.start(c, {
+        accessKey,
+        funding: TempoId.funding(data.payload.chainId),
+        intent: { kind: 'confirm', token: c.req.param('token') },
+      })
+      return c.redirect(url, 302)
+    } catch (error) {
+      const url = new URL(`/confirm/${c.req.param('token')}`, c.req.url)
+      url.searchParams.set(
+        'error',
+        error instanceof Error ? error.message : 'This payment link is invalid or expired.',
+      )
+      return c.redirect(url.toString(), 302)
+    }
+  })
+  .get('/api/link/twitter/oauth/begin', async (c) => {
+    try {
+      const challenge = await Twitter.createOAuthLinkChallenge(c.env, {})
+      return c.redirect(
+        await TempoId.start(c, {
+          accessKey: getTwitterPermissions(challenge),
+          intent: { challengeId: challenge.challengeId, kind: 'x_oauth' },
+        }),
+        302,
+      )
+    } catch (error) {
+      console.error('Twitter OAuth start failed:', error)
+      return c.redirect('/link/x?error=oauth_failed', 302)
+    }
+  })
+  .get(
+    '/api/link/twitter/proof/begin',
+    hono.validator(
+      'query',
+      z.object({
+        username: z
+          .string()
+          .min(1)
+          .max(16)
+          .regex(/^@?[A-Za-z0-9_]{1,15}$/),
+      }),
+    ),
+    async (c) => {
+      try {
+        const challenge = await Twitter.createLinkChallenge(c.env, {
+          username: c.req.valid('query').username,
+        })
+        return c.redirect(
+          await TempoId.start(c, {
+            accessKey: getTwitterPermissions(challenge),
+            intent: { challengeId: challenge.challengeId, kind: 'x_proof' },
+          }),
+          302,
+        )
+      } catch (error) {
+        console.error('Twitter proof start failed:', error)
+        return c.redirect('/link/x?error=link_failed', 302)
+      }
+    },
+  )
   .get('/api/account/link/:token', async (c) => {
     const link = await c.var.db
       .selectFrom('account_link_token')
@@ -92,254 +301,7 @@ export const api = new Hono<{
         keyAuthorization: z.unknown(),
       }),
     ),
-    async (c) => {
-      const body = c.req.valid('json')
-      const link = await c.var.db
-        .selectFrom('account_link_token')
-        .innerJoin('member', 'member.id', 'account_link_token.member_id')
-        .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
-        .select([
-          'account_link_token.access_key_address',
-          'account_link_token.access_key_ciphertext',
-          'account_link_token.access_key_expires_at',
-          'account_link_token.access_key_public_key',
-          'account_link_token.expires_at',
-          'account_link_token.id',
-          'account_link_token.member_id',
-          'account_link_token.provider_channel_id',
-          'account_link_token.channel_provider_id',
-          'account_link_token.used_at',
-          'member.provider_identity_id as member_provider_identity_id',
-          'member.provider_user_id as member_provider_user_id',
-          'workspace.chain_id',
-          'workspace.default_token_address',
-          'workspace.id as workspace_id',
-          'workspace.provider_id',
-        ])
-        .where(
-          'account_link_token.token_hash',
-          '=',
-          await AccountLink.hashToken(c.env, c.req.param('token')),
-        )
-        .executeTakeFirst()
-      if (!link || link.used_at || Date.now() > new Date(link.expires_at).getTime())
-        return c.json(
-          {
-            code: 'invalid_account_link' as const,
-            message: 'This connection link is invalid or expired.',
-            ok: false as const,
-          },
-          404,
-        )
-
-      try {
-        const verified = await AccountLink.verifyKeyAuthorization({
-          accessKeyAddress: link.access_key_address,
-          chainId: link.chain_id,
-          env: c.env,
-          expiresAt: link.access_key_expires_at,
-          keyAuthorization: body.keyAuthorization,
-          rootAddress: body.address,
-          tokenAddress: Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
-        })
-        const now = new Date().toISOString()
-        const existingAccount = await c.var.db
-          .selectFrom('account')
-          .selectAll()
-          .where('address', '=', verified.rootAddress)
-          .executeTakeFirst()
-        const account = await (async () => {
-          if (existingAccount) {
-            await c.var.db
-              .updateTable('account')
-              .set({ updated_at: now })
-              .where('id', '=', existingAccount.id)
-              .execute()
-            return existingAccount
-          }
-
-          const id = Nanoid.generate()
-          await c.var.db
-            .insertInto('account')
-            .values({
-              address: verified.rootAddress,
-              created_at: now,
-              id,
-              updated_at: now,
-            })
-            .execute()
-          return await c.var.db
-            .selectFrom('account')
-            .selectAll()
-            .where('id', '=', id)
-            .executeTakeFirstOrThrow()
-        })()
-
-        const duplicate = await c.var.db
-          .selectFrom('member')
-          .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
-          .select(['member.id', 'member.provider_identity_id'])
-          .where('member.workspace_id', '=', link.workspace_id)
-          .where('member.id', '!=', link.member_id)
-          .where('provider_identity.account_id', '=', account.id)
-          .executeTakeFirst()
-        if (duplicate && !body.disconnectExistingAccount)
-          return c.json(
-            {
-              code: 'account_already_connected' as const,
-              message:
-                'This wallet is already connected to another Slack account in this workspace.',
-            },
-            409,
-          )
-        if (duplicate && body.disconnectExistingAccount) {
-          const duplicateIdentities = await c.var.db
-            .selectFrom('member')
-            .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
-            .select('member.provider_identity_id')
-            .where('member.workspace_id', '=', link.workspace_id)
-            .where('member.id', '!=', link.member_id)
-            .where('provider_identity.account_id', '=', account.id)
-            .execute()
-          const duplicateIdentityIds = duplicateIdentities.map((row) => row.provider_identity_id)
-          await c.var.db
-            .updateTable('provider_identity')
-            .set({ account_id: null, updated_at: now })
-            .where('id', 'in', duplicateIdentityIds)
-            .execute()
-        }
-
-        await c.var.db
-          .deleteFrom('access_key')
-          .where('account_id', '=', account.id)
-          .where('chain_id', '=', link.chain_id)
-          .where(
-            'token_address',
-            '=',
-            Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
-          )
-          .execute()
-        await c.var.db
-          .deleteFrom('access_key')
-          .where('account_id', '=', account.id)
-          .where('chain_id', '=', link.chain_id)
-          .where('token_address', 'is', null)
-          .execute()
-        await c.var.db
-          .insertInto('access_key')
-          .values({
-            account_id: account.id,
-            address: link.access_key_address,
-            authorization: verified.serialized,
-            chain_id: link.chain_id,
-            ciphertext: link.access_key_ciphertext,
-            created_at: now,
-            expires_at: verified.expiresAt,
-            id: Nanoid.generate(),
-            revoked_at: null,
-            token_address: Address.checksum(
-              link.default_token_address ?? Tempo.addressLookup.pathUsd,
-            ),
-            updated_at: now,
-          })
-          .execute()
-        if (link.member_provider_identity_id)
-          await c.var.db
-            .updateTable('provider_identity')
-            .set({ account_id: account.id, updated_at: now })
-            .where('id', '=', link.member_provider_identity_id)
-            .execute()
-        await c.var.db
-          .updateTable('account_link_token')
-          .set({
-            access_key_authorization: verified.serialized,
-            account_id: account.id,
-            used_at: now,
-          })
-          .where('id', '=', link.id)
-          .execute()
-        c.executionCtx.waitUntil(
-          (async () => {
-            const pendingTips = await c.var.db
-              .selectFrom('pending_tip')
-              .select('id')
-              .where('recipient_member_id', '=', link.member_id)
-              .where('status', '=', 'pending')
-              .execute()
-            for (const pendingTip of pendingTips)
-              await c.env.PENDING_TIP_QUEUE.send({ pendingTipId: pendingTip.id })
-          })().catch((error) => {
-            console.error('Failed to enqueue pending tips after wallet connection:', error)
-          }),
-        )
-
-        if (link.provider_channel_id)
-          c.executionCtx.waitUntil(
-            (async () => {
-              await Chat.getChat().initialize()
-              const installation = await Chat.getSlack().getInstallation(
-                link.channel_provider_id ?? link.provider_id,
-              )
-              if (!installation) return
-
-              const reactionTipConfigs = await c.var.db
-                .selectFrom('reaction_tip_config')
-                .select(['amount', 'emoji'])
-                .where('workspace_id', '=', link.workspace_id)
-                .orderBy('amount', 'asc')
-                .orderBy('emoji', 'asc')
-                .execute()
-              const reactionTipConfigsText = (
-                reactionTipConfigs.length ? reactionTipConfigs : Tip.defaultReactionTipConfigs
-              )
-                .map(
-                  (config) =>
-                    `:${config.emoji}: \`:${config.emoji}:\` (${formatAmount(config.amount)})`,
-                )
-                .join(', ')
-
-              const channelRef = Chat.getChat().channel(
-                link.provider_channel_id!.startsWith('slack:')
-                  ? link.provider_channel_id!
-                  : `slack:${link.provider_channel_id!}`,
-              )
-              const truncatedAddress = `${account.address.slice(0, 6)}…${account.address.slice(-4)}`
-              const explorerUrl = Tempo.explorerLink(link.chain_id, account.address)
-
-              await Chat.getSlack().withBotToken(installation.botToken, () =>
-                channelRef.postEphemeral(
-                  link.member_provider_user_id,
-                  {
-                    card: chat.Card({
-                      children: [
-                        chat.CardText(`Connected \`${truncatedAddress}\` <${explorerUrl}|View>`),
-                        chat.CardText(
-                          `Mention \`@${getSlackBotDisplayName(c.env.HOST)} @user\` or use \`${getSlackCommand(c.env.HOST)} @user\` to send a payment. React with ${reactionTipConfigsText} to tip a message.`,
-                          { style: 'muted' },
-                        ),
-                      ],
-                    }),
-                    fallbackText: `Connected\nWallet: ${account.address}\nUse ${getSlackCommand(c.env.HOST)} @user to send your first tip.`,
-                  },
-                  { fallbackToDM: false },
-                ),
-              )
-            })().catch((error) => {
-              console.error('Failed to notify Slack member after wallet connection:', error)
-            }),
-          )
-
-        return c.json({ ok: true as const })
-      } catch (error) {
-        return c.json(
-          {
-            code: 'invalid_key_authorization' as const,
-            message: error instanceof Error ? error.message : 'Invalid key authorization.',
-          },
-          400,
-        )
-      }
-    },
+    async (c) => await linkAccount(c, { ...c.req.valid('json'), token: c.req.param('token') }),
   )
   .post(
     '/api/link/twitter/challenge',
@@ -645,10 +607,6 @@ export const api = new Hono<{
         tokenAddress: Address.checksum(data.payload.tokenAddress),
         tokenCurrency: metadata.currency,
         tokenSymbol: metadata.symbol,
-        transactionRequest:
-          data.payload.kind === 'onetime_payment'
-            ? await Tip.getConfirmationTransactionRequest(c.env, c.req.param('token'))
-            : undefined,
       })
     } catch (error) {
       return c.json(
@@ -667,331 +625,10 @@ export const api = new Hono<{
       'json',
       z.object({
         address: z.string().min(1),
-        keyAuthorization: z.unknown().optional(),
-        signedTransaction: z.string().min(1).optional(),
+        keyAuthorization: z.unknown(),
       }),
     ),
-    async (c) => {
-      try {
-        const body = c.req.valid('json')
-        const data = await Tip.getConfirmationData(c.env, c.req.param('token'))
-        const result = await Tip.confirmTipRequest(c.env, {
-          address: body.address,
-          keyAuthorization: body.keyAuthorization,
-          signedTransaction: body.signedTransaction as `0x${string}` | undefined,
-          token: c.req.param('token'),
-        })
-        if (!result.ok)
-          return c.json(
-            {
-              code: result.code,
-              message: result.code === 'failed' ? 'Payment failed. Try again.' : result.message,
-              ok: false as const,
-            },
-            400,
-          )
-
-        if (result.status === 'sent' && data.payload.providerId === Twitter.twitterProviderId)
-          c.executionCtx.waitUntil(
-            Twitter.postConfirmationReceipt(c.env, {
-              providerChannelId: data.payload.providerChannelId,
-              providerThreadId: data.payload.providerThreadId,
-              result,
-            }).catch((error) => {
-              console.error('Failed to post Twitter receipt after confirmation:', error)
-            }),
-          )
-        else if (
-          result.status === 'sent' &&
-          Chat.isReactionTipIdempotencyKey(data.payload.idempotencyKey)
-        )
-          c.executionCtx.waitUntil(
-            (async () => {
-              await Chat.getChat().initialize()
-              const db = DB.create(c.env.DB)
-              const reactionTip = await db
-                .selectFrom('reaction_tip')
-                .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
-                .innerJoin('tip', 'tip.idempotency_key', 'reaction_tip.idempotency_key')
-                .select([
-                  'reaction_tip.channel_id',
-                  'reaction_tip.id',
-                  'reaction_tip.reaction',
-                  'reaction_tip.thread_ts',
-                  'reaction_tip.workspace_id',
-                  'tip.id as tip_id',
-                ])
-                .where('reaction_tip.workspace_id', '=', data.payload.workspaceId)
-                .where('reaction_tip.idempotency_key', '=', data.payload.idempotencyKey)
-                .where('tip.confirmed_at', 'is not', null)
-                .executeTakeFirst()
-              if (!reactionTip) return
-
-              await db
-                .updateTable('reaction_tip')
-                .set({ tip_id: reactionTip.tip_id, updated_at: new Date().toISOString() })
-                .where('id', '=', reactionTip.id)
-                .where('tip_id', 'is', null)
-                .execute()
-              await Chat.updateReactionTipAggregate(data.payload.providerId, {
-                channelId: reactionTip.channel_id,
-                threadTs: reactionTip.thread_ts,
-                workspaceId: reactionTip.workspace_id,
-              })
-            })().catch((error) => {
-              console.error(
-                'Failed to update Slack reaction tip aggregate after confirmation:',
-                error,
-              )
-            }),
-          )
-        else if (
-          result.status === 'sent' &&
-          Chat.isReceiptBoostIdempotencyKey(data.payload.idempotencyKey)
-        )
-          c.executionCtx.waitUntil(
-            (async () => {
-              await Chat.getChat().initialize()
-              const installation = await Chat.getSlack().getInstallation(data.payload.providerId)
-              if (!installation) return
-
-              const [, workspaceId, channelId, messageTs] = data.payload.idempotencyKey.split(':')
-              if (!workspaceId || !channelId || !messageTs) return
-              const receipt = await c.var.db
-                .selectFrom('tip_receipt_message')
-                .select(['message_ts', 'thread_ts'])
-                .where('workspace_id', '=', workspaceId)
-                .where('channel_id', '=', channelId)
-                .where('message_ts', '=', messageTs)
-                .executeTakeFirst()
-              if (!receipt) return
-
-              if (receipt.thread_ts !== receipt.message_ts) {
-                await Chat.updateReceiptBoostAggregate(data.payload.providerId, {
-                  channelId,
-                  threadTs: receipt.thread_ts,
-                  workspaceId,
-                })
-                if (data.payload.skippedRecipients?.length) {
-                  const skippedBody = new URLSearchParams()
-                  const recipientCount = data.payload.recipients?.length ?? 1
-                  const skippedCount = data.payload.skippedRecipients.length
-                  skippedBody.set('channel', channelId)
-                  skippedBody.set(
-                    'text',
-                    `Boost sent to ${recipientCount} ${recipientCount === 1 ? 'account' : 'accounts'}. Skipped ${skippedCount} ${skippedCount === 1 ? 'account' : 'accounts'} that can no longer receive payments.`,
-                  )
-                  skippedBody.set('thread_ts', receipt.thread_ts)
-                  skippedBody.set('user', data.payload.senderProviderUserId)
-                  await Chat.getSlack().withBotToken(installation.botToken, () =>
-                    fetch(`${c.env.SLACK_API_URL}/chat.postEphemeral`, {
-                      body: skippedBody,
-                      headers: { authorization: `Bearer ${installation.botToken}` },
-                      method: 'POST',
-                    }),
-                  )
-                }
-                return
-              }
-
-              const originalReceiptLink = (() => {
-                if (receipt.thread_ts === receipt.message_ts) return ''
-                const url = new URL('slack://channel')
-                url.searchParams.set('team', data.payload.providerId)
-                url.searchParams.set('id', channelId)
-                url.searchParams.set('message', receipt.message_ts)
-                return ` <${url}|this message>`
-              })()
-              const receiptLink = `<${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`
-              const text = `<@${result.senderProviderUserId}> boosted${originalReceiptLink} · ${receiptLink}`
-              const body = new URLSearchParams()
-              body.set(
-                'blocks',
-                JSON.stringify([
-                  {
-                    text: { text, type: 'mrkdwn' },
-                    type: 'section',
-                  },
-                ]),
-              )
-              body.set('channel', channelId)
-              body.set('text', text.replace(receiptLink, 'Receipt'))
-              body.set('thread_ts', receipt.thread_ts)
-              body.set('unfurl_links', 'false')
-              body.set('unfurl_media', 'false')
-              const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
-                fetch(`${c.env.SLACK_API_URL}/chat.postMessage`, {
-                  body,
-                  headers: { authorization: `Bearer ${installation.botToken}` },
-                  method: 'POST',
-                }),
-              )
-              const json = z.parse(
-                z.object({
-                  error: z.string().optional(),
-                  ok: z.boolean().optional(),
-                  ts: z.string().optional(),
-                }),
-                await response.json(),
-              )
-              if (!json.ok || !json.ts)
-                throw new Error(json.error ?? 'Slack API chat.postMessage failed.')
-              await Chat.recordSlackReceiptMessageForTransaction(c.var.db, {
-                channelId,
-                messageTs: json.ts,
-                threadTs: receipt.thread_ts,
-                transactionHash: result.transactionHash,
-              })
-              if (data.payload.skippedRecipients?.length) {
-                const skippedBody = new URLSearchParams()
-                const recipientCount = data.payload.recipients?.length ?? 1
-                const skippedCount = data.payload.skippedRecipients.length
-                skippedBody.set('channel', channelId)
-                skippedBody.set(
-                  'text',
-                  `Boost sent to ${recipientCount} ${recipientCount === 1 ? 'account' : 'accounts'}. Skipped ${skippedCount} ${skippedCount === 1 ? 'account' : 'accounts'} that can no longer receive payments.`,
-                )
-                skippedBody.set('thread_ts', receipt.thread_ts)
-                skippedBody.set('user', data.payload.senderProviderUserId)
-                await Chat.getSlack().withBotToken(installation.botToken, () =>
-                  fetch(`${c.env.SLACK_API_URL}/chat.postEphemeral`, {
-                    body: skippedBody,
-                    headers: { authorization: `Bearer ${installation.botToken}` },
-                    method: 'POST',
-                  }),
-                )
-              }
-            })().catch((error) => {
-              console.error('Failed to post Slack boost receipt after confirmation:', error)
-            }),
-          )
-        else if (
-          result.status === 'sent' &&
-          Chat.isTipAskIdempotencyKey(data.payload.idempotencyKey)
-        )
-          c.executionCtx.waitUntil(
-            (async () => {
-              const tipAskId = Chat.getTipAskIdFromIdempotencyKey(data.payload.idempotencyKey)
-              if (!tipAskId) return
-              await Chat.updateTipAskMessage(data.payload.providerId, { tipAskId })
-            })().catch((error) => {
-              console.error('Failed to update Slack tip jar after confirmation:', error)
-            }),
-          )
-        else if (result.status === 'sent')
-          c.executionCtx.waitUntil(
-            (async () => {
-              await Chat.getChat().initialize()
-              const installation = await Chat.getSlack().getInstallation(data.payload.providerId)
-              if (!installation) return
-
-              const amount = result.isDefaultToken
-                ? formatCurrencyAmount(result.amount, result.tokenCurrency)
-                : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
-              const text =
-                'recipients' in result
-                  ? `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} ${data.payload.groupId ? `<!subteam^${data.payload.groupId}${data.payload.groupLabel ? `|@${data.payload.groupLabel}` : ''}> ` : ''}${Chat.formatProviderUserMentionSummary(result.recipients.map((recipient) => recipient.recipientProviderUserId))} ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${[
-                      ...result.recipients.map(
-                        (recipient) => `• <@${recipient.recipientProviderUserId}>`,
-                      ),
-                      ...(data.payload.skippedRecipients ?? [])
-                        .slice(0, 10)
-                        .map(
-                          (recipient) =>
-                            `• <@${recipient.recipientProviderUserId}> (${recipient.reason === 'you' ? 'you' : 'not connected yet'})`,
-                        ),
-                      ...((data.payload.skippedRecipients?.length ?? 0) > 10
-                        ? [
-                            `…and ${(data.payload.skippedRecipients?.length ?? 0) - 10} more not connected yet`,
-                          ]
-                        : []),
-                    ].join('\n')}`
-                  : `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} <@${result.recipientProviderUserId}> ${amount}${result.memo ? ` for ${result.memo}` : ''}.`
-              const receiptText = text.replace(/\.$/, '')
-              const receiptLink = `<${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`
-              const receiptMessage = (() => {
-                const lineBreakIndex = receiptText.indexOf('\n')
-                if (lineBreakIndex === -1) return `${receiptText} · ${receiptLink}`
-                return `${receiptText.slice(0, lineBreakIndex).replace(/\.$/, '')} · ${receiptLink}${receiptText.slice(lineBreakIndex)}`
-              })()
-              const threadId = data.payload.providerThreadId
-              const body = new URLSearchParams()
-              body.set(
-                'blocks',
-                JSON.stringify([
-                  {
-                    text: {
-                      text: receiptMessage,
-                      type: 'mrkdwn',
-                    },
-                    type: 'section',
-                  },
-                ]),
-              )
-              body.set('channel', data.payload.providerChannelId.replace(/^slack:/, ''))
-              body.set('text', receiptMessage.replace(receiptLink, 'Receipt'))
-              if (threadId) body.set('thread_ts', threadId)
-              body.set('unfurl_links', 'false')
-              body.set('unfurl_media', 'false')
-              try {
-                const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
-                  fetch(`${c.env.SLACK_API_URL}/chat.postMessage`, {
-                    body,
-                    headers: { authorization: `Bearer ${installation.botToken}` },
-                    method: 'POST',
-                  }),
-                )
-                const json = z.parse(
-                  z.object({
-                    error: z.string().optional(),
-                    ok: z.boolean().optional(),
-                    ts: z.string().optional(),
-                  }),
-                  await response.json(),
-                )
-                if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postMessage failed.')
-                if (json.ts)
-                  await Chat.recordSlackReceiptMessageForTransaction(c.var.db, {
-                    channelId: data.payload.providerChannelId.replace(/^slack:/, ''),
-                    messageTs: json.ts,
-                    threadTs: threadId ?? json.ts,
-                    transactionHash: result.transactionHash,
-                  })
-              } finally {
-                if (threadId) {
-                  const statusBody = new URLSearchParams()
-                  statusBody.set(
-                    'channel_id',
-                    data.payload.providerChannelId.replace(/^slack:/, ''),
-                  )
-                  statusBody.set('thread_ts', threadId)
-                  statusBody.set('status', '')
-                  await fetch(`${c.env.SLACK_API_URL}/assistant.threads.setStatus`, {
-                    body: statusBody,
-                    headers: { authorization: `Bearer ${installation.botToken}` },
-                    method: 'POST',
-                  }).catch(() => {
-                    // Best effort only. Confirmed payment flow must not depend on Slack assistant UI cleanup.
-                  })
-                }
-              }
-            })().catch((error) => {
-              console.error('Failed to post Slack receipt after confirmation:', error)
-            }),
-          )
-        if (!('transactionHash' in result)) throw new Error('Payment failed.')
-        return c.json({ ok: true as const, transactionHash: result.transactionHash })
-      } catch (error) {
-        return c.json(
-          {
-            code: 'confirmation_failed' as const,
-            message: error instanceof Error ? error.message : 'Payment failed.',
-            ok: false as const,
-          },
-          400,
-        )
-      }
-    },
+    async (c) => await confirmPayment(c, { ...c.req.valid('json'), token: c.req.param('token') }),
   )
   .get('/api/chat/twitter', async (c) => {
     const crcToken = c.req.query('crc_token')
@@ -1476,3 +1113,617 @@ export const api = new Hono<{
     await c.env.DB.prepare('SELECT 1').first()
     return c.json({ ok: true })
   })
+
+async function linkAccount(
+  c: Context<AppEnv>,
+  body: {
+    address: string
+    disconnectExistingAccount?: boolean | undefined
+    keyAuthorization: unknown
+    token: string
+  },
+) {
+    const link = await c.var.db
+      .selectFrom('account_link_token')
+      .innerJoin('member', 'member.id', 'account_link_token.member_id')
+      .innerJoin('workspace', 'workspace.id', 'member.workspace_id')
+      .select([
+        'account_link_token.access_key_address',
+        'account_link_token.access_key_ciphertext',
+        'account_link_token.access_key_expires_at',
+        'account_link_token.access_key_public_key',
+        'account_link_token.expires_at',
+        'account_link_token.id',
+        'account_link_token.member_id',
+        'account_link_token.provider_channel_id',
+        'account_link_token.channel_provider_id',
+        'account_link_token.used_at',
+        'member.provider_identity_id as member_provider_identity_id',
+        'member.provider_user_id as member_provider_user_id',
+        'workspace.chain_id',
+        'workspace.default_token_address',
+        'workspace.id as workspace_id',
+        'workspace.provider_id',
+      ])
+      .where(
+        'account_link_token.token_hash',
+        '=',
+        await AccountLink.hashToken(c.env, body.token),
+      )
+      .executeTakeFirst()
+    if (!link || link.used_at || Date.now() > new Date(link.expires_at).getTime())
+      return c.json(
+        {
+          code: 'invalid_account_link' as const,
+          message: 'This connection link is invalid or expired.',
+          ok: false as const,
+        },
+        404,
+      )
+
+    try {
+      const verified = await AccountLink.verifyKeyAuthorization({
+        accessKeyAddress: link.access_key_address,
+        chainId: link.chain_id,
+        env: c.env,
+        expiresAt: link.access_key_expires_at,
+        keyAuthorization: body.keyAuthorization,
+        rootAddress: body.address,
+        tokenAddress: Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
+      })
+      const now = new Date().toISOString()
+      const existingAccount = await c.var.db
+        .selectFrom('account')
+        .selectAll()
+        .where('address', '=', verified.rootAddress)
+        .executeTakeFirst()
+      const account = await (async () => {
+        if (existingAccount) {
+          await c.var.db
+            .updateTable('account')
+            .set({ updated_at: now })
+            .where('id', '=', existingAccount.id)
+            .execute()
+          return existingAccount
+        }
+
+        const id = Nanoid.generate()
+        await c.var.db
+          .insertInto('account')
+          .values({
+            address: verified.rootAddress,
+            created_at: now,
+            id,
+            updated_at: now,
+          })
+          .execute()
+        return await c.var.db
+          .selectFrom('account')
+          .selectAll()
+          .where('id', '=', id)
+          .executeTakeFirstOrThrow()
+      })()
+
+      const duplicate = await c.var.db
+        .selectFrom('member')
+        .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+        .select(['member.id', 'member.provider_identity_id'])
+        .where('member.workspace_id', '=', link.workspace_id)
+        .where('member.id', '!=', link.member_id)
+        .where('provider_identity.account_id', '=', account.id)
+        .executeTakeFirst()
+      if (duplicate && !body.disconnectExistingAccount)
+        return c.json(
+          {
+            code: 'account_already_connected' as const,
+            message:
+              'This wallet is already connected to another Slack account in this workspace.',
+          },
+          409,
+        )
+      if (duplicate && body.disconnectExistingAccount) {
+        const duplicateIdentities = await c.var.db
+          .selectFrom('member')
+          .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+          .select('member.provider_identity_id')
+          .where('member.workspace_id', '=', link.workspace_id)
+          .where('member.id', '!=', link.member_id)
+          .where('provider_identity.account_id', '=', account.id)
+          .execute()
+        const duplicateIdentityIds = duplicateIdentities.map((row) => row.provider_identity_id)
+        await c.var.db
+          .updateTable('provider_identity')
+          .set({ account_id: null, updated_at: now })
+          .where('id', 'in', duplicateIdentityIds)
+          .execute()
+      }
+
+      await c.var.db
+        .deleteFrom('access_key')
+        .where('account_id', '=', account.id)
+        .where('chain_id', '=', link.chain_id)
+        .where(
+          'token_address',
+          '=',
+          Address.checksum(link.default_token_address ?? Tempo.addressLookup.pathUsd),
+        )
+        .execute()
+      await c.var.db
+        .deleteFrom('access_key')
+        .where('account_id', '=', account.id)
+        .where('chain_id', '=', link.chain_id)
+        .where('token_address', 'is', null)
+        .execute()
+      await c.var.db
+        .insertInto('access_key')
+        .values({
+          account_id: account.id,
+          address: link.access_key_address,
+          authorization: verified.serialized,
+          chain_id: link.chain_id,
+          ciphertext: link.access_key_ciphertext,
+          created_at: now,
+          expires_at: verified.expiresAt,
+          id: Nanoid.generate(),
+          revoked_at: null,
+          token_address: Address.checksum(
+            link.default_token_address ?? Tempo.addressLookup.pathUsd,
+          ),
+          updated_at: now,
+        })
+        .execute()
+      if (link.member_provider_identity_id)
+        await c.var.db
+          .updateTable('provider_identity')
+          .set({ account_id: account.id, updated_at: now })
+          .where('id', '=', link.member_provider_identity_id)
+          .execute()
+      await c.var.db
+        .updateTable('account_link_token')
+        .set({
+          access_key_authorization: verified.serialized,
+          account_id: account.id,
+          used_at: now,
+        })
+        .where('id', '=', link.id)
+        .execute()
+      c.executionCtx.waitUntil(
+        (async () => {
+          const pendingTips = await c.var.db
+            .selectFrom('pending_tip')
+            .select('id')
+            .where('recipient_member_id', '=', link.member_id)
+            .where('status', '=', 'pending')
+            .execute()
+          for (const pendingTip of pendingTips)
+            await c.env.PENDING_TIP_QUEUE.send({ pendingTipId: pendingTip.id })
+        })().catch((error) => {
+          console.error('Failed to enqueue pending tips after wallet connection:', error)
+        }),
+      )
+
+      if (link.provider_channel_id)
+        c.executionCtx.waitUntil(
+          (async () => {
+            await Chat.getChat().initialize()
+            const installation = await Chat.getSlack().getInstallation(
+              link.channel_provider_id ?? link.provider_id,
+            )
+            if (!installation) return
+
+            const reactionTipConfigs = await c.var.db
+              .selectFrom('reaction_tip_config')
+              .select(['amount', 'emoji'])
+              .where('workspace_id', '=', link.workspace_id)
+              .orderBy('amount', 'asc')
+              .orderBy('emoji', 'asc')
+              .execute()
+            const reactionTipConfigsText = (
+              reactionTipConfigs.length ? reactionTipConfigs : Tip.defaultReactionTipConfigs
+            )
+              .map(
+                (config) =>
+                  `:${config.emoji}: \`:${config.emoji}:\` (${formatAmount(config.amount)})`,
+              )
+              .join(', ')
+
+            const channelRef = Chat.getChat().channel(
+              link.provider_channel_id!.startsWith('slack:')
+                ? link.provider_channel_id!
+                : `slack:${link.provider_channel_id!}`,
+            )
+            const truncatedAddress = `${account.address.slice(0, 6)}…${account.address.slice(-4)}`
+            const explorerUrl = Tempo.explorerLink(link.chain_id, account.address)
+
+            await Chat.getSlack().withBotToken(installation.botToken, () =>
+              channelRef.postEphemeral(
+                link.member_provider_user_id,
+                {
+                  card: chat.Card({
+                    children: [
+                      chat.CardText(`Connected \`${truncatedAddress}\` <${explorerUrl}|View>`),
+                      chat.CardText(
+                        `Mention \`@${getSlackBotDisplayName(c.env.HOST)} @user\` or use \`${getSlackCommand(c.env.HOST)} @user\` to send a payment. React with ${reactionTipConfigsText} to tip a message.`,
+                        { style: 'muted' },
+                      ),
+                    ],
+                  }),
+                  fallbackText: `Connected\nWallet: ${account.address}\nUse ${getSlackCommand(c.env.HOST)} @user to send your first tip.`,
+                },
+                { fallbackToDM: false },
+              ),
+            )
+          })().catch((error) => {
+            console.error('Failed to notify Slack member after wallet connection:', error)
+          }),
+        )
+
+      return c.json({ ok: true as const })
+    } catch (error) {
+      return c.json(
+        {
+          code: 'invalid_key_authorization' as const,
+          message: error instanceof Error ? error.message : 'Invalid key authorization.',
+        },
+        400,
+      )
+    }
+}
+
+async function confirmPayment(
+  c: Context<AppEnv>,
+  body: {
+    accessKey?: { address: string; privateKey: `0x${string}` } | undefined
+    address: string
+    keyAuthorization: unknown
+    token: string
+  },
+) {
+    try {
+      const data = await Tip.getConfirmationData(c.env, body.token)
+      const result = await Tip.confirmTipRequest(c.env, {
+        accessKey: body.accessKey,
+        address: body.address,
+        keyAuthorization: body.keyAuthorization,
+        token: body.token,
+      })
+      if (!result.ok)
+        return c.json(
+          {
+            code: result.code,
+            message: result.code === 'failed' ? 'Payment failed. Try again.' : result.message,
+            ok: false as const,
+          },
+          400,
+        )
+
+      if (result.status === 'sent' && data.payload.providerId === Twitter.twitterProviderId)
+        c.executionCtx.waitUntil(
+          Twitter.postConfirmationReceipt(c.env, {
+            providerChannelId: data.payload.providerChannelId,
+            providerThreadId: data.payload.providerThreadId,
+            result,
+          }).catch((error) => {
+            console.error('Failed to post Twitter receipt after confirmation:', error)
+          }),
+        )
+      else if (
+        result.status === 'sent' &&
+        Chat.isReactionTipIdempotencyKey(data.payload.idempotencyKey)
+      )
+        c.executionCtx.waitUntil(
+          (async () => {
+            await Chat.getChat().initialize()
+            const db = DB.create(c.env.DB)
+            const reactionTip = await db
+              .selectFrom('reaction_tip')
+              .innerJoin('workspace', 'workspace.id', 'reaction_tip.workspace_id')
+              .innerJoin('tip', 'tip.idempotency_key', 'reaction_tip.idempotency_key')
+              .select([
+                'reaction_tip.channel_id',
+                'reaction_tip.id',
+                'reaction_tip.reaction',
+                'reaction_tip.thread_ts',
+                'reaction_tip.workspace_id',
+                'tip.id as tip_id',
+              ])
+              .where('reaction_tip.workspace_id', '=', data.payload.workspaceId)
+              .where('reaction_tip.idempotency_key', '=', data.payload.idempotencyKey)
+              .where('tip.confirmed_at', 'is not', null)
+              .executeTakeFirst()
+            if (!reactionTip) return
+
+            await db
+              .updateTable('reaction_tip')
+              .set({ tip_id: reactionTip.tip_id, updated_at: new Date().toISOString() })
+              .where('id', '=', reactionTip.id)
+              .where('tip_id', 'is', null)
+              .execute()
+            await Chat.updateReactionTipAggregate(data.payload.providerId, {
+              channelId: reactionTip.channel_id,
+              threadTs: reactionTip.thread_ts,
+              workspaceId: reactionTip.workspace_id,
+            })
+          })().catch((error) => {
+            console.error(
+              'Failed to update Slack reaction tip aggregate after confirmation:',
+              error,
+            )
+          }),
+        )
+      else if (
+        result.status === 'sent' &&
+        Chat.isReceiptBoostIdempotencyKey(data.payload.idempotencyKey)
+      )
+        c.executionCtx.waitUntil(
+          (async () => {
+            await Chat.getChat().initialize()
+            const installation = await Chat.getSlack().getInstallation(data.payload.providerId)
+            if (!installation) return
+
+            const [, workspaceId, channelId, messageTs] = data.payload.idempotencyKey.split(':')
+            if (!workspaceId || !channelId || !messageTs) return
+            const receipt = await c.var.db
+              .selectFrom('tip_receipt_message')
+              .select(['message_ts', 'thread_ts'])
+              .where('workspace_id', '=', workspaceId)
+              .where('channel_id', '=', channelId)
+              .where('message_ts', '=', messageTs)
+              .executeTakeFirst()
+            if (!receipt) return
+
+            if (receipt.thread_ts !== receipt.message_ts) {
+              await Chat.updateReceiptBoostAggregate(data.payload.providerId, {
+                channelId,
+                threadTs: receipt.thread_ts,
+                workspaceId,
+              })
+              if (data.payload.skippedRecipients?.length) {
+                const skippedBody = new URLSearchParams()
+                const recipientCount = data.payload.recipients?.length ?? 1
+                const skippedCount = data.payload.skippedRecipients.length
+                skippedBody.set('channel', channelId)
+                skippedBody.set(
+                  'text',
+                  `Boost sent to ${recipientCount} ${recipientCount === 1 ? 'account' : 'accounts'}. Skipped ${skippedCount} ${skippedCount === 1 ? 'account' : 'accounts'} that can no longer receive payments.`,
+                )
+                skippedBody.set('thread_ts', receipt.thread_ts)
+                skippedBody.set('user', data.payload.senderProviderUserId)
+                await Chat.getSlack().withBotToken(installation.botToken, () =>
+                  fetch(`${c.env.SLACK_API_URL}/chat.postEphemeral`, {
+                    body: skippedBody,
+                    headers: { authorization: `Bearer ${installation.botToken}` },
+                    method: 'POST',
+                  }),
+                )
+              }
+              return
+            }
+
+            const originalReceiptLink = (() => {
+              if (receipt.thread_ts === receipt.message_ts) return ''
+              const url = new URL('slack://channel')
+              url.searchParams.set('team', data.payload.providerId)
+              url.searchParams.set('id', channelId)
+              url.searchParams.set('message', receipt.message_ts)
+              return ` <${url}|this message>`
+            })()
+            const receiptLink = `<${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`
+            const text = `<@${result.senderProviderUserId}> boosted${originalReceiptLink} · ${receiptLink}`
+            const body = new URLSearchParams()
+            body.set(
+              'blocks',
+              JSON.stringify([
+                {
+                  text: { text, type: 'mrkdwn' },
+                  type: 'section',
+                },
+              ]),
+            )
+            body.set('channel', channelId)
+            body.set('text', text.replace(receiptLink, 'Receipt'))
+            body.set('thread_ts', receipt.thread_ts)
+            body.set('unfurl_links', 'false')
+            body.set('unfurl_media', 'false')
+            const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
+              fetch(`${c.env.SLACK_API_URL}/chat.postMessage`, {
+                body,
+                headers: { authorization: `Bearer ${installation.botToken}` },
+                method: 'POST',
+              }),
+            )
+            const json = z.parse(
+              z.object({
+                error: z.string().optional(),
+                ok: z.boolean().optional(),
+                ts: z.string().optional(),
+              }),
+              await response.json(),
+            )
+            if (!json.ok || !json.ts)
+              throw new Error(json.error ?? 'Slack API chat.postMessage failed.')
+            await Chat.recordSlackReceiptMessageForTransaction(c.var.db, {
+              channelId,
+              messageTs: json.ts,
+              threadTs: receipt.thread_ts,
+              transactionHash: result.transactionHash,
+            })
+            if (data.payload.skippedRecipients?.length) {
+              const skippedBody = new URLSearchParams()
+              const recipientCount = data.payload.recipients?.length ?? 1
+              const skippedCount = data.payload.skippedRecipients.length
+              skippedBody.set('channel', channelId)
+              skippedBody.set(
+                'text',
+                `Boost sent to ${recipientCount} ${recipientCount === 1 ? 'account' : 'accounts'}. Skipped ${skippedCount} ${skippedCount === 1 ? 'account' : 'accounts'} that can no longer receive payments.`,
+              )
+              skippedBody.set('thread_ts', receipt.thread_ts)
+              skippedBody.set('user', data.payload.senderProviderUserId)
+              await Chat.getSlack().withBotToken(installation.botToken, () =>
+                fetch(`${c.env.SLACK_API_URL}/chat.postEphemeral`, {
+                  body: skippedBody,
+                  headers: { authorization: `Bearer ${installation.botToken}` },
+                  method: 'POST',
+                }),
+              )
+            }
+          })().catch((error) => {
+            console.error('Failed to post Slack boost receipt after confirmation:', error)
+          }),
+        )
+      else if (
+        result.status === 'sent' &&
+        Chat.isTipAskIdempotencyKey(data.payload.idempotencyKey)
+      )
+        c.executionCtx.waitUntil(
+          (async () => {
+            const tipAskId = Chat.getTipAskIdFromIdempotencyKey(data.payload.idempotencyKey)
+            if (!tipAskId) return
+            await Chat.updateTipAskMessage(data.payload.providerId, { tipAskId })
+          })().catch((error) => {
+            console.error('Failed to update Slack tip jar after confirmation:', error)
+          }),
+        )
+      else if (result.status === 'sent')
+        c.executionCtx.waitUntil(
+          (async () => {
+            await Chat.getChat().initialize()
+            const installation = await Chat.getSlack().getInstallation(data.payload.providerId)
+            if (!installation) return
+
+            const amount = result.isDefaultToken
+              ? formatCurrencyAmount(result.amount, result.tokenCurrency)
+              : formatTipAmount(result.amount, result.tokenCurrency, result.tokenSymbol)
+            const text =
+              'recipients' in result
+                ? `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} ${data.payload.groupId ? `<!subteam^${data.payload.groupId}${data.payload.groupLabel ? `|@${data.payload.groupLabel}` : ''}> ` : ''}${Chat.formatProviderUserMentionSummary(result.recipients.map((recipient) => recipient.recipientProviderUserId))} ${amount} each${result.memo ? ` for ${result.memo}` : ''}.\n${[
+                    ...result.recipients.map(
+                      (recipient) => `• <@${recipient.recipientProviderUserId}>`,
+                    ),
+                    ...(data.payload.skippedRecipients ?? [])
+                      .slice(0, 10)
+                      .map(
+                        (recipient) =>
+                          `• <@${recipient.recipientProviderUserId}> (${recipient.reason === 'you' ? 'you' : 'not connected yet'})`,
+                      ),
+                    ...((data.payload.skippedRecipients?.length ?? 0) > 10
+                      ? [
+                          `…and ${(data.payload.skippedRecipients?.length ?? 0) - 10} more not connected yet`,
+                        ]
+                      : []),
+                  ].join('\n')}`
+                : `<@${result.senderProviderUserId}> ${result.memo ? 'sent' : 'tipped'} <@${result.recipientProviderUserId}> ${amount}${result.memo ? ` for ${result.memo}` : ''}.`
+            const receiptText = text.replace(/\.$/, '')
+            const receiptLink = `<${Tempo.formatTxLink(result.chainId, result.transactionHash)}|Receipt>`
+            const receiptMessage = (() => {
+              const lineBreakIndex = receiptText.indexOf('\n')
+              if (lineBreakIndex === -1) return `${receiptText} · ${receiptLink}`
+              return `${receiptText.slice(0, lineBreakIndex).replace(/\.$/, '')} · ${receiptLink}${receiptText.slice(lineBreakIndex)}`
+            })()
+            const threadId = data.payload.providerThreadId
+            const body = new URLSearchParams()
+            body.set(
+              'blocks',
+              JSON.stringify([
+                {
+                  text: {
+                    text: receiptMessage,
+                    type: 'mrkdwn',
+                  },
+                  type: 'section',
+                },
+              ]),
+            )
+            body.set('channel', data.payload.providerChannelId.replace(/^slack:/, ''))
+            body.set('text', receiptMessage.replace(receiptLink, 'Receipt'))
+            if (threadId) body.set('thread_ts', threadId)
+            body.set('unfurl_links', 'false')
+            body.set('unfurl_media', 'false')
+            try {
+              const response = await Chat.getSlack().withBotToken(installation.botToken, () =>
+                fetch(`${c.env.SLACK_API_URL}/chat.postMessage`, {
+                  body,
+                  headers: { authorization: `Bearer ${installation.botToken}` },
+                  method: 'POST',
+                }),
+              )
+              const json = z.parse(
+                z.object({
+                  error: z.string().optional(),
+                  ok: z.boolean().optional(),
+                  ts: z.string().optional(),
+                }),
+                await response.json(),
+              )
+              if (!json.ok) throw new Error(json.error ?? 'Slack API chat.postMessage failed.')
+              if (json.ts)
+                await Chat.recordSlackReceiptMessageForTransaction(c.var.db, {
+                  channelId: data.payload.providerChannelId.replace(/^slack:/, ''),
+                  messageTs: json.ts,
+                  threadTs: threadId ?? json.ts,
+                  transactionHash: result.transactionHash,
+                })
+            } finally {
+              if (threadId) {
+                const statusBody = new URLSearchParams()
+                statusBody.set(
+                  'channel_id',
+                  data.payload.providerChannelId.replace(/^slack:/, ''),
+                )
+                statusBody.set('thread_ts', threadId)
+                statusBody.set('status', '')
+                await fetch(`${c.env.SLACK_API_URL}/assistant.threads.setStatus`, {
+                  body: statusBody,
+                  headers: { authorization: `Bearer ${installation.botToken}` },
+                  method: 'POST',
+                }).catch(() => {
+                  // Best effort only. Confirmed payment flow must not depend on Slack assistant UI cleanup.
+                })
+              }
+            }
+          })().catch((error) => {
+            console.error('Failed to post Slack receipt after confirmation:', error)
+          }),
+        )
+      if (!('transactionHash' in result)) throw new Error('Payment failed.')
+      return c.json({ ok: true as const, transactionHash: result.transactionHash })
+    } catch (error) {
+      return c.json(
+        {
+          code: 'confirmation_failed' as const,
+          message: error instanceof Error ? error.message : 'Payment failed.',
+          ok: false as const,
+        },
+        400,
+      )
+    }
+}
+
+function getTwitterPermissions(challenge: {
+  accessKeyExpiry: string
+  chainId: number
+  tokenAddress: string
+}) {
+  return TempoId.permissions({
+    chainId: challenge.chainId,
+    expiresAt: challenge.accessKeyExpiry,
+    limit: BigInt(AccountLink.reusableAccessKeyLimit),
+    periodSeconds: AccountLink.reusableAccessKeyPeriodSeconds,
+    tokenAddress: challenge.tokenAddress,
+  })
+}
+
+/** Returns the page URL that shows a link or confirmation response: its status, error, and hash. */
+async function getResultUrl(path: string, response: Response) {
+  const url = new URL(path, 'http://tip.bot')
+  const json = (await response
+    .clone()
+    .json()
+    .catch(() => ({}))) as { code?: string; message?: string; transactionHash?: string }
+  if (response.ok) {
+    url.searchParams.set('status', json.transactionHash ? 'sent' : 'connected')
+    if (json.transactionHash) url.searchParams.set('tx', json.transactionHash)
+  } else if (json.code === 'account_already_connected') url.searchParams.set('status', 'conflict')
+  else url.searchParams.set('error', json.message ?? 'Something went wrong. Try again.')
+  return url.pathname + url.search
+}

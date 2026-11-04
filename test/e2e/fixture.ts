@@ -1,4 +1,4 @@
-import { expect, test as base } from '@playwright/test'
+import { expect, type Page, test as base } from '@playwright/test'
 import Database from 'better-sqlite3'
 import { Kysely, SqliteDialect } from 'kysely'
 import type { DB } from '#db/types.gen.ts'
@@ -18,6 +18,14 @@ export const test = base.extend<
       env: ReturnType<typeof Env.get>
       slackAppId: string
       slackUrl: string
+      tempoId: {
+        /** Approves the access key on Tempo ID's approval page, and skips its deposit page. */
+        approve: (page: Page) => Promise<void>
+        /** Signs a new user in to Tempo ID in the page's context. Returns the email address. */
+        signIn: (page: Page, options?: { email?: string | undefined }) => Promise<string>
+        /** Tempo ID's origin. */
+        url: string
+      }
       url: {
         (options: RouteUrlOptionsUnion): string
         (path: `/api/${string}`): string
@@ -36,6 +44,35 @@ export const test = base.extend<
         env,
         slackAppId: env.SLACK_APP_ID,
         slackUrl: new URL(env.SLACK_API_URL).origin,
+        tempoId: {
+          async approve(page) {
+            const origin = new URL(env.TEMPO_ID_URL).origin
+            await page.getByRole('button', { name: 'Approve' }).click()
+            await page.waitForURL(
+              (url) => url.origin !== origin || url.pathname.startsWith('/deposit'),
+            )
+            // A funding hint opens the deposit page for an account that holds less.
+            if (new URL(page.url()).origin === origin)
+              await page.getByRole('link', { name: 'Skip for now' }).click()
+          },
+          async signIn(page, options = {}) {
+            const email = options.email ?? `tipbot-e2e+${crypto.randomUUID()}@example.org`
+            const sent = await page.request.post(`${env.TEMPO_ID_URL}/v1/auth/code`, {
+              data: { email },
+            })
+            expect(sent.status()).toBe(200)
+            const code = await page.request.get(
+              `${env.TEMPO_ID_URL}/__id-dev/code?email=${encodeURIComponent(email)}`,
+            )
+            expect(code.status()).toBe(200)
+            const verified = await page.request.post(`${env.TEMPO_ID_URL}/v1/auth/code/verify`, {
+              data: { code: ((await code.json()) as { code: string }).code, email },
+            })
+            expect(verified.status()).toBe(200)
+            return email
+          },
+          url: env.TEMPO_ID_URL,
+        },
         url: (input: `/api/${string}` | RouteUrlOptionsUnion) => {
           if (typeof input === 'string') return new URL(input, baseUrl).toString()
           return new URL(formatRouteUrl(input), baseUrl).toString()

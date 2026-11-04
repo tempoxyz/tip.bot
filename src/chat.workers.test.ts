@@ -1,5 +1,4 @@
 import * as DB from '#db/client.ts'
-import { Provider, dangerous_secp256k1 } from 'accounts'
 import * as AccessKey from '#/lib/accessKey.ts'
 import * as AccountLink from '#/lib/accountLink.ts'
 import * as Chat from '#/chat.ts'
@@ -20,7 +19,7 @@ import { env } from 'cloudflare:workers'
 import { testClient } from 'hono/testing'
 import { AbiFunction, Address } from 'ox'
 import { KeyAuthorization } from 'ox/tempo'
-import { createClient, http, parseUnits, toHex } from 'viem'
+import { createClient, http, parseUnits } from 'viem'
 import { Account, Actions } from 'viem/tempo'
 import { beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api } from '#/api.ts'
@@ -1021,7 +1020,6 @@ describe('/tip @account', () => {
     })
     if (!json.ok) throw new Error('Expected confirmation metadata.')
     expect(json.recipients).toHaveLength(20)
-    expect(json.transactionRequest?.calls).toHaveLength(20)
   }, 20_000) // 20 seconds
 
   test('rejects 101 recipients', async () => {
@@ -1076,7 +1074,6 @@ describe('/tip @account', () => {
         { recipientProviderUserId: Constants.slack.memberUserId },
         { recipientProviderUserId: unconnectedProviderUserId },
       ],
-      transactionRequest: expect.objectContaining({ calls: expect.any(Array) }),
     })
   })
 
@@ -6941,29 +6938,20 @@ test('receipt boost confirms after approval', async () => {
   const confirmation = await client.api.confirm[':token'].$get({ param: { token } })
   const confirmationJson = await confirmation.json()
   if (!confirmationJson.ok) throw new Error('Expected confirmation metadata.')
-  if (!confirmationJson.transactionRequest) throw new Error('Expected transaction request.')
-  const provider = Provider.create({
-    adapter: dangerous_secp256k1({ privateKey: Constants.tip.senderRootPrivateKey }),
-    chains: [
-      {
-        ...Tempo.getChain(confirmationJson.chainId),
-        rpcUrls: { default: { http: [env.RPC_URL_TESTNET!] } },
-      },
-    ],
-    transports: { [confirmationJson.chainId]: http(env.RPC_URL_TESTNET) },
-  })
-  await provider.request({
-    method: 'wallet_connect',
-    params: [{ capabilities: { method: 'register' } }],
-  })
-  const signedTransaction = await provider.request({
-    method: 'eth_signTransaction',
-    params: [
-      { ...confirmationJson.transactionRequest, chainId: toHex(confirmationJson.chainId) } as never,
-    ],
-  })
+  const confirmationData = await Tip.getConfirmationData(env, token)
+  const keyAuthorization = await AccountLink.signKeyAuthorization(
+    Account.fromSecp256k1(Constants.tip.senderRootPrivateKey),
+    {
+      accessKeyAddress: confirmationJson.accessKeyAddress,
+      chainId: confirmationJson.chainId,
+      expiresAt: confirmationData.payload.expiresAt,
+      limit: BigInt(confirmationData.payload.amount) * BigInt(confirmationJson.recipients.length),
+      periodSeconds: AccountLink.confirmationLinkTtlMs / 1000, // 10 minutes
+      tokenAddress: confirmationJson.tokenAddress,
+    },
+  )
   const confirmResponse = await client.api.confirm[':token'].$post({
-    json: { address: connected.senderAccount.address, signedTransaction },
+    json: { address: connected.senderAccount.address, keyAuthorization },
     param: { token },
   })
   await drainWaitUntil()
@@ -7035,31 +7023,22 @@ test('threaded receipt boost confirms into aggregate after approval', async () =
   const confirmation = await client.api.confirm[':token'].$get({ param: { token } })
   const confirmationJson = await confirmation.json()
   if (!confirmationJson.ok) throw new Error('Expected confirmation metadata.')
-  if (!confirmationJson.transactionRequest) throw new Error('Expected transaction request.')
   await expectSlackThreadMessageNotContaining(parentTs, 'Boosts received in this thread:')
 
-  const provider = Provider.create({
-    adapter: dangerous_secp256k1({ privateKey: Constants.tip.senderRootPrivateKey }),
-    chains: [
-      {
-        ...Tempo.getChain(confirmationJson.chainId),
-        rpcUrls: { default: { http: [env.RPC_URL_TESTNET!] } },
-      },
-    ],
-    transports: { [confirmationJson.chainId]: http(env.RPC_URL_TESTNET) },
-  })
-  await provider.request({
-    method: 'wallet_connect',
-    params: [{ capabilities: { method: 'register' } }],
-  })
-  const signedTransaction = await provider.request({
-    method: 'eth_signTransaction',
-    params: [
-      { ...confirmationJson.transactionRequest, chainId: toHex(confirmationJson.chainId) } as never,
-    ],
-  })
+  const confirmationData = await Tip.getConfirmationData(env, token)
+  const keyAuthorization = await AccountLink.signKeyAuthorization(
+    Account.fromSecp256k1(Constants.tip.senderRootPrivateKey),
+    {
+      accessKeyAddress: confirmationJson.accessKeyAddress,
+      chainId: confirmationJson.chainId,
+      expiresAt: confirmationData.payload.expiresAt,
+      limit: BigInt(confirmationData.payload.amount) * BigInt(confirmationJson.recipients.length),
+      periodSeconds: AccountLink.confirmationLinkTtlMs / 1000, // 10 minutes
+      tokenAddress: confirmationJson.tokenAddress,
+    },
+  )
   const confirmResponse = await client.api.confirm[':token'].$post({
-    json: { address: connected.senderAccount.address, signedTransaction },
+    json: { address: connected.senderAccount.address, keyAuthorization },
     param: { token },
   })
   await drainWaitUntil()

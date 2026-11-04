@@ -1,8 +1,8 @@
 import serverEntry from '@tanstack/react-start/server-entry'
-import { Kv as AccountsKv } from 'accounts/server'
 import { api } from '#/api.ts'
 import { closeExpired } from '#/crons/close.ts'
 import { rpc } from '#/lib/rpc.ts'
+import * as TempoId from '#/lib/tempoId.ts'
 import { processPendingTipMessage } from '#/queues/pendingTip.ts'
 import { z } from 'zod'
 
@@ -76,4 +76,4 @@ declare module '@tanstack/react-router' {
 }
 
 export { TipbotChatStateDO } from '#/objects/chatState.ts'
-export class NonceStorage extends AccountsKv.NonceStorage {}
+export class TempoIdSessions extends TempoId.Sessions {}

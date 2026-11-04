@@ -2,14 +2,9 @@ import { createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { env } from 'cloudflare:workers'
 import type { InferResponseType } from 'hono/client'
-import * as React from 'react'
-import { parseUnits } from 'viem'
-import { useConnect, useConnection, useConnectors } from 'wagmi'
 import * as z from 'zod/mini'
 import { api } from '#/api.ts'
-import { WalletProviders } from '#/components/WalletProviders.tsx'
 import { slackCommand, tipbotImagePath } from '#/lib/app.ts'
-import { getErrorMessage } from '#/lib/error.ts'
 import { formatCurrencyAmount, formatPeriod } from '#/lib/format.ts'
 import { rpc } from '#/lib/rpc.ts'
 import * as Tapimo from '#/lib/tapimo.ts'
@@ -20,12 +15,19 @@ export const Route = createFileRoute('/connect/$token')({
   async loader(options) {
     return await getConnectData({ data: options.params.token })
   },
+  validateSearch: z.object({
+    error: z.optional(z.string()),
+    status: z.optional(z.enum(['conflict', 'connected'])),
+  }),
 })
 
 function Component() {
   const data = Route.useLoaderData()
   const params = Route.useParams()
+  const search = Route.useSearch()
 
+  // A used link reads as unavailable, so the callback's result shows first.
+  if (search.status === 'connected') return <Connected />
   if (!data.ok)
     return (
       <main className="min-h-screen bg-bg2 px-6 pt-8 pb-12 text-gray10 sm:pt-16 lg:pt-24">
@@ -48,105 +50,36 @@ function Component() {
       </main>
     )
 
+  return <ConnectPanel data={data} search={search} token={params.token} />
+}
+
+function Connected() {
   return (
-    <WalletProviders.Root>
-      <ConnectPanel data={data} token={params.token} />
-    </WalletProviders.Root>
+    <main className="min-h-screen bg-bg2 px-6 pt-8 pb-12 text-gray10 sm:pt-16 lg:pt-24">
+      <section className="mx-auto flex max-w-xl flex-col items-center gap-8">
+        <img
+          alt="Tipbot"
+          className="size-28 rounded-3xl object-cover shadow-lg sm:size-36"
+          height={160}
+          src={tipbotImagePath}
+          width={160}
+        />
+        <div className="space-y-3 text-center">
+          <h1 className="text-3xl font-bold text-gray10">Connected to Tipbot</h1>
+          <p className="text-base text-gray9">You can close this tab and return to Slack.</p>
+        </div>
+      </section>
+    </main>
   )
 }
 
 function ConnectPanel(props: {
   data: Extract<ReturnType<typeof Route.useLoaderData>, { ok: true }>
+  search: ReturnType<typeof Route.useSearch>
   token: string
 }) {
-  const connect = useConnect()
-  const connection = useConnection()
-  const connectors = useConnectors()
   const data = props.data
-  const [error, setError] = React.useState<string | null>(null)
-  const [errorCode, setErrorCode] = React.useState<string | null>(null)
-  const [pendingConnection, setPendingConnection] = React.useState<{
-    address: string
-    keyAuthorization: unknown
-  } | null>(null)
-  const [status, setStatus] = React.useState<'idle' | 'connecting' | 'connected'>('idle')
-
-  async function connectTipbot() {
-    setError(null)
-    setErrorCode(null)
-    setPendingConnection(null)
-    setStatus('connecting')
-    try {
-      const connector = connection.connector ?? connectors[0]
-      if (!connector) throw new Error('Tempo Wallet is unavailable.')
-      if (connection.status === 'connected' && connection.address) {
-        const result = await authorizeAccessKey(connector, data)
-        await linkAccount({
-          address: result.rootAddress,
-          keyAuthorization: result.keyAuthorization,
-        })
-        setStatus('connected')
-        return
-      }
-
-      const result = (await connect.connectAsync({
-        capabilities: {
-          authorizeAccessKey: getAuthorizeAccessKey(data),
-          showDeposit: { amount: '1', token: 'USDC.e' },
-        },
-        chainId: data.chainId,
-        connector,
-        withCapabilities: true,
-      } as never)) as unknown as {
-        accounts: readonly [
-          { address: string; capabilities: Record<string, unknown> },
-          ...{ address: string; capabilities: Record<string, unknown> }[],
-        ]
-      }
-      const account = result.accounts[0]
-      const keyAuthorization = account.capabilities.keyAuthorization
-      if (!keyAuthorization) throw new Error('Tempo Wallet did not authorize Tipbot.')
-      await linkAccount({ address: account.address, keyAuthorization })
-      setStatus('connected')
-    } catch (error) {
-      setStatus('idle')
-      setError(getErrorMessage(error, 'Could not connect to Tipbot.'))
-    }
-  }
-
-  async function disconnectExistingAccount() {
-    if (!pendingConnection) return
-    setError(null)
-    setErrorCode(null)
-    setStatus('connecting')
-    try {
-      await linkAccount({ ...pendingConnection, disconnectExistingAccount: true })
-      setPendingConnection(null)
-      setStatus('connected')
-    } catch (error) {
-      setStatus('idle')
-      setError(getErrorMessage(error, 'Could not connect to Tipbot.'))
-    }
-  }
-
-  async function linkAccount(connection: {
-    address: string
-    keyAuthorization: unknown
-    disconnectExistingAccount?: boolean
-  }) {
-    const response = await rpc.api.account.link[':token'].$post({
-      json: connection,
-      param: { token: props.token },
-    })
-    if (response.ok) return
-
-    const json = await response.json().catch(() => null)
-    if (json && 'code' in json && json.code === 'account_already_connected') {
-      setErrorCode(json.code)
-      setPendingConnection(connection)
-    }
-    throw new Error(json && 'message' in json ? json.message : 'Could not connect to Tipbot.')
-  }
+  const search = props.search
 
   return (
     <main className="min-h-screen bg-bg2 px-6 pt-8 pb-12 text-gray10 sm:pt-16 lg:pt-24">
@@ -158,25 +91,19 @@ function ConnectPanel(props: {
           src={tipbotImagePath}
           width={160}
         />
-        {status === 'connected' ? (
-          <div className="space-y-3 text-center">
-            <h1 className="text-3xl font-bold text-gray10">Connected to Tipbot</h1>
-            <p className="text-base text-gray9">You can close this tab and return to Slack.</p>
-          </div>
-        ) : (
           <div className="w-full space-y-8">
             <div className="space-y-3 text-center">
               <h1 className="text-3xl font-bold text-gray10 sm:text-4xl">
                 Connect <span className="text-blue9">Tipbot</span>
               </h1>
               <p className="text-base text-gray9 sm:text-lg">
-                Authorize Tipbot to connect your Tempo Wallet for Slack tips.
+                Authorize Tipbot to connect your Tempo Account for Slack tips.
               </p>
             </div>
             <div className="rounded-2xl border border-gray5 bg-bg2 p-6 shadow-xl sm:p-8">
               <div className="border-b border-gray5 pb-6">
                 <h2 className="text-xl font-bold text-gray10 sm:text-2xl">
-                  Tipbot wants to connect to your Tempo Wallet
+                  Tipbot wants to connect to your Tempo Account
                 </h2>
                 <p className="mt-2 text-base text-gray9">
                   Review the permissions below before continuing.
@@ -222,14 +149,12 @@ function ConnectPanel(props: {
               </div>
               <div className="space-y-4 pt-6">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                  <button
-                    className="inline-flex h-12 items-center justify-center rounded-lg bg-green8 px-6 text-lg font-bold text-white transition-colors outline-none hover:bg-green7 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
-                    disabled={status === 'connecting'}
-                    onClick={connectTipbot}
-                    type="button"
+                  <a
+                    className="inline-flex h-12 items-center justify-center rounded-lg bg-green8 px-6 text-lg font-bold text-white no-underline transition-colors outline-none hover:bg-green7 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                    href={`/api/account/link/${props.token}/start`}
                   >
-                    {status === 'connecting' ? 'Connecting' : 'Connect'}
-                  </button>
+                    Connect
+                  </a>
                   <a
                     className="inline-flex h-12 items-center justify-center rounded-lg px-6 text-lg font-bold text-blue9 no-underline transition-colors outline-none hover:bg-blue1 focus-visible:ring-2 focus-visible:ring-blue9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
                     href="/"
@@ -238,29 +163,33 @@ function ConnectPanel(props: {
                   </a>
                 </div>
                 <p className="text-base text-gray9">
-                  Next: you’ll be asked to approve this connection in Tempo Wallet.
+                  Next: you’ll sign in with Tempo ID and approve this connection.
                 </p>
-                {error ? (
-                  <div className="space-y-3">
-                    <p className="text-sm font-medium text-red9">{error}</p>
-                    {errorCode === 'account_already_connected' && pendingConnection ? (
-                      <button
-                        className="inline-flex h-10 items-center justify-center rounded-lg bg-red8 px-4 text-sm font-bold text-white transition-colors outline-none hover:bg-red7 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-red9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
-                        disabled={status === 'connecting'}
-                        onClick={disconnectExistingAccount}
-                        type="button"
-                      >
-                        {status === 'connecting'
-                          ? 'Disconnecting'
-                          : 'Disconnect existing account and connect'}
-                      </button>
-                    ) : null}
-                  </div>
+                {search.error ? (
+                  <p aria-live="polite" className="text-sm font-medium text-red9">
+                    {search.error}
+                  </p>
+                ) : null}
+                {search.status === 'conflict' ? (
+                  <form
+                    action={`/api/account/link/${props.token}/resolve`}
+                    className="space-y-3"
+                    method="post"
+                  >
+                    <p aria-live="polite" className="text-sm font-medium text-red9">
+                      This wallet is already connected to another Slack account in this workspace.
+                    </p>
+                    <button
+                      className="inline-flex h-10 items-center justify-center rounded-lg bg-red8 px-4 text-sm font-bold text-white transition-colors outline-none hover:bg-red7 focus-visible:ring-2 focus-visible:ring-red9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                      type="submit"
+                    >
+                      Disconnect existing account and connect
+                    </button>
+                  </form>
                 ) : null}
               </div>
             </div>
           </div>
-        )}
       </section>
     </main>
   )
@@ -302,38 +231,3 @@ const getConnectData = createServerFn({ method: 'GET' })
       }
     }
   })
-
-async function authorizeAccessKey(
-  connector: ReturnType<typeof useConnectors>[number],
-  data: Extract<ReturnType<typeof Route.useLoaderData>, { ok: true }>,
-) {
-  const provider = (await connector.getProvider()) as {
-    request: (parameters: { method: string; params: unknown[] }) => Promise<unknown>
-  }
-  return (await provider.request({
-    method: 'wallet_authorizeAccessKey',
-    params: [getAuthorizeAccessKey(data)],
-  })) as { keyAuthorization: unknown; rootAddress: string }
-}
-
-function getAuthorizeAccessKey(
-  data: Extract<ReturnType<typeof Route.useLoaderData>, { ok: true }>,
-) {
-  return {
-    chainId: BigInt(data.chainId),
-    expiry: Math.floor(new Date(data.accessKeyExpiry).getTime() / 1000),
-    keyType: 'secp256k1' as const,
-    limits: [
-      {
-        limit: parseUnits(data.accessKeyLimit, 6),
-        period: data.accessKeyLimitPeriodSeconds,
-        token: data.tokenAddress,
-      },
-    ],
-    publicKey: data.accessKeyPublicKey,
-    scopes: [
-      { address: data.tokenAddress, selector: 'transfer(address,uint256)' },
-      { address: data.tokenAddress, selector: 'transferWithMemo(address,uint256,bytes32)' },
-    ],
-  }
-}

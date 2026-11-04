@@ -9,7 +9,6 @@ import * as Tapimo from '#/lib/tapimo.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import type { DB as Database } from '#db/types.gen.ts'
 import { AbiFunction, Address, Hash, Hex } from 'ox'
-import { TxEnvelopeTempo } from 'ox/tempo'
 import { KeyAuthorization } from 'ox/tempo'
 import {
   BaseError,
@@ -842,7 +841,7 @@ export async function getConfirmationData(env: Env, token: string) {
   return { accessKey, payload }
 }
 
-export async function getConfirmationTransactionRequest(env: Env, token: string) {
+export async function getConfirmationRecipientAddresses(env: Env, token: string) {
   const db = DB.create(env.DB)
   const { payload } = await getConfirmationData(env, token)
   const workspace = await db
@@ -850,8 +849,6 @@ export async function getConfirmationTransactionRequest(env: Env, token: string)
     .selectAll()
     .where('id', '=', payload.workspaceId)
     .executeTakeFirstOrThrow()
-  const sender = await getConnectedMember(db, workspace.id, payload.senderProviderUserId)
-  if (!sender) throw new Error('Reconnect Tipbot and try again.')
   const recipients = payload.recipients ?? [
     {
       recipientProviderLabel: payload.recipientProviderLabel,
@@ -859,27 +856,29 @@ export async function getConfirmationTransactionRequest(env: Env, token: string)
       recipientProviderWorkspaceId: payload.recipientProviderWorkspaceId,
     },
   ]
-  const connectedRecipients = [] as ConnectedMember[]
+  const addresses = [] as Address.Address[]
   for (const recipient of recipients) {
     const connected = await getConnectedRecipient(db, workspace, payload.provider, recipient)
     if (!connected) throw new Error('Recipient needs to connect Tipbot before receiving payments.')
-    connectedRecipients.push(connected)
+    addresses.push(Address.checksum(connected.account.address))
   }
-
-  return createSignedTransactionRequest(payload, sender, connectedRecipients)
+  return addresses
 }
 
 export async function confirmTipRequest(
   env: Env,
   input: {
+    /** The access key that Tempo ID authorized, in place of the one that the link derives. */
+    accessKey?: { address: string; privateKey: `0x${string}` } | undefined
     address: string
     keyAuthorization?: unknown
-    signedTransaction?: `0x${string}` | undefined
     token: string
   },
 ) {
   const db = DB.create(env.DB)
-  const { accessKey, payload } = await getConfirmationData(env, input.token)
+  const confirmation = await getConfirmationData(env, input.token)
+  const payload = confirmation.payload
+  const accessKey = input.accessKey ?? confirmation.accessKey
   if (!Tempo.isAllowedToken(payload.chainId, payload.tokenAddress))
     throw new Error('This token is not supported on this network.')
 
@@ -903,36 +902,7 @@ export async function confirmTipRequest(
     if (!connected) throw new Error('Recipient needs to connect Tipbot before receiving payments.')
     connectedRecipients.push(connected)
   }
-  if (payload.kind === 'onetime_payment') {
-    if (!input.signedTransaction) throw new Error('Tempo Wallet did not approve this payment.')
-    if (recipients.length > 1)
-      return await submitSignedTipBatch(env, db, {
-        address: input.address,
-        connectedRecipients,
-        idempotencyKey: payload.idempotencyKey,
-        memo: payload.memo,
-        payload,
-        recipients,
-        sender,
-        signedTransaction: input.signedTransaction,
-        tokenAddress: Address.checksum(payload.tokenAddress),
-        workspace,
-      })
-    const recipient = connectedRecipients[0]
-    if (!recipient) throw new Error('Tempo Wallet did not approve this payment.')
-    return await submitSignedTip(env, db, {
-      address: input.address,
-      idempotencyKey: payload.idempotencyKey,
-      memo: payload.memo,
-      payload,
-      recipient,
-      sender,
-      signedTransaction: input.signedTransaction,
-      tokenAddress: Address.checksum(payload.tokenAddress),
-      workspace,
-    })
-  }
-  if (!input.keyAuthorization) throw new Error('Tempo Wallet did not approve this payment.')
+  if (!input.keyAuthorization) throw new Error('Tempo ID did not approve this payment.')
   const accessKeyExpiresAt =
     payload.kind === 'reusable_access_key'
       ? (payload.accessKeyExpiresAt ?? payload.expiresAt)
@@ -940,7 +910,7 @@ export async function confirmTipRequest(
   const accessKeyLimit =
     payload.kind === 'reusable_access_key'
       ? BigInt(payload.accessKeyLimit ?? AccountLink.reusableAccessKeyLimit)
-      : BigInt(payload.amount)
+      : BigInt(payload.amount) * BigInt(recipients.length)
   const accessKeyPeriodSeconds =
     payload.kind === 'reusable_access_key'
       ? AccountLink.reusableAccessKeyPeriodSeconds
@@ -2183,431 +2153,6 @@ async function submitTip(
     tokenSymbol: result.tokenSymbol,
     transactionHash: result.transactionHash,
   }
-}
-
-async function submitSignedTipBatch(
-  env: Env,
-  db: DB.Type,
-  input: {
-    address: string
-    connectedRecipients: ConnectedMember[]
-    idempotencyKey: string
-    memo: string | null
-    payload: Confirmation.Payload
-    recipients: TipRecipientInput[]
-    sender: ConnectedMember
-    signedTransaction: `0x${string}`
-    tokenAddress: string
-    workspace: Database.Selectable.workspace
-  },
-): Promise<TipBatchResult> {
-  const existing = await getExistingTipBatchResult(
-    env,
-    db,
-    {
-      idempotencyKey: input.idempotencyKey,
-      senderProviderUserId: input.payload.senderProviderUserId,
-    },
-    Address.checksum(input.workspace.default_token_address ?? Tempo.addressLookup.pathUsd),
-  )
-  if (existing) return existing
-
-  const firstRecipient = input.connectedRecipients[0]
-  if (!firstRecipient) throw new Error('Tempo Wallet did not approve this payment.')
-  validateSignedTransaction({
-    address: input.address,
-    connectedRecipients: input.connectedRecipients,
-    payload: input.payload,
-    recipient: firstRecipient,
-    sender: input.sender,
-    signedTransaction: input.signedTransaction,
-    tokenAddress: input.tokenAddress,
-  })
-
-  const batchId = Nanoid.generate()
-  const now = new Date().toISOString()
-  const tipRows = await Promise.all(
-    input.connectedRecipients.map(async (recipient, index) => {
-      const id = Nanoid.generate()
-      const idempotencyKey = `${input.idempotencyKey}:${input.recipients[index]!.recipientProviderUserId}`
-      return {
-        access_key_id: null,
-        amount: input.payload.amount,
-        batch_id: batchId,
-        chain_id: input.workspace.chain_id,
-        confirmed_at: null,
-        created_at: now,
-        failed_at: null,
-        failure_reason: null,
-        id,
-        idempotency_key: idempotencyKey,
-        memo: input.memo,
-        recipient_id: recipient.account.id,
-        recipient_member_id: recipient.member.id,
-        sender_id: input.sender.account.id,
-        sender_member_id: input.sender.member.id,
-        sponsorship_memo: await createSponsorshipMemo(env, {
-          amount: input.payload.amount,
-          chainId: input.workspace.chain_id,
-          id,
-          idempotencyKey,
-          recipient: recipient.account.address,
-          sender: input.sender.account.address,
-          token: input.tokenAddress,
-        }),
-        token_address: input.tokenAddress,
-        transfer_log_index: null,
-        updated_at: now,
-        workspace_id: input.workspace.id,
-      } satisfies Database.Insertable.tip
-    }),
-  )
-  await db
-    .insertInto('tip_batch')
-    .values({
-      amount_each: input.payload.amount,
-      created_at: now,
-      failure_reason: null,
-      id: batchId,
-      idempotency_key: input.idempotencyKey,
-      memo: input.memo,
-      provider: input.payload.provider,
-      provider_channel_id: input.payload.providerChannelId,
-      provider_id: input.payload.providerId,
-      provider_thread_id: input.payload.providerThreadId ?? null,
-      recipient_count: input.connectedRecipients.length,
-      sender_member_id: input.sender.member.id,
-      source: input.payload.source ?? 'command',
-      status: 'pending',
-      token_address: input.tokenAddress,
-      total_amount: input.payload.amount * input.connectedRecipients.length,
-      updated_at: now,
-      workspace_id: input.workspace.id,
-    })
-    .execute()
-  for (let index = 0; index < tipRows.length; index += 4) {
-    // D1 has a low SQL variable limit; each tip row has many columns, so keep multi-row inserts
-    // small even when a group tip has up to 100 paid recipients.
-    await db
-      .insertInto('tip')
-      .values(tipRows.slice(index, index + 4))
-      .execute()
-  }
-
-  try {
-    await db
-      .updateTable('tip_batch')
-      .set({ status: 'submitting', updated_at: new Date().toISOString() })
-      .where('id', '=', batchId)
-      .execute()
-    const client = createClient({
-      chain: Tempo.getChain(input.workspace.chain_id),
-      transport: http(Tempo.getRpcUrl(env, input.workspace.chain_id)),
-    })
-    const balance = await Actions.token.getBalance(client, {
-      account: input.sender.account.address as Address.Address,
-      token: input.tokenAddress as Address.Address,
-    })
-    if (balance.amount < BigInt(input.payload.amount * input.connectedRecipients.length))
-      throw new InsufficientFundsError()
-
-    const receipt = (await client.request({
-      method: 'eth_sendRawTransactionSync' as never,
-      params: [input.signedTransaction] as never,
-    })) as { status: `0x${string}`; transactionHash?: `0x${string}` }
-    if (receipt.status !== '0x1' || !receipt.transactionHash)
-      throw new Error('Tempo transaction failed.')
-    await db
-      .updateTable('tip_batch')
-      .set({
-        status: 'confirmed',
-        transaction_hash: receipt.transactionHash,
-        updated_at: new Date().toISOString(),
-      })
-      .where('id', '=', batchId)
-      .execute()
-    await db
-      .updateTable('tip')
-      .set({ confirmed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-      .where('batch_id', '=', batchId)
-      .execute()
-
-    const tokenMetadata = await Tapimo.getTokenMetadata(
-      env,
-      input.workspace.chain_id,
-      input.tokenAddress,
-    )
-    return {
-      amount: formatAmount(input.payload.amount),
-      chainId: input.workspace.chain_id,
-      feePayer: 'sender',
-      isDefaultToken: Address.isEqual(
-        Address.checksum(input.tokenAddress),
-        Address.checksum(input.workspace.default_token_address ?? Tempo.addressLookup.pathUsd),
-      ),
-      memo: input.memo,
-      ok: true,
-      recipients: input.recipients,
-      senderProviderUserId: input.payload.senderProviderUserId,
-      skippedRecipients: input.payload.skippedRecipients,
-      status: 'sent',
-      tokenCurrency: tokenMetadata.currency,
-      tokenSymbol: tokenMetadata.symbol,
-      transactionHash: receipt.transactionHash,
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Tip submission failed.'
-    const code = isInsufficientFundsError(error) ? 'insufficient_funds' : 'failed'
-    await db
-      .updateTable('tip_batch')
-      .set({ failure_reason: message, status: 'failed', updated_at: new Date().toISOString() })
-      .where('id', '=', batchId)
-      .execute()
-    await db
-      .updateTable('tip')
-      .set({
-        failed_at: new Date().toISOString(),
-        failure_reason: message,
-        updated_at: new Date().toISOString(),
-      })
-      .where('batch_id', '=', batchId)
-      .execute()
-    return { chainId: input.workspace.chain_id, code, message, ok: false }
-  }
-}
-
-async function submitSignedTip(
-  env: Env,
-  db: DB.Type,
-  input: {
-    address: string
-    idempotencyKey: string
-    memo: string | null
-    payload: Confirmation.Payload
-    recipient: ConnectedMember
-    sender: ConnectedMember
-    signedTransaction: `0x${string}`
-    tokenAddress: string
-    workspace: Database.Selectable.workspace
-  },
-): Promise<TipResult> {
-  const existing = await getExistingTipResult(
-    env,
-    db,
-    {
-      idempotencyKey: input.idempotencyKey,
-      recipientProviderUserId: input.payload.recipientProviderUserId,
-      senderProviderUserId: input.payload.senderProviderUserId,
-    },
-    input.tokenAddress,
-  )
-  if (existing) return existing
-
-  validateSignedTransaction(input)
-  const id = Nanoid.generate()
-  const batchId = Nanoid.generate()
-  const sponsorshipMemo = await createSponsorshipMemo(env, {
-    amount: input.payload.amount,
-    chainId: input.workspace.chain_id,
-    id,
-    idempotencyKey: input.idempotencyKey,
-    recipient: input.recipient.account.address,
-    sender: input.sender.account.address,
-    token: input.tokenAddress,
-  })
-  const now = new Date().toISOString()
-  await db
-    .insertInto('tip_batch')
-    .values({
-      amount_each: input.payload.amount,
-      created_at: now,
-      failure_reason: null,
-      id: batchId,
-      idempotency_key: input.idempotencyKey,
-      memo: input.memo,
-      provider: input.payload.provider,
-      provider_channel_id: input.payload.providerChannelId,
-      provider_id: input.payload.providerId,
-      provider_thread_id: input.payload.providerThreadId ?? null,
-      recipient_count: 1,
-      sender_member_id: input.sender.member.id,
-      source: input.payload.source ?? 'command',
-      status: 'pending',
-      token_address: input.tokenAddress,
-      total_amount: input.payload.amount,
-      updated_at: now,
-      workspace_id: input.workspace.id,
-    })
-    .execute()
-  await db
-    .insertInto('tip')
-    .values({
-      access_key_id: null,
-      amount: input.payload.amount,
-      batch_id: batchId,
-      chain_id: input.workspace.chain_id,
-      confirmed_at: null,
-      created_at: now,
-      failed_at: null,
-      failure_reason: null,
-      id,
-      idempotency_key: input.idempotencyKey,
-      memo: input.memo,
-      recipient_id: input.recipient.account.id,
-      recipient_member_id: input.recipient.member.id,
-      sender_id: input.sender.account.id,
-      sender_member_id: input.sender.member.id,
-      sponsorship_memo: sponsorshipMemo,
-      token_address: input.tokenAddress,
-      transfer_log_index: null,
-      updated_at: now,
-      workspace_id: input.workspace.id,
-    })
-    .execute()
-
-  try {
-    await db
-      .updateTable('tip_batch')
-      .set({ status: 'submitting', updated_at: new Date().toISOString() })
-      .where('id', '=', batchId)
-      .execute()
-    const client = createClient({
-      chain: Tempo.getChain(input.workspace.chain_id),
-      transport: http(Tempo.getRpcUrl(env, input.workspace.chain_id)),
-    })
-    const balance = await Actions.token.getBalance(client, {
-      account: input.sender.account.address as Address.Address,
-      token: input.tokenAddress as Address.Address,
-    })
-    if (balance.amount < BigInt(input.payload.amount)) throw new InsufficientFundsError()
-
-    const receipt = (await client.request({
-      method: 'eth_sendRawTransactionSync' as never,
-      params: [input.signedTransaction] as never,
-    })) as { status: `0x${string}`; transactionHash?: `0x${string}` }
-    if (receipt.status !== '0x1' || !receipt.transactionHash)
-      throw new Error('Tempo transaction failed.')
-    await db
-      .updateTable('tip_batch')
-      .set({
-        status: 'confirmed',
-        transaction_hash: receipt.transactionHash,
-        updated_at: new Date().toISOString(),
-      })
-      .where('id', '=', batchId)
-      .execute()
-    await db
-      .updateTable('tip')
-      .set({
-        confirmed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .where('id', '=', id)
-      .execute()
-
-    const tokenMetadata = await Tapimo.getTokenMetadata(
-      env,
-      input.workspace.chain_id,
-      input.tokenAddress,
-    )
-    return {
-      amount: formatAmount(input.payload.amount),
-      chainId: input.workspace.chain_id,
-      feePayer: 'sender',
-      isDefaultToken: Address.isEqual(
-        Address.checksum(input.tokenAddress),
-        Address.checksum(input.workspace.default_token_address ?? Tempo.addressLookup.pathUsd),
-      ),
-      memo: input.memo,
-      ok: true,
-      recipientProviderUserId: input.payload.recipientProviderUserId,
-      senderProviderUserId: input.payload.senderProviderUserId,
-      status: 'sent',
-      tokenCurrency: tokenMetadata.currency,
-      tokenSymbol: tokenMetadata.symbol,
-      transactionHash: receipt.transactionHash,
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Tip submission failed.'
-    const code = isInsufficientFundsError(error) ? 'insufficient_funds' : 'failed'
-    await db
-      .updateTable('tip_batch')
-      .set({ failure_reason: message, status: 'failed', updated_at: new Date().toISOString() })
-      .where('id', '=', batchId)
-      .execute()
-    await db
-      .updateTable('tip')
-      .set({
-        failed_at: new Date().toISOString(),
-        failure_reason: message,
-        updated_at: new Date().toISOString(),
-      })
-      .where('id', '=', id)
-      .execute()
-    return { chainId: input.workspace.chain_id, code, message, ok: false }
-  }
-}
-
-function createSignedTransactionRequest(
-  payload: Confirmation.Payload,
-  sender: ConnectedMember,
-  recipients: ConnectedMember[],
-) {
-  const calls = recipients.map((recipient) => {
-    const call = Actions.token.transfer.call({
-      amount: BigInt(payload.amount),
-      ...(payload.memo ? { memo: encodeTransferMemo(payload.memo) } : {}),
-      to: recipient.account.address as Address.Address,
-      token: Address.checksum(payload.tokenAddress),
-    })
-    return { data: call.data, to: call.to }
-  })
-  return {
-    calls,
-    chainId: payload.chainId,
-    feeToken: Address.checksum(payload.tokenAddress),
-    from: sender.account.address,
-  }
-}
-
-function validateSignedTransaction(input: {
-  address: string
-  connectedRecipients?: ConnectedMember[]
-  payload: Confirmation.Payload
-  recipient: ConnectedMember
-  sender: ConnectedMember
-  signedTransaction: `0x${string}`
-  tokenAddress: string
-}) {
-  const transaction = TxEnvelopeTempo.deserialize(input.signedTransaction as `0x76${string}`)
-  const expected = createSignedTransactionRequest(
-    input.payload,
-    input.sender,
-    input.connectedRecipients ?? [input.recipient],
-  )
-  if (
-    !Address.isEqual(
-      input.address as Address.Address,
-      input.sender.account.address as Address.Address,
-    )
-  )
-    throw new Error('Reconnect Tipbot and try again.')
-  if (!transaction.from) throw new Error('Payment approval is invalid.')
-  if (!Address.isEqual(transaction.from, input.sender.account.address as Address.Address))
-    throw new Error('Reconnect Tipbot and try again.')
-  if (transaction.chainId !== input.payload.chainId) throw new Error('Payment approval is invalid.')
-  if (transaction.calls.length !== expected.calls.length)
-    throw new Error('Payment approval is invalid.')
-  for (const [index, expectedCall] of expected.calls.entries()) {
-    const call = transaction.calls[index]
-    if (!call || !call.to || !Address.isEqual(call.to, expectedCall.to as Address.Address))
-      throw new Error('Payment approval is invalid.')
-    if ((call.data ?? '0x').toLowerCase() !== expectedCall.data.toLowerCase())
-      throw new Error('Payment approval is invalid.')
-    if (call.value && call.value !== 0n) throw new Error('Payment approval is invalid.')
-  }
-  if (transaction.keyAuthorization) throw new Error('Payment approval is invalid.')
-  if (transaction.feePayerSignature) throw new Error('Payment approval is invalid.')
 }
 
 function supportsTransferMemo(
