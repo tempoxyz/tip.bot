@@ -100,8 +100,8 @@ export function getTokenAddress(chainId: number, value: string) {
   const normalized = value.toLowerCase().replace(/[.\-_\s]/g, '')
   const tokenAddress = (() => {
     if (normalized === 'ousd' || normalized === 'openusd') return addressLookup.ousd
-    if (normalized === 'pathusd' || normalized === 'path' || normalized === 'usd')
-      return addressLookup.pathUsd
+    if (normalized === 'pathusd' || normalized === 'path') return addressLookup.pathUsd
+    if (normalized === 'usd') return getDefaultTokenAddress(chainId)
     if (normalized === 'usdce' || normalized === 'usdc') return addressLookup.usdcE
     if (normalized === 'usdt0' || normalized === 'usdt') return addressLookup.usdt0
     if (normalized === 'alphausd' || normalized === 'alpha') return addressLookup.alphaUsd

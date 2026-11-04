@@ -53,6 +53,12 @@ test('resolves supported token aliases', () => {
   expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'OpenUSD')).toBe(Tempo.addressLookup.ousd)
   expect(Tempo.getTokenAddress(Tempo.chainLookup.testnet, 'ousd')).toBe(Tempo.addressLookup.ousd)
   expect(Tempo.getTokenAddress(Tempo.chainLookup.localnet, 'ousd')).toBe(null)
+  expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'usd')).toBe(Tempo.addressLookup.ousd)
+  expect(Tempo.getTokenAddress(Tempo.chainLookup.testnet, 'usd')).toBe(Tempo.addressLookup.ousd)
+  expect(Tempo.getTokenAddress(Tempo.chainLookup.localnet, 'usd')).toBe(Tempo.addressLookup.pathUsd)
+  expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'pathUSD')).toBe(
+    Tempo.addressLookup.pathUsd,
+  )
   expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'USDC.e')).toBe(Tempo.addressLookup.usdcE)
   expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'usdc')).toBe(Tempo.addressLookup.usdcE)
   expect(Tempo.getTokenAddress(Tempo.chainLookup.mainnet, 'USDT')).toBe(Tempo.addressLookup.usdt0)
