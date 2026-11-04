@@ -44,6 +44,7 @@
     "react": "19.2.5",
     "react-dom": "19.2.5",
     "tapimo": "0.5.2",
+    "tempo-accounts": "npm:accounts@1.0.0-alpha.1",
     "viem": "^2.55.10",
     "wagmi": "^3.6.14",
     "zod": "4.6.6"

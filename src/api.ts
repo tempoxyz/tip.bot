@@ -1,4 +1,3 @@
-import { env } from 'cloudflare:workers'
 import { Hono } from 'hono'
 import { Address, Base64, Hex } from 'ox'
 import * as chat from 'chat'
@@ -11,9 +10,9 @@ import * as hono from '#/lib/hono.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
 import * as Slack from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
+import * as TempoId from '#/lib/tempoId.ts'
 import * as Tip from '#/lib/tip.ts'
 import * as Twitter from '#/lib/twitter.ts'
-import { auth } from '#/lib/auth.ts'
 import * as DB from '#db/client.ts'
 
 export const api = new Hono<{
@@ -26,50 +25,15 @@ export const api = new Hono<{
     c.set('db', DB.create(c.env.DB))
     await next()
   })
-  .all('/api/auth/:path{.*}?', async (c) => {
-    const corsHeaders = (() => {
-      // Only auth-capable wallet and app origins may receive credentialed CORS headers.
-      const headers = new Headers()
-      const origin = c.req.raw.headers.get('origin')
-      if (!origin) return headers
-      const allowed = (() => {
-        try {
-          const url = new URL(origin)
-          const path = new URL(c.req.raw.url).pathname
-          return (
-            (path === '/api/auth/challenge' && url.protocol === 'https:') ||
-            url.hostname === env.HOST ||
-            url.hostname === 'accounts.tempo.xyz' ||
-            url.hostname === 'wallet.tempo.xyz' ||
-            (env.HOST.endsWith('.localhost') && url.hostname.endsWith('.localhost'))
-          )
-        } catch {
-          return false
-        }
-      })()
-      if (!allowed) return headers
-
-      headers.set('access-control-allow-origin', origin)
-      headers.set('access-control-allow-credentials', 'true')
-      headers.set(
-        'access-control-allow-headers',
-        c.req.raw.headers.get('access-control-request-headers') ?? 'authorization,content-type',
-      )
-      headers.set('access-control-allow-methods', 'POST,OPTIONS')
-      headers.set('vary', 'Origin')
-      return headers
-    })()
-    if (c.req.raw.method === 'OPTIONS')
-      return new Response(null, { headers: corsHeaders, status: 204 })
-
-    const response = await auth.fetch(c.req.raw)
-    const headers = new Headers(response.headers)
-    for (const [key, value] of corsHeaders) headers.set(key, value)
-    return new Response(response.body, {
-      headers,
-      status: response.status,
-      statusText: response.statusText,
-    })
+  .get('/api/auth/start', async (c) => c.redirect(await TempoId.start(c), 302))
+  .get('/api/auth/callback', async (c) => {
+    // A callback without the session cookie, such as after it expired, starts the sign-in again.
+    if (!(await TempoId.complete(c))) return c.redirect('/api/auth/start', 302)
+    return c.redirect('/dash', 302)
+  })
+  .post('/api/auth/logout', async (c) => {
+    await TempoId.end(c)
+    return c.redirect('/', 303)
   })
   .get('/api/account/link/:token', async (c) => {
     const link = await c.var.db

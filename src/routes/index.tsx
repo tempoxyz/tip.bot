@@ -307,8 +307,9 @@ export const Route = createFileRoute('/')({
 })
 
 const getHomeData = createServerFn({ method: 'GET' }).handler(async () => {
-  const { auth } = await import('#/lib/auth.ts')
-  return { dashboardAuthed: Boolean(await auth.getSession(getRequest())) }
+  const { env } = await import('cloudflare:workers')
+  const TempoId = await import('#/lib/tempoId.ts')
+  return { dashboardAuthed: Boolean(await TempoId.getAddress(env, getRequest())) }
 })
 
 async function authenticateConnectedWallet(connector: ReturnType<typeof useConnectors>[number]) {
