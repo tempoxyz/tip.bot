@@ -1810,7 +1810,7 @@ async function createConfirmationRequired(
   return {
     chainId: workspace.chain_id,
     code: 'confirmation_required',
-    confirmUrl: `https://${env.HOST}/confirm/${token}`,
+    confirmUrl: `https://${env.HOST}/api/confirm/${token}/start`,
     ok: false,
   }
 }

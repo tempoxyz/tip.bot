@@ -10,14 +10,19 @@ import { expect, test } from './fixture.ts'
 import { insertMember } from './members.ts'
 
 test('visitor opens an expired connection link', async ({ app, page }) => {
-  await page.goto(app.url({ params: { token: 'missing' }, to: '/connect/$token' }))
+  await page.goto(app.url('/api/account/link/missing/start'))
 
+  await expect(page).toHaveURL(app.url({ params: { token: 'missing' }, to: '/connect/$token' }))
   await expect(page.getByText('This connection link is invalid or expired.')).toBeVisible()
   await expect(page.getByText('Run `/tip connect` in Slack to get a new link.')).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Connect' })).toBeHidden()
 })
 
-test('slack member opens valid connection link', async ({ app, db, factory, page }) => {
+test('slack member opens a connection link, which starts the Tempo ID sign-in', async ({
+  app,
+  db,
+  factory,
+  page,
+}) => {
   const token = crypto.randomUUID()
   const workspace = await factory.workspace.insert({ provider_id: `T${crypto.randomUUID()}` })
   const member = await insertMember(db, factory, {
@@ -29,14 +34,9 @@ test('slack member opens valid connection link', async ({ app, db, factory, page
     token_hash: await AccountLink.hashToken(app.env, token),
   })
 
-  await page.goto(app.url({ params: { token }, to: '/connect/$token' }))
+  await page.goto(app.url(`/api/account/link/${token}/start`))
 
-  await expect(page.getByRole('link', { name: 'Connect' })).toHaveAttribute(
-    'href',
-    `/api/account/link/${token}/start`,
-  )
-  await expect(page.getByRole('link', { name: 'Cancel' })).toBeVisible()
-  await expect(page.getByText('Authorize Tipbot to connect your Tempo Account')).toBeVisible()
+  await expect(page).toHaveURL((url) => url.origin === new URL(app.tempoId.url).origin)
 })
 
 test('slack member connects a Tempo Account from slack', async ({ app, db, page, request }) => {
@@ -46,8 +46,7 @@ test('slack member connects a Tempo Account from slack', async ({ app, db, page,
   const token = await getConnectToken(app)
   await app.tempoId.signIn(page)
 
-  await page.goto(app.url({ params: { token }, to: '/connect/$token' }))
-  await page.getByRole('link', { name: 'Connect' }).click()
+  await page.goto(app.url(`/api/account/link/${token}/start`))
   await expect(page.getByText('Spend $10 per day')).toBeVisible()
   await app.tempoId.approve(page)
 
@@ -121,8 +120,7 @@ test('slack member connects another link with the same Tempo Account', async ({
   await app.tempoId.signIn(page)
 
   for (const token of [firstToken, secondToken]) {
-    await page.goto(app.url({ params: { token }, to: '/connect/$token' }))
-    await page.getByRole('link', { name: 'Connect' }).click()
+    await page.goto(app.url(`/api/account/link/${token}/start`))
     await app.tempoId.approve(page)
     await expect(page.getByRole('heading', { name: 'Connected to Tipbot' })).toBeVisible()
   }
@@ -173,13 +171,11 @@ test('slack member disconnects another member of the same Tempo Account, then co
     }),
   )
   await app.tempoId.signIn(page)
-  await page.goto(app.url({ params: { token: firstToken }, to: '/connect/$token' }))
-  await page.getByRole('link', { name: 'Connect' }).click()
+  await page.goto(app.url(`/api/account/link/${firstToken}/start`))
   await app.tempoId.approve(page)
   await expect(page.getByRole('heading', { name: 'Connected to Tipbot' })).toBeVisible()
 
-  await page.goto(app.url({ params: { token: secondToken }, to: '/connect/$token' }))
-  await page.getByRole('link', { name: 'Connect' }).click()
+  await page.goto(app.url(`/api/account/link/${secondToken}/start`))
   await app.tempoId.approve(page)
 
   await expect(
@@ -225,7 +221,7 @@ async function getConnectToken(app: { slackUrl: string }) {
     const history = await slack.conversations.history({ channel: Constants.slack.channelId })
     messages = (history.messages ?? []).flatMap((message) => (message.text ? [message.text] : []))
     const text = JSON.stringify(history.messages ?? [])
-    const token = text.match(/\/connect\/([^\s"\\)]+)/)?.[1]
+    const token = text.match(/\/api\/account\/link\/([^\s"\\)/]+)\/start/)?.[1]
     if (token) return token
     await new Promise((resolve) => setTimeout(resolve, 100))
   }

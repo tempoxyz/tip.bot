@@ -6069,7 +6069,8 @@ async function postConnectLink(event: TipEvent, ctx: HandlerContext) {
   const accessKey = AccessKey.generate()
   const linkButtonLabel = accountId ? 'Refresh connection' : 'Connect to Tipbot'
   const linkDescription = 'Link expires in 10 minutes.'
-  const linkUrl = `https://${env.HOST}/connect/${token}`
+  // The link starts the Tempo ID sign-in, whose approval page names the access key's limits.
+  const linkUrl = `https://${env.HOST}/api/account/link/${token}/start`
   const linkText = `${accountId ? 'Refresh Tipbot connection' : 'Connect to Tipbot'}: ${linkUrl}\n${linkDescription}`
   const linkExpiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString() // 10 minutes
   const accessKeyExpiresAt = new Date(

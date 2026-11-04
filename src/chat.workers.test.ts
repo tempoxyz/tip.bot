@@ -8995,8 +8995,8 @@ async function getLatestConnectToken(options: { channelId?: string; threadTs?: s
         ts: options.threadTs,
       })
     : await slack.conversations.history({ channel: options.channelId ?? Constants.slack.channelId })
-  const message = history.messages?.find((message) => message.text?.includes('/connect/'))
-  const token = message?.text?.match(/\/connect\/([A-Za-z0-9_-]+)/)?.[1]
+  const message = history.messages?.find((message) => message.text?.includes('/api/account/link/'))
+  const token = message?.text?.match(/\/api\/account\/link\/([A-Za-z0-9_-]+)\/start/)?.[1]
   if (!token) throw new Error('Expected connection token in Slack message.')
   return token
 }

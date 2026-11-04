@@ -8,123 +8,11 @@ import { expect, test } from './fixture.ts'
 import { insertMember } from './members.ts'
 
 test('visitor opens an expired confirmation link', async ({ app, page }) => {
-  await page.goto(app.url({ params: { token: 'missing' }, to: '/confirm/$token' }))
+  await page.goto(app.url('/api/confirm/missing/start'))
 
+  await expect(page).toHaveURL(app.url({ params: { token: 'missing' }, to: '/confirm/$token' }))
   await expect(page.getByRole('heading', { name: 'Confirmation link expired' })).toBeVisible()
   await expect(page.getByText('Run `/tip` again in Slack.')).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Confirm payment' })).toBeHidden()
-})
-
-test('slack member opens valid confirmation link', async ({ app, page }) => {
-  const token = await Confirmation.encrypt(app.env, {
-    amount: 5_000_000,
-    chainId: Tempo.chainLookup.localnet,
-    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes
-    idempotencyKey: `confirm:${crypto.randomUUID()}`,
-    kind: 'reusable_access_key',
-    memo: 'lunch',
-    nonce: crypto.randomUUID(),
-    provider: 'slack',
-    providerChannelId: 'C000000001',
-    providerId: 'T000000001',
-    recipientProviderLabel: 'member',
-    recipientProviderUserId: 'U000000002',
-    senderProviderUserId: 'U000000001',
-    tokenAddress: Tempo.addressLookup.pathUsd,
-    workspaceId: crypto.randomUUID(),
-  })
-
-  await page.goto(app.url({ params: { token }, to: '/confirm/$token' }))
-
-  await expect(page.getByRole('heading', { name: 'Confirm payment' })).toBeVisible()
-  await expect(page.getByText('Approve this payment with Tempo ID.')).toBeVisible()
-  await expect(page.getByText('$5.00 PathUSD')).toBeVisible()
-  await expect(page.getByText('@member')).toBeVisible()
-  await expect(page.getByText('lunch')).toBeVisible()
-  await expect(page.getByText('Tipbot can send future PathUSD tips from Slack')).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Confirm payment' })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Cancel' })).toBeVisible()
-})
-
-test('slack member opens valid multi-recipient confirmation link', async ({ app, page }) => {
-  const token = await Confirmation.encrypt(app.env, {
-    accessKeyExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
-    accessKeyLimit: '3000000',
-    amount: 1_500_000,
-    chainId: Tempo.chainLookup.localnet,
-    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes
-    idempotencyKey: `confirm:${crypto.randomUUID()}`,
-    kind: 'reusable_access_key',
-    memo: 'team lunch',
-    nonce: crypto.randomUUID(),
-    provider: 'slack',
-    providerChannelId: 'C000000001',
-    providerId: 'T000000001',
-    recipientProviderLabel: 'foo',
-    recipientProviderUserId: 'U000000002',
-    recipients: [
-      { recipientProviderLabel: 'foo', recipientProviderUserId: 'U000000002' },
-      { recipientProviderLabel: 'bar', recipientProviderUserId: 'U000000003' },
-    ],
-    senderProviderUserId: 'U000000001',
-    tokenAddress: Tempo.addressLookup.pathUsd,
-    workspaceId: crypto.randomUUID(),
-  })
-
-  await page.goto(app.url({ params: { token }, to: '/confirm/$token' }))
-
-  await expect(page.getByRole('heading', { name: 'Confirm payment' })).toBeVisible()
-  await expect(page.getByText('$1.50 PathUSD each')).toBeVisible()
-  await expect(page.getByText('Total')).toBeVisible()
-  await expect(page.getByText('$3.00 PathUSD')).toBeVisible()
-  await expect(page.getByText('@foo')).toBeVisible()
-  await expect(page.getByText('@bar')).toBeVisible()
-  await expect(page.getByText('team lunch')).toBeVisible()
-})
-
-test('slack member opens group confirmation link with skipped recipients', async ({
-  app,
-  page,
-}) => {
-  const token = await Confirmation.encrypt(app.env, {
-    accessKeyExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
-    accessKeyLimit: '3000000',
-    amount: 1_000,
-    chainId: Tempo.chainLookup.localnet,
-    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes
-    groupLabel: 'engineering',
-    idempotencyKey: `confirm:${crypto.randomUUID()}`,
-    kind: 'reusable_access_key',
-    memo: 'coffee',
-    nonce: crypto.randomUUID(),
-    provider: 'slack',
-    providerChannelId: 'C000000001',
-    providerId: 'T000000001',
-    recipientProviderLabel: 'foo',
-    recipientProviderUserId: 'U000000002',
-    recipients: [
-      { recipientProviderLabel: 'foo', recipientProviderUserId: 'U000000002' },
-      { recipientProviderLabel: 'bar', recipientProviderUserId: 'U000000003' },
-    ],
-    senderProviderUserId: 'U000000001',
-    skippedRecipients: [
-      { reason: 'not_connected', recipientProviderLabel: 'boo', recipientProviderUserId: 'UBOO' },
-      { reason: 'you', recipientProviderLabel: 'joshie', recipientProviderUserId: 'UJOSHIE' },
-    ],
-    tokenAddress: Tempo.addressLookup.pathUsd,
-    workspaceId: crypto.randomUUID(),
-  })
-
-  await page.goto(app.url({ params: { token }, to: '/confirm/$token' }))
-
-  await expect(page.getByText('Group')).toBeVisible()
-  await expect(page.getByText('@engineering')).toBeVisible()
-  await expect(page.getByText('Skipped')).toBeVisible()
-  await expect(page.getByText('@boo (not connected yet)')).toBeVisible()
-  await expect(page.getByText('@joshie (you)')).toBeVisible()
-  await expect(page.getByText('$0.001 PathUSD each')).toBeVisible()
-  await expect(page.getByText('$0.002 PathUSD')).toBeVisible()
-  await expect(page.getByText('coffee')).toBeVisible()
 })
 
 for (const kind of ['onetime_payment', 'reusable_access_key'] as const)
@@ -166,8 +54,7 @@ for (const kind of ['onetime_payment', 'reusable_access_key'] as const)
 
     // The sender connects a Tempo Account, which then holds funds on the local chain.
     await app.tempoId.signIn(page)
-    await page.goto(app.url({ params: { token: linkToken }, to: '/connect/$token' }))
-    await page.getByRole('link', { name: 'Connect' }).click()
+    await page.goto(app.url(`/api/account/link/${linkToken}/start`))
     await app.tempoId.approve(page)
     await expect(page.getByRole('heading', { name: 'Connected to Tipbot' })).toBeVisible()
     const senderAccount = await db
@@ -201,8 +88,7 @@ for (const kind of ['onetime_payment', 'reusable_access_key'] as const)
       workspaceId: workspace.id,
     })
 
-    await page.goto(app.url({ params: { token }, to: '/confirm/$token' }))
-    await page.getByRole('link', { name: 'Confirm payment' }).click()
+    await page.goto(app.url(`/api/confirm/${token}/start`))
     await expect(
       page.getByText(kind === 'onetime_payment' ? 'Spend $1' : 'Spend $10 per day'),
     ).toBeVisible()

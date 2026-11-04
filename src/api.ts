@@ -66,7 +66,12 @@ export const api = new Hono<AppEnv>()
         keyAuthorization: key.keyAuthorization,
         token: intent.token,
       })
-      return c.redirect(await getResultUrl(`/confirm/${intent.token}`, response), 302)
+      // The receipt link names the payment's chain, which the result page cannot read.
+      const chainId = await Tip.getConfirmationData(c.env, intent.token)
+        .then((data) => data.payload.chainId)
+        .catch(() => undefined)
+      const resultUrl = await getResultUrl(`/confirm/${intent.token}`, response)
+      return c.redirect(chainId ? `${resultUrl}&chain=${chainId}` : resultUrl, 302)
     }
 
     // An X link verifies the key authorization against the access key that its challenge names.
@@ -160,8 +165,10 @@ export const api = new Hono<AppEnv>()
     return c.redirect(await getResultUrl(`/connect/${c.req.param('token')}`, response), 303)
   })
   .get('/api/confirm/:token/start', async (c) => {
+    // An expired or invalid link shows the page's expired state.
+    const data = await Tip.getConfirmationData(c.env, c.req.param('token')).catch(() => undefined)
+    if (!data) return c.redirect(`/confirm/${c.req.param('token')}`, 302)
     try {
-      const data = await Tip.getConfirmationData(c.env, c.req.param('token'))
       const payload = data.payload
       const accessKey = await (async () => {
         if (payload.kind === 'reusable_access_key')
