@@ -6,9 +6,11 @@ import * as Chat from '#/chat.ts'
 import { closeExpired } from '#/crons/close.ts'
 import entryServer from '#/entry-server.ts'
 import * as Nanoid from '#/lib/nanoid.ts'
+import * as Slack from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
 import * as Tip from '#/lib/tip.ts'
 import { processPendingTipMessage } from '#/queues/pendingTip.ts'
+import { processSlackReactionMessage } from '#/queues/slackReaction.ts'
 import { WebClient } from '@slack/web-api'
 import {
   createExecutionContext,
@@ -5745,6 +5747,171 @@ test('reaction tipping ignores duplicate signed Slack event deliveries', async (
   expect(tips).toHaveLength(1)
 })
 
+test('reaction tipping resumes an orphaned marker with its stored idempotency key', async () => {
+  const connected = await connectTipAccounts()
+  if (!connected.recipientMember) throw new Error('Expected connected recipient.')
+  const channelId = await createSlackTestChannel('rt')
+  const message = await memberSlack.chat.postMessage({
+    channel: channelId,
+    text: 'resume orphaned reaction tip',
+  })
+  if (!message.ts) throw new Error('Expected Slack message timestamp.')
+  const storedIdempotencyKey = `${Chat.reactionTipIdempotencyPrefix}stored-${Nanoid.generate()}`
+  await factory.reaction_tip.insert({
+    channel_id: channelId,
+    idempotency_key: storedIdempotencyKey,
+    message_ts: message.ts,
+    reaction: 'money_with_wings',
+    recipient_member_id: connected.recipientMember.id,
+    sender_member_id: connected.senderMember.id,
+    thread_ts: message.ts,
+    tip_id: null,
+    workspace_id: connected.workspace.id,
+  })
+
+  const response = await postSlackReaction({
+    channelId,
+    eventTs: `${message.ts}-new-reaction`,
+    messageTs: message.ts,
+    reaction: 'money_with_wings',
+    userId: Constants.slack.adminUserId,
+  })
+  const reactionTip = await db
+    .selectFrom('reaction_tip')
+    .select(['idempotency_key', 'tip_id'])
+    .where('workspace_id', '=', connected.workspace.id)
+    .where('channel_id', '=', channelId)
+    .where('message_ts', '=', message.ts)
+    .executeTakeFirstOrThrow()
+  const tips = await db
+    .selectFrom('tip')
+    .select(['confirmed_at', 'idempotency_key'])
+    .where('workspace_id', '=', connected.workspace.id)
+    .where('idempotency_key', '=', storedIdempotencyKey)
+    .execute()
+
+  expect(response.status).toBe(200)
+  expect(reactionTip).toEqual({ idempotency_key: storedIdempotencyKey, tip_id: expect.any(String) })
+  expect(tips).toEqual([
+    { confirmed_at: expect.any(String), idempotency_key: storedIdempotencyKey },
+  ])
+})
+
+test('reaction queue delays retry and preserves a pending marker', async () => {
+  const connected = await connectTipAccounts()
+  if (!connected.recipientMember) throw new Error('Expected connected recipient.')
+  const channelId = await createSlackTestChannel('rt')
+  const message = await memberSlack.chat.postMessage({
+    channel: channelId,
+    text: 'retry pending reaction tip',
+  })
+  if (!message.ts) throw new Error('Expected Slack message timestamp.')
+  const storedIdempotencyKey = `${Chat.reactionTipIdempotencyPrefix}pending-${Nanoid.generate()}`
+  const reactionTip = await factory.reaction_tip.insert({
+    channel_id: channelId,
+    idempotency_key: storedIdempotencyKey,
+    message_ts: message.ts,
+    reaction: 'money_with_wings',
+    recipient_member_id: connected.recipientMember.id,
+    sender_member_id: connected.senderMember.id,
+    thread_ts: message.ts,
+    tip_id: null,
+    workspace_id: connected.workspace.id,
+  })
+  await factory.tip_batch.insert({
+    amount_each: 1000,
+    idempotency_key: storedIdempotencyKey,
+    provider: 'slack',
+    provider_channel_id: channelId,
+    provider_id: providerId,
+    recipient_count: 1,
+    sender_member_id: connected.senderMember.id,
+    source: 'reaction',
+    status: 'pending',
+    token_address: Tempo.addressLookup.pathUsd,
+    total_amount: 1000,
+    workspace_id: connected.workspace.id,
+  })
+  const batch = createMessageBatch<processSlackReactionMessage.Body>(
+    processSlackReactionMessage.queueName,
+    [
+      {
+        attempts: 1,
+        body: {
+          event_ts: `${message.ts}-new-reaction`,
+          item: { channel: channelId, ts: message.ts, type: 'message' },
+          item_user: Constants.slack.memberUserId,
+          reaction: 'money_with_wings',
+          team_id: providerId,
+          type: 'reaction_added',
+          user: Constants.slack.adminUserId,
+        },
+        id: crypto.randomUUID(),
+        timestamp: new Date(),
+      },
+    ],
+  )
+  const ackSpy = vi.spyOn(batch.messages[0]!, 'ack')
+  const retrySpy = vi.spyOn(batch.messages[0]!, 'retry')
+  vi.spyOn(console, 'error').mockImplementation(() => {})
+
+  await entryServer.queue?.(batch, env)
+
+  expect(ackSpy).not.toHaveBeenCalled()
+  expect(retrySpy).toHaveBeenCalledWith({ delaySeconds: 45 })
+  await expect(
+    db
+      .selectFrom('reaction_tip')
+      .select(['id', 'tip_id'])
+      .where('id', '=', reactionTip.id)
+      .executeTakeFirstOrThrow(),
+  ).resolves.toEqual({ id: reactionTip.id, tip_id: null })
+})
+
+test('reaction queue retries unexpected payment errors without deleting its marker', async () => {
+  const connected = await connectTipAccounts()
+  const channelId = await createSlackTestChannel('rt')
+  const message = await memberSlack.chat.postMessage({
+    channel: channelId,
+    text: 'retry failed reaction processing',
+  })
+  if (!message.ts) throw new Error('Expected Slack message timestamp.')
+  vi.spyOn(Tip, 'handleTipBatchRequest').mockRejectedValueOnce(new Error('D1 unavailable'))
+  const batch = createMessageBatch<processSlackReactionMessage.Body>(
+    processSlackReactionMessage.queueName,
+    [
+      {
+        attempts: 1,
+        body: {
+          event_ts: `${message.ts}-reaction`,
+          item: { channel: channelId, ts: message.ts, type: 'message' },
+          item_user: Constants.slack.memberUserId,
+          reaction: 'money_with_wings',
+          team_id: providerId,
+          type: 'reaction_added',
+          user: Constants.slack.adminUserId,
+        },
+        id: crypto.randomUUID(),
+        timestamp: new Date(),
+      },
+    ],
+  )
+  const ackSpy = vi.spyOn(batch.messages[0]!, 'ack')
+  const retrySpy = vi.spyOn(batch.messages[0]!, 'retry')
+  vi.spyOn(console, 'error').mockImplementation(() => {})
+
+  await entryServer.queue?.(batch, env)
+  const reactionTips = await db
+    .selectFrom('reaction_tip')
+    .select(['tip_id', 'workspace_id'])
+    .where('workspace_id', '=', connected.workspace.id)
+    .execute()
+
+  expect(ackSpy).not.toHaveBeenCalled()
+  expect(retrySpy).toHaveBeenCalledWith({})
+  expect(reactionTips).toEqual([{ tip_id: null, workspace_id: connected.workspace.id }])
+})
+
 test('reaction tipping reports unconnected sender', async () => {
   const fetchSpy = vi.spyOn(globalThis, 'fetch')
   await connectTipAccounts()
@@ -6345,7 +6512,8 @@ test('reaction tipping reports approval required', async () => {
     .execute()
 
   expect(response.status).toBe(200)
-  expect(reactionTips).toHaveLength(0)
+  expect(reactionTips).toHaveLength(1)
+  expect(reactionTips[0]).toMatchObject({ tip_id: null })
   expect(tips).toHaveLength(0)
   await expectSlackPostEphemeralCall(fetchSpy, 'Tipbot needs your approval to send this payment.')
   await expectSlackPostEphemeralCall(fetchSpy, '"action_id":"confirm_cancel"')
@@ -9141,6 +9309,10 @@ async function postSlackReaction(options: {
   teamId?: string
   userId: string
 }) {
+  const send = vi.spyOn(env.SLACK_REACTION_QUEUE, 'send').mockImplementation(async (reaction) => {
+    await processSlackReactionMessage({ body: reaction } as Message<Slack.ReactionEvent>)
+    return { metadata: { metrics: { backlogBytes: 0, backlogCount: 0 } } }
+  })
   const body = JSON.stringify({
     ...(options.authorizations ? { authorizations: options.authorizations } : {}),
     event: {
@@ -9169,6 +9341,7 @@ async function postSlackReaction(options: {
       init: { body },
     },
   )
+  send.mockRestore()
   await drainWaitUntil()
   return response
 }

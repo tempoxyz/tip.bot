@@ -279,86 +279,6 @@ export function getChat() {
       },
     })
   })
-  bot.onReaction(async (event) => {
-    if (event.adapter !== getSlack()) throw new Error('Provider not implemented yet.')
-
-    const reaction = z.parse(Slack.reactionEventSchema, event.raw)
-    if (reaction.type !== 'reaction_added') return
-    if (reaction.item.type !== 'message') return
-    if (reaction.item.channel.startsWith('D')) return
-
-    const context = await (async () => {
-      const db = DB.create(env.DB)
-      const existingReceiptWorkspace = isReceiptBoostReaction(reaction.reaction)
-        ? await db
-            .selectFrom('tip_receipt_message')
-            .innerJoin('workspace', 'workspace.id', 'tip_receipt_message.workspace_id')
-            .select([
-              'workspace.chain_id',
-              'workspace.created_at',
-              'workspace.default_amount',
-              'workspace.default_token_address',
-              'workspace.id',
-              'workspace.installed_at',
-              'workspace.name',
-              'workspace.provider',
-              'workspace.provider_id',
-              'workspace.uninstalled_at',
-              'workspace.updated_at',
-            ])
-            .where('tip_receipt_message.channel_id', '=', reaction.item.channel)
-            .where('tip_receipt_message.message_ts', '=', reaction.item.ts)
-            .executeTakeFirst()
-        : null
-      const providerId =
-        existingReceiptWorkspace?.provider_id ??
-        reaction.authorizations?.find((authorization) => authorization.team_id)?.team_id ??
-        reaction.team_id
-      const workspace = await db
-        .selectFrom('workspace')
-        .select([
-          'workspace.chain_id',
-          'workspace.created_at',
-          'workspace.default_amount',
-          'workspace.default_token_address',
-          'workspace.id',
-          'workspace.installed_at',
-          'workspace.name',
-          'workspace.provider',
-          'workspace.provider_id',
-          'workspace.uninstalled_at',
-          'workspace.updated_at',
-        ])
-        .where('workspace.provider', '=', 'slack')
-        .where('workspace.provider_id', '=', providerId)
-        .executeTakeFirst()
-      if (!workspace) return
-      const reactionTipConfigs = await db
-        .selectFrom('reaction_tip_config')
-        .select(['amount', 'emoji'])
-        .where('workspace_id', '=', workspace.id)
-        .execute()
-      const reactionTipConfig = (
-        reactionTipConfigs.length ? reactionTipConfigs : Tip.defaultReactionTipConfigs
-      ).find((config) => config.emoji === reaction.reaction)
-      if (!reactionTipConfig && !isReceiptBoostReaction(reaction.reaction)) return
-      return {
-        db,
-        provider: { id: providerId, type: 'slack' },
-        ...(reactionTipConfig
-          ? {
-              reactionTipConfig: {
-                amount: reactionTipConfig.amount,
-                emoji: reactionTipConfig.emoji,
-              },
-            }
-          : {}),
-        workspace,
-      } satisfies ReactionHandlerContext
-    })()
-    if (!context) return
-    await handleSlackReactionTip(reaction, context)
-  })
   bot.onSlashCommand(getSlackCommand(env.HOST), async (event) => {
     if (event.adapter !== getSlack()) throw new Error('Provider not implemented yet.')
 
@@ -3094,6 +3014,51 @@ async function resolveSlackConnectRecipient(
   }
 }
 
+export async function processSlackReaction(reaction: Slack.ReactionEvent) {
+  if (reaction.type !== 'reaction_added') return
+  if (reaction.item.type !== 'message') return
+  if (reaction.item.channel.startsWith('D')) return
+
+  const db = DB.create(env.DB)
+  const existingReceiptWorkspace = isReceiptBoostReaction(reaction.reaction)
+    ? await db
+        .selectFrom('tip_receipt_message')
+        .innerJoin('workspace', 'workspace.id', 'tip_receipt_message.workspace_id')
+        .selectAll('workspace')
+        .where('tip_receipt_message.channel_id', '=', reaction.item.channel)
+        .where('tip_receipt_message.message_ts', '=', reaction.item.ts)
+        .executeTakeFirst()
+    : null
+  const providerId =
+    existingReceiptWorkspace?.provider_id ??
+    reaction.authorizations?.find((authorization) => authorization.team_id)?.team_id ??
+    reaction.team_id
+  const workspace = await db
+    .selectFrom('workspace')
+    .selectAll()
+    .where('provider', '=', 'slack')
+    .where('provider_id', '=', providerId)
+    .executeTakeFirst()
+  if (!workspace) return
+  const reactionTipConfigs = await db
+    .selectFrom('reaction_tip_config')
+    .select(['amount', 'emoji'])
+    .where('workspace_id', '=', workspace.id)
+    .execute()
+  const reactionTipConfig = (
+    reactionTipConfigs.length ? reactionTipConfigs : Tip.defaultReactionTipConfigs
+  ).find((config) => config.emoji === reaction.reaction)
+  if (!reactionTipConfig && !isReceiptBoostReaction(reaction.reaction)) return
+  await handleSlackReactionTip(reaction, {
+    db,
+    provider: { id: providerId, type: 'slack' },
+    ...(reactionTipConfig ? { reactionTipConfig } : {}),
+    workspace,
+  })
+}
+
+export class RetrySlackReactionError extends Error {}
+
 async function handleSlackReactionTip(event: Slack.ReactionEvent, context: ReactionHandlerContext) {
   const { db, provider, reactionTipConfig } = context
   let workspace = context.workspace
@@ -3492,14 +3457,7 @@ async function handleSlackReactionTip(event: Slack.ReactionEvent, context: React
       source: 'reaction',
       tokenAddress: rows[0].token_address,
       workspaceProviderId: rows[0].receipt_provider_id,
-    }).catch(
-      (error) =>
-        ({
-          code: 'failed',
-          message: error instanceof Error ? error.message : 'Boost failed.',
-          ok: false,
-        }) satisfies Tip.TipBatchResult,
-    )
+    })
 
     if (result.ok) {
       if (result.status === 'sent') {
@@ -3554,6 +3512,7 @@ async function handleSlackReactionTip(event: Slack.ReactionEvent, context: React
       return
     }
 
+    if (result.code === 'pending') throw new RetrySlackReactionError('Boost still sending.')
     await postSlackEphemeral(
       provider.id,
       event.item.channel,
@@ -3561,7 +3520,6 @@ async function handleSlackReactionTip(event: Slack.ReactionEvent, context: React
       (() => {
         if (result.code === 'insufficient_funds')
           return 'Boost not sent. Your wallet has insufficient funds.'
-        if (result.code === 'pending') return 'Boost still sending.'
         if (result.code === 'recipient_unconnected')
           return 'Boost not sent. A recipient needs to connect Tipbot before receiving payments.'
         if (result.code === 'self_tip') return 'Boost not sent. Cannot send a payment to yourself.'
@@ -3634,7 +3592,7 @@ async function handleSlackReactionTip(event: Slack.ReactionEvent, context: React
   const recipient = resolvedRecipient.value
     ? await getConnectedSlackRecipient(db, provider.type, workspace, resolvedRecipient.value)
     : null
-  const idempotencyKey = [
+  let idempotencyKey = [
     reactionTipIdempotencyPrefix,
     workspace.id,
     event.item.channel,
@@ -3661,14 +3619,7 @@ async function handleSlackReactionTip(event: Slack.ReactionEvent, context: React
       settingsProviderId: provider.id,
       source: 'reaction',
       workspaceProviderId: workspace.provider_id,
-    }).catch(
-      (error) =>
-        ({
-          code: 'failed',
-          message: error instanceof Error ? error.message : 'Reaction tip failed.',
-          ok: false,
-        }) satisfies Tip.TipResult,
-    )
+    })
     if (result.ok && result.status === 'queued') {
       const messageTs = await postSlackQueuedTipMessage(
         { db, provider, text: '', threadTs: message.thread_ts ?? event.item.ts },
@@ -3695,42 +3646,52 @@ async function handleSlackReactionTip(event: Slack.ReactionEvent, context: React
 
   const existing = await db
     .selectFrom('reaction_tip')
-    .select('id')
+    .select(['id', 'idempotency_key', 'tip_id'])
     .where('workspace_id', '=', workspace.id)
     .where('channel_id', '=', event.item.channel)
     .where('message_ts', '=', event.item.ts)
     .where('reaction', '=', event.reaction)
     .where('sender_member_id', '=', sender.memberId)
     .executeTakeFirst()
-  if (existing) return
+  if (existing?.tip_id) {
+    await updateReactionTipAggregate(provider.id, {
+      channelId: event.item.channel,
+      threadTs: message.thread_ts ?? event.item.ts,
+      workspaceId: workspace.id,
+    })
+    return
+  }
+  if (existing) idempotencyKey = existing.idempotency_key
 
-  const inserted = await (async () => {
-    const now = new Date().toISOString()
-    try {
-      await db
-        .insertInto('reaction_tip')
-        .values({
-          channel_id: event.item.channel,
-          created_at: now,
-          id: Nanoid.generate(),
-          idempotency_key: idempotencyKey,
-          message_ts: event.item.ts,
-          reaction: event.reaction,
-          recipient_member_id: recipient.memberId,
-          sender_member_id: sender.memberId,
-          thread_ts: message.thread_ts ?? event.item.ts,
-          tip_id: null,
-          updated_at: now,
-          workspace_id: workspace.id,
-        })
-        .execute()
-      return true
-    } catch (error) {
-      if (isUniqueConstraintError(error)) return false
-      throw error
-    }
-  })()
-  if (!inserted) return
+  const inserted = existing
+    ? true
+    : await (async () => {
+        const now = new Date().toISOString()
+        try {
+          await db
+            .insertInto('reaction_tip')
+            .values({
+              channel_id: event.item.channel,
+              created_at: now,
+              id: Nanoid.generate(),
+              idempotency_key: idempotencyKey,
+              message_ts: event.item.ts,
+              reaction: event.reaction,
+              recipient_member_id: recipient.memberId,
+              sender_member_id: sender.memberId,
+              thread_ts: message.thread_ts ?? event.item.ts,
+              tip_id: null,
+              updated_at: now,
+              workspace_id: workspace.id,
+            })
+            .execute()
+          return true
+        } catch (error) {
+          if (isUniqueConstraintError(error)) return false
+          throw error
+        }
+      })()
+  if (!inserted) throw new RetrySlackReactionError('Reaction marker insert raced.')
 
   const result = await Tip.handleTipBatchRequest(env, {
     amount: reactionTipConfig.amount,
@@ -3744,14 +3705,7 @@ async function handleSlackReactionTip(event: Slack.ReactionEvent, context: React
     settingsProviderId: provider.id,
     source: 'reaction',
     workspaceProviderId: workspace.provider_id,
-  }).catch(
-    (error) =>
-      ({
-        code: 'failed',
-        message: error instanceof Error ? error.message : 'Reaction tip failed.',
-        ok: false,
-      }) satisfies Tip.TipResult,
-  )
+  })
 
   if (result.ok) {
     const tip = await db
@@ -3759,7 +3713,7 @@ async function handleSlackReactionTip(event: Slack.ReactionEvent, context: React
       .select('id')
       .where('idempotency_key', '=', idempotencyKey)
       .executeTakeFirst()
-    if (!tip) return
+    if (!tip) throw new RetrySlackReactionError('Reaction payment has no tip yet.')
 
     await db
       .updateTable('reaction_tip')
@@ -3770,8 +3724,6 @@ async function handleSlackReactionTip(event: Slack.ReactionEvent, context: React
       channelId: event.item.channel,
       threadTs: message.thread_ts ?? event.item.ts,
       workspaceId: workspace.id,
-    }).catch((error) => {
-      console.error('Failed to update Slack reaction tip aggregate:', error)
     })
     return
   }
@@ -3811,6 +3763,7 @@ async function handleSlackReactionTip(event: Slack.ReactionEvent, context: React
     return
   }
 
+  if (result.code === 'pending') throw new RetrySlackReactionError('Payment still sending.')
   await db.deleteFrom('reaction_tip').where('idempotency_key', '=', idempotencyKey).execute()
   await postSlackEphemeral(
     provider.id,
@@ -3819,7 +3772,6 @@ async function handleSlackReactionTip(event: Slack.ReactionEvent, context: React
     (() => {
       if (result.code === 'insufficient_funds')
         return 'Payment not sent. Your wallet has insufficient funds. Add funds and try again.'
-      if (result.code === 'pending') return 'Payment still sending.'
       return 'Payment failed.'
     })(),
   )

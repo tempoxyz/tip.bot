@@ -33,7 +33,10 @@
     ],
   },
   "queues": {
-    "producers": [{ "binding": "PENDING_TIP_QUEUE", "queue": "tipbot-pending-tip" }],
+    "producers": [
+      { "binding": "PENDING_TIP_QUEUE", "queue": "tipbot-pending-tip" },
+      { "binding": "SLACK_REACTION_QUEUE", "queue": "tipbot-slack-reaction" },
+    ],
     "consumers": [
       {
         "queue": "tipbot-pending-tip",
@@ -41,6 +44,14 @@
         "max_batch_timeout": 5,
         "max_retries": 3,
         "dead_letter_queue": "tipbot-pending-tip-dlq",
+      },
+      {
+        "queue": "tipbot-slack-reaction",
+        "max_batch_size": 1,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "retry_delay": 30, // 30 seconds
+        "dead_letter_queue": "tipbot-slack-reaction-dlq",
       },
     ],
   },
@@ -120,6 +131,7 @@
       "queues": {
         "producers": [
           { "binding": "PENDING_TIP_QUEUE", "queue": "tipbot-pending-tip-__PREVIEW_APEX__" },
+          { "binding": "SLACK_REACTION_QUEUE", "queue": "tipbot-slack-reaction-__PREVIEW_APEX__" },
         ],
         "consumers": [
           {
@@ -128,6 +140,14 @@
             "max_batch_timeout": 5,
             "max_retries": 3,
             "dead_letter_queue": "tipbot-pending-tip-__PREVIEW_APEX__-dlq",
+          },
+          {
+            "queue": "tipbot-slack-reaction-__PREVIEW_APEX__",
+            "max_batch_size": 1,
+            "max_batch_timeout": 5,
+            "max_retries": 3,
+            "retry_delay": 30, // 30 seconds
+            "dead_letter_queue": "tipbot-slack-reaction-__PREVIEW_APEX__-dlq",
           },
         ],
       },
@@ -208,7 +228,10 @@
         "binding": "AI",
       },
       "queues": {
-        "producers": [{ "binding": "PENDING_TIP_QUEUE", "queue": "tipbot-pending-tip" }],
+        "producers": [
+          { "binding": "PENDING_TIP_QUEUE", "queue": "tipbot-pending-tip" },
+          { "binding": "SLACK_REACTION_QUEUE", "queue": "tipbot-slack-reaction" },
+        ],
         "consumers": [
           {
             "queue": "tipbot-pending-tip",
@@ -216,6 +239,14 @@
             "max_batch_timeout": 5,
             "max_retries": 3,
             "dead_letter_queue": "tipbot-pending-tip-dlq",
+          },
+          {
+            "queue": "tipbot-slack-reaction",
+            "max_batch_size": 1,
+            "max_batch_timeout": 5,
+            "max_retries": 3,
+            "retry_delay": 30, // 30 seconds
+            "dead_letter_queue": "tipbot-slack-reaction-dlq",
           },
         ],
       },
