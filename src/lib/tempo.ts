@@ -4,6 +4,7 @@ import { tempo, tempoLocalnet, tempoModerato } from 'viem/tempo/chains'
 export const addressLookup = {
   alphaUsd: Address.checksum('0x20c0000000000000000000000000000000000001'),
   betaUsd: Address.checksum('0x20c0000000000000000000000000000000000002'),
+  ousd: Address.checksum('0x20c0000000000000000000006a37DA5C996874BE'),
   pathUsd: Address.checksum('0x20c0000000000000000000000000000000000000'),
   thetaUsd: Address.checksum('0x20c0000000000000000000000000000000000003'),
   usdcE: Address.checksum('0x20C000000000000000000000b9537d11c60E8b50'),
@@ -21,6 +22,11 @@ export function getChain(chainId: number) {
   if (chainId === chainLookup.testnet) return tempoModerato
   if (chainId === chainLookup.localnet) return tempoLocalnet
   throw new Error(`Unsupported Tempo chain ${chainId}.`)
+}
+
+export function getDefaultTokenAddress(chainId: number) {
+  if (chainId === chainLookup.mainnet || chainId === chainLookup.testnet) return addressLookup.ousd
+  return addressLookup.pathUsd
 }
 
 export function getRpcUrl(
@@ -63,10 +69,21 @@ export function explorerLink(chainId: number, address: string) {
 export function isAllowedToken(chainId: number, tokenAddress: string) {
   const token = Address.checksum(tokenAddress)
   if (chainId === chainLookup.mainnet)
-    return [addressLookup.pathUsd, addressLookup.usdcE, addressLookup.usdt0].some((allowed) =>
-      Address.isEqual(token, allowed),
-    )
-  if (chainId === chainLookup.testnet || chainId === chainLookup.localnet)
+    return [
+      addressLookup.ousd,
+      addressLookup.pathUsd,
+      addressLookup.usdcE,
+      addressLookup.usdt0,
+    ].some((allowed) => Address.isEqual(token, allowed))
+  if (chainId === chainLookup.testnet)
+    return [
+      addressLookup.ousd,
+      addressLookup.pathUsd,
+      addressLookup.alphaUsd,
+      addressLookup.betaUsd,
+      addressLookup.thetaUsd,
+    ].some((allowed) => Address.isEqual(token, allowed))
+  if (chainId === chainLookup.localnet)
     return [
       addressLookup.pathUsd,
       addressLookup.alphaUsd,
@@ -76,14 +93,22 @@ export function isAllowedToken(chainId: number, tokenAddress: string) {
   return false
 }
 
-export function getTokenAddress(chainId: number, value: string) {
+export function getTokenAddress(
+  chainId: number,
+  value: string,
+  defaultTokenAddress?: string | null,
+) {
   const address = Address.validate(value) ? Address.checksum(value) : null
   if (address && isAllowedToken(chainId, address)) return address
 
   const normalized = value.toLowerCase().replace(/[.\-_\s]/g, '')
   const tokenAddress = (() => {
-    if (normalized === 'pathusd' || normalized === 'path' || normalized === 'usd')
-      return addressLookup.pathUsd
+    if (normalized === 'ousd' || normalized === 'openusd') return addressLookup.ousd
+    if (normalized === 'pathusd' || normalized === 'path') return addressLookup.pathUsd
+    if (normalized === 'usd')
+      return defaultTokenAddress
+        ? Address.checksum(defaultTokenAddress)
+        : getDefaultTokenAddress(chainId)
     if (normalized === 'usdce' || normalized === 'usdc') return addressLookup.usdcE
     if (normalized === 'usdt0' || normalized === 'usdt') return addressLookup.usdt0
     if (normalized === 'alphausd' || normalized === 'alpha') return addressLookup.alphaUsd
@@ -96,6 +121,8 @@ export function getTokenAddress(chainId: number, value: string) {
 }
 
 export function getTokenMetadataFallback(tokenAddress: string) {
+  if (Address.isEqual(Address.checksum(tokenAddress), addressLookup.ousd))
+    return { currency: 'USD', symbol: 'OUSD' }
   if (Address.isEqual(Address.checksum(tokenAddress), addressLookup.pathUsd))
     return { currency: 'USD', symbol: 'PathUSD' }
   if (Address.isEqual(Address.checksum(tokenAddress), addressLookup.alphaUsd))

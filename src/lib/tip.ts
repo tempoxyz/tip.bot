@@ -233,7 +233,9 @@ export async function handleTipRequest(
 
   const amount = input.amount ?? executionWorkspace.default_amount
   const tokenAddress = Address.checksum(
-    input.tokenAddress ?? executionWorkspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+    input.tokenAddress ??
+      executionWorkspace.default_token_address ??
+      Tempo.getDefaultTokenAddress(executionWorkspace.chain_id),
   )
   if (!Tempo.isAllowedToken(executionWorkspace.chain_id, tokenAddress))
     return {
@@ -431,7 +433,9 @@ export async function handleTipBatchRequest(
   if (!Number.isSafeInteger(authorizedTotalAmount) || authorizedTotalAmount <= 0)
     return { code: 'failed', message: 'Payment amount is too large.', ok: false }
   const tokenAddress = Address.checksum(
-    input.tokenAddress ?? executionWorkspace.default_token_address ?? Tempo.addressLookup.pathUsd,
+    input.tokenAddress ??
+      executionWorkspace.default_token_address ??
+      Tempo.getDefaultTokenAddress(executionWorkspace.chain_id),
   )
   if (!Tempo.isAllowedToken(executionWorkspace.chain_id, tokenAddress))
     return {
@@ -547,7 +551,10 @@ export async function handleTipBatchRequest(
       chainId: executionWorkspace.chain_id,
       isDefaultToken: Address.isEqual(
         Address.checksum(tokenAddress),
-        Address.checksum(executionWorkspace.default_token_address ?? Tempo.addressLookup.pathUsd),
+        Address.checksum(
+          executionWorkspace.default_token_address ??
+            Tempo.getDefaultTokenAddress(executionWorkspace.chain_id),
+        ),
       ),
       memo: input.memo,
       ok: true,
@@ -1373,7 +1380,10 @@ async function createPendingTip(
     chainId: input.workspace.chain_id,
     isDefaultToken: Address.isEqual(
       Address.checksum(input.tokenAddress),
-      Address.checksum(input.workspace.default_token_address ?? Tempo.addressLookup.pathUsd),
+      Address.checksum(
+        input.workspace.default_token_address ??
+          Tempo.getDefaultTokenAddress(input.workspace.chain_id),
+      ),
     ),
     memo: input.memo,
     ok: true,
@@ -1418,7 +1428,10 @@ async function createQueuedBatchTips(
         recipientProviderUserId: recipient.recipientProviderUserId,
         senderProviderUserId: input.senderProviderUserId,
       },
-      Address.checksum(input.workspace.default_token_address ?? Tempo.addressLookup.pathUsd),
+      Address.checksum(
+        input.workspace.default_token_address ??
+          Tempo.getDefaultTokenAddress(input.workspace.chain_id),
+      ),
     )
     const result =
       existing ??
@@ -1594,7 +1607,9 @@ async function getSentPendingTipResult(
     chainId: pendingTip.chain_id,
     isDefaultToken: Address.isEqual(
       Address.checksum(pendingTip.token_address),
-      Address.checksum(tip.default_token_address ?? Tempo.addressLookup.pathUsd),
+      Address.checksum(
+        tip.default_token_address ?? Tempo.getDefaultTokenAddress(pendingTip.chain_id),
+      ),
     ),
     memo: pendingTip.memo,
     ok: true,
@@ -2086,7 +2101,10 @@ async function submitTipBatch(
       feePayer,
       isDefaultToken: Address.isEqual(
         Address.checksum(input.tokenAddress),
-        Address.checksum(input.workspace.default_token_address ?? Tempo.addressLookup.pathUsd),
+        Address.checksum(
+          input.workspace.default_token_address ??
+            Tempo.getDefaultTokenAddress(input.workspace.chain_id),
+        ),
       ),
       memo: input.memo,
       ok: true,
@@ -2208,7 +2226,10 @@ async function submitSignedTipBatch(
       idempotencyKey: input.idempotencyKey,
       senderProviderUserId: input.payload.senderProviderUserId,
     },
-    Address.checksum(input.workspace.default_token_address ?? Tempo.addressLookup.pathUsd),
+    Address.checksum(
+      input.workspace.default_token_address ??
+        Tempo.getDefaultTokenAddress(input.workspace.chain_id),
+    ),
   )
   if (existing) return existing
 
@@ -2343,7 +2364,10 @@ async function submitSignedTipBatch(
       feePayer: 'sender',
       isDefaultToken: Address.isEqual(
         Address.checksum(input.tokenAddress),
-        Address.checksum(input.workspace.default_token_address ?? Tempo.addressLookup.pathUsd),
+        Address.checksum(
+          input.workspace.default_token_address ??
+            Tempo.getDefaultTokenAddress(input.workspace.chain_id),
+        ),
       ),
       memo: input.memo,
       ok: true,
@@ -2516,7 +2540,10 @@ async function submitSignedTip(
       feePayer: 'sender',
       isDefaultToken: Address.isEqual(
         Address.checksum(input.tokenAddress),
-        Address.checksum(input.workspace.default_token_address ?? Tempo.addressLookup.pathUsd),
+        Address.checksum(
+          input.workspace.default_token_address ??
+            Tempo.getDefaultTokenAddress(input.workspace.chain_id),
+        ),
       ),
       memo: input.memo,
       ok: true,
