@@ -2,13 +2,12 @@ import { createServerFn } from '@tanstack/react-start'
 import { getRequest } from '@tanstack/react-start/server'
 import { env } from 'cloudflare:workers'
 import { sql } from 'kysely'
-import { Address } from 'ox'
 import * as z from 'zod/mini'
 import * as Chat from '#/chat.ts'
 import { formatAmount, formatCurrencyAmount } from '#/lib/format.ts'
-import { auth } from '#/lib/auth.ts'
 import * as Slack from '#/lib/slack.ts'
 import * as Tempo from '#/lib/tempo.ts'
+import * as TempoId from '#/lib/tempoId.ts'
 import * as Twitter from '#/lib/twitter.ts'
 import * as DB from '#db/client.ts'
 
@@ -19,14 +18,14 @@ export const getDashboardData = createServerFn({ method: 'GET' }).handler(async 
 export const disconnectDashboardAccount = createServerFn({ method: 'POST' })
   .validator(z.object({ identityId: z.string().check(z.minLength(1)) }))
   .handler(async ({ data }) => {
-    const session = await auth.getSession(getRequest())
-    if (!session) throw new Error('Connect your wallet to manage connected accounts.')
+    const address = await TempoId.getAddress(env, getRequest())
+    if (!address) throw new Error('Sign in with Tempo ID to manage connected accounts.')
 
     const db = DB.create(env.DB)
     const account = await db
       .selectFrom('account')
       .selectAll()
-      .where('address', '=', Address.checksum(session.address))
+      .where('address', '=', address)
       .executeTakeFirst()
     if (!account) throw new Error('Wallet is not connected.')
 
@@ -55,10 +54,9 @@ export const disconnectDashboardAccount = createServerFn({ method: 'POST' })
   })
 
 async function loadDashboardData(request: Request) {
-  const session = await auth.getSession(request)
-  if (!session) return { ok: false as const }
+  const address = await TempoId.getAddress(env, request)
+  if (!address) return { ok: false as const }
 
-  const address = Address.checksum(session.address)
   const db = DB.create(env.DB)
   const account = await db
     .selectFrom('account')

@@ -1,41 +1,14 @@
-import { useMutation } from '@tanstack/react-query'
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import { getRequest } from '@tanstack/react-start/server'
-import { useConnect, useConnection, useConnectors } from 'wagmi'
 import * as z from 'zod/mini'
-import { WalletProviders } from '#/components/WalletProviders.tsx'
 import { slackBotDisplayName, tipbotImagePath } from '#/lib/app.ts'
 import IconLogosSlackIcon from '~icons/logos/slack-icon.jsx'
 import IconSimpleIconsX from '~icons/simple-icons/x.jsx'
 
 function Component() {
-  return (
-    <WalletProviders.Root auth="/api/auth">
-      <HomePanel />
-    </WalletProviders.Root>
-  )
-}
-
-function HomePanel() {
-  const connect = useConnect()
-  const connection = useConnection()
-  const connectors = useConnectors()
   const home = Route.useLoaderData()
-  const navigate = Route.useNavigate()
   const search = Route.useSearch()
-  const openDashboard = useMutation({
-    mutationFn: async () => {
-      const connector = connection.connector ?? connectors[0]
-      if (!connector) throw new Error('Tempo Wallet is unavailable.')
-      if (connection.status === 'connected') {
-        await authenticateConnectedWallet(connector)
-        return
-      }
-      await connect.mutateAsync({ capabilities: { auth: '/api/auth' }, connector } as never)
-    },
-    onSuccess: () => void navigate({ to: '/dash' }),
-  })
   return (
     <main className="relative min-h-screen bg-bg2 px-6 py-12 text-gray10">
       {home.dashboardAuthed ? (
@@ -46,14 +19,13 @@ function HomePanel() {
           Dashboard
         </Link>
       ) : (
-        <button
+        // The sign-in is a server redirect to Tempo ID, so it is a document navigation.
+        <a
           className="absolute top-6 end-6 text-sm font-bold text-gray8 transition hover:text-gray10 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue9"
-          disabled={openDashboard.isPending || connect.isPending}
-          onClick={() => openDashboard.mutate()}
-          type="button"
+          href="/api/auth/start"
         >
-          {openDashboard.isPending || connect.isPending ? 'Connecting' : 'Dashboard'}
-        </button>
+          Dashboard
+        </a>
       )}
       <section className="mx-auto flex max-w-5xl flex-col gap-16 lg:min-h-[calc(100vh-6rem)] lg:justify-center">
         <div className="mx-auto max-w-3xl space-y-4 text-center">
@@ -307,16 +279,7 @@ export const Route = createFileRoute('/')({
 })
 
 const getHomeData = createServerFn({ method: 'GET' }).handler(async () => {
-  const { auth } = await import('#/lib/auth.ts')
-  return { dashboardAuthed: Boolean(await auth.getSession(getRequest())) }
+  const { env } = await import('cloudflare:workers')
+  const TempoId = await import('#/lib/tempoId.ts')
+  return { dashboardAuthed: Boolean(await TempoId.getAddress(env, getRequest())) }
 })
-
-async function authenticateConnectedWallet(connector: ReturnType<typeof useConnectors>[number]) {
-  const provider = (await connector.getProvider()) as {
-    request: (parameters: { method: string; params: unknown[] }) => Promise<unknown>
-  }
-  await provider.request({
-    method: 'wallet_connect',
-    params: [{ capabilities: { auth: '/api/auth' } }],
-  })
-}

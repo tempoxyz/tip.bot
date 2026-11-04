@@ -12,6 +12,8 @@ permissions:
   contents: read
 
 env:
+  # Pinned Tempo ID image of the end-to-end suite, by the `tempoxyz/id` commit that built it.
+  ID_DEV_IMAGE: ghcr.io/tempoxyz/id-dev:cbdd6c0dbfbbf47930b90bf4f0e277e9425f1033
   # Pinned known-good Tempo Docker image. Supports tags or sha256 digests.
   VITE_TEMPO_IMAGE: sha256:80769b5615556fcdb9f158de0c699523613fb3901c2df3e58bc770dab106ead1
   WRANGLER_SEND_METRICS: false
@@ -139,9 +141,11 @@ jobs:
   e2e:
     name: E2E
     runs-on: ubuntu-latest
+    # The id-dev image is private to the organization, so the job reads it with its token.
     permissions:
       contents: read
       id-token: write
+      packages: read
     steps:
       - name: Secure runner
         uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
@@ -162,6 +166,11 @@ jobs:
           # shellcheck disable=SC2015
           (cd node_modules/better-sqlite3 && ./node_modules/.bin/prebuild-install || node-gyp rebuild --release)
           node -e "new (require('better-sqlite3'))(':memory:').close()"
+
+      - name: Log in to GHCR
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
 
       - name: Run E2E tests
         run: pnpm test:e2e

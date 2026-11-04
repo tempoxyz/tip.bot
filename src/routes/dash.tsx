@@ -2,8 +2,6 @@ import { Popover } from '@base-ui/react/popover'
 import { useMutation } from '@tanstack/react-query'
 import { Link, createFileRoute, redirect } from '@tanstack/react-router'
 import * as React from 'react'
-import { useDisconnect } from 'wagmi'
-import { WalletProviders } from '#/components/WalletProviders.tsx'
 import {
   disconnectDashboardAccount,
   getDashboardData,
@@ -15,27 +13,7 @@ import IconLogosSlackIcon from '~icons/logos/slack-icon.jsx'
 import IconSimpleIconsX from '~icons/simple-icons/x.jsx'
 
 function Component() {
-  return (
-    <WalletProviders.Root auth="/api/auth">
-      <DashboardPanel />
-    </WalletProviders.Root>
-  )
-}
-
-export const Route = createFileRoute('/dash')({
-  component: Component,
-  head: () => ({ meta: [{ title: 'Dashboard - Tipbot' }] }),
-  async loader() {
-    const dashboard = await getDashboardData()
-    if (!dashboard.ok) throw redirect({ to: '/' })
-    return dashboard
-  },
-})
-
-function DashboardPanel() {
   const loaderDashboard = Route.useLoaderData()
-  const disconnectWallet = useDisconnect()
-  const navigate = Route.useNavigate()
   const [dashboard, setDashboard] = React.useState(loaderDashboard)
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null)
   const disconnectAccount = useMutation({
@@ -60,9 +38,7 @@ function DashboardPanel() {
   })
   const error = disconnectAccount.error
     ? getErrorMessage(disconnectAccount.error, 'Could not disconnect account.')
-    : disconnectWallet.error
-      ? getErrorMessage(disconnectWallet.error, 'Could not sign out.')
-      : null
+    : null
 
   return (
     <main className="min-h-screen bg-bg2 px-6 py-10 text-gray10">
@@ -93,17 +69,15 @@ function DashboardPanel() {
                 {dashboard.walletAddress}
               </a>
             </div>
-            <button
-              className="inline-flex h-10 shrink-0 items-center justify-center rounded-lg border border-gray5 bg-bg1 px-4 text-sm font-bold text-gray10 shadow-sm transition hover:bg-gray1 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue9"
-              disabled={disconnectWallet.isPending}
-              onClick={() => {
-                setStatusMessage(null)
-                void disconnectWallet.disconnectAsync().finally(() => void navigate({ to: '/' }))
-              }}
-              type="button"
-            >
-              {disconnectWallet.isPending ? 'Signing out' : 'Sign out'}
-            </button>
+            {/* Sign-out revokes the Tempo ID session on the server, then returns home. */}
+            <form action="/api/auth/logout" method="post">
+              <button
+                className="inline-flex h-10 shrink-0 items-center justify-center rounded-lg border border-gray5 bg-bg1 px-4 text-sm font-bold text-gray10 shadow-sm transition hover:bg-gray1 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue9"
+                type="submit"
+              >
+                Sign out
+              </button>
+            </form>
           </div>
         ) : null}
         <section className="grid gap-4 sm:grid-cols-2">
@@ -162,6 +136,16 @@ function DashboardPanel() {
     </main>
   )
 }
+
+export const Route = createFileRoute('/dash')({
+  component: Component,
+  head: () => ({ meta: [{ title: 'Dashboard - Tipbot' }] }),
+  async loader() {
+    const dashboard = await getDashboardData()
+    if (!dashboard.ok) throw redirect({ to: '/' })
+    return dashboard
+  },
+})
 
 function AccountSection(props: {
   accounts: DashboardAccount[]

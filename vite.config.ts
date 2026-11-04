@@ -46,9 +46,6 @@ export default defineConfig({
           return 'development'
         })()
         return {
-          __PLAYWRIGHT_ACCOUNT_PRIVATE_KEY__: JSON.stringify(
-            process.env.PLAYWRIGHT ? process.env.PLAYWRIGHT_ACCOUNT_PRIVATE_KEY : undefined,
-          ),
           __ENV__: JSON.stringify(environment),
           __HOST__: JSON.stringify(host),
           __ORIGIN__: process.env.PLAYWRIGHT
@@ -98,11 +95,18 @@ export default defineConfig({
                   })() ?? config.vars?.HOST),
               ...(process.env.PLAYWRIGHT
                 ? {
+                    FEE_PAYER_PRIVATE_KEY_TESTNET: process.env.FEE_PAYER_PRIVATE_KEY_TESTNET ?? '',
+                    RPC_URL_TESTNET: process.env.RPC_URL_TESTNET ?? '',
                     SECRET_KEY: process.env.SECRET_KEY ?? '',
                     SLACK_CLIENT_ID: process.env.SLACK_CLIENT_ID ?? '',
                     SLACK_CLIENT_SECRET: process.env.SLACK_CLIENT_SECRET ?? '',
                     SLACK_SIGNING_SECRET: process.env.SLACK_SIGNING_SECRET ?? '',
                     TEMPO_API_KEY: process.env.TEMPO_API_KEY ?? '',
+                    TEMPO_ID_CLIENT_ID: process.env.TEMPO_ID_CLIENT_ID ?? '',
+                    TEMPO_ID_CLIENT_SECRET: process.env.TEMPO_ID_CLIENT_SECRET ?? '',
+                    TEMPO_ID_URL: process.env.TEMPO_ID_URL ?? '',
+                    TWITTER_OAUTH_CLIENT_ID: process.env.TWITTER_OAUTH_CLIENT_ID ?? '',
+                    TWITTER_OAUTH_CLIENT_SECRET: process.env.TWITTER_OAUTH_CLIENT_SECRET ?? '',
                   }
                 : {}),
               SLACK_API_URL: process.env.SLACK_API_URL ?? config.vars?.SLACK_API_URL,
@@ -167,7 +171,6 @@ export default defineConfig({
           __ENV__: JSON.stringify('development'),
           __HOST__: JSON.stringify('tip.bot'),
           __ORIGIN__: JSON.stringify('https://tip.bot'),
-          __PLAYWRIGHT_ACCOUNT_PRIVATE_KEY__: 'undefined',
           __SLACK_APP_ID__: JSON.stringify(''),
         },
         plugins: lazyPlugins(async () => {

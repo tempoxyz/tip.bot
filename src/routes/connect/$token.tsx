@@ -1,152 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/react-start'
-import { env } from 'cloudflare:workers'
-import type { InferResponseType } from 'hono/client'
-import * as React from 'react'
-import { parseUnits } from 'viem'
-import { useConnect, useConnection, useConnectors } from 'wagmi'
 import * as z from 'zod/mini'
-import { api } from '#/api.ts'
-import { WalletProviders } from '#/components/WalletProviders.tsx'
 import { slackCommand, tipbotImagePath } from '#/lib/app.ts'
-import { getErrorMessage } from '#/lib/error.ts'
-import { formatCurrencyAmount, formatPeriod } from '#/lib/format.ts'
-import { rpc } from '#/lib/rpc.ts'
-import * as Tapimo from '#/lib/tapimo.ts'
-import * as Tempo from '#/lib/tempo.ts'
 
-export const Route = createFileRoute('/connect/$token')({
-  component: Component,
-  async loader(options) {
-    return await getConnectData({ data: options.params.token })
-  },
-})
-
+// Slack links to the Tempo ID sign-in, whose approval page names the access key's limits. This page
+// shows only where the sign-in ends: connected, a conflict to resolve, an error, or a used link.
 function Component() {
-  const data = Route.useLoaderData()
   const params = Route.useParams()
-
-  if (!data.ok)
-    return (
-      <main className="min-h-screen bg-bg2 px-6 pt-8 pb-12 text-gray10 sm:pt-16 lg:pt-24">
-        <section className="mx-auto flex max-w-xl flex-col items-center gap-8">
-          <img
-            alt="Tipbot"
-            className="size-28 rounded-3xl object-cover shadow-lg sm:size-36"
-            height={160}
-            src={tipbotImagePath}
-            width={160}
-          />
-          <div className="max-w-sm space-y-3 text-center">
-            <h1 className="text-3xl font-bold text-gray10">Connection link unavailable</h1>
-            <p className="text-base text-gray9">{data.message}</p>
-            <p className="text-base text-gray9">
-              Run `{slackCommand} connect` in Slack to get a new link.
-            </p>
-          </div>
-        </section>
-      </main>
-    )
-
-  return (
-    <WalletProviders.Root>
-      <ConnectPanel data={data} token={params.token} />
-    </WalletProviders.Root>
-  )
-}
-
-function ConnectPanel(props: {
-  data: Extract<ReturnType<typeof Route.useLoaderData>, { ok: true }>
-  token: string
-}) {
-  const connect = useConnect()
-  const connection = useConnection()
-  const connectors = useConnectors()
-  const data = props.data
-  const [error, setError] = React.useState<string | null>(null)
-  const [errorCode, setErrorCode] = React.useState<string | null>(null)
-  const [pendingConnection, setPendingConnection] = React.useState<{
-    address: string
-    keyAuthorization: unknown
-  } | null>(null)
-  const [status, setStatus] = React.useState<'idle' | 'connecting' | 'connected'>('idle')
-
-  async function connectTipbot() {
-    setError(null)
-    setErrorCode(null)
-    setPendingConnection(null)
-    setStatus('connecting')
-    try {
-      const connector = connection.connector ?? connectors[0]
-      if (!connector) throw new Error('Tempo Wallet is unavailable.')
-      if (connection.status === 'connected' && connection.address) {
-        const result = await authorizeAccessKey(connector, data)
-        await linkAccount({
-          address: result.rootAddress,
-          keyAuthorization: result.keyAuthorization,
-        })
-        setStatus('connected')
-        return
-      }
-
-      const result = (await connect.connectAsync({
-        capabilities: {
-          authorizeAccessKey: getAuthorizeAccessKey(data),
-          showDeposit: { amount: '1', token: 'USDC.e' },
-        },
-        chainId: data.chainId,
-        connector,
-        withCapabilities: true,
-      } as never)) as unknown as {
-        accounts: readonly [
-          { address: string; capabilities: Record<string, unknown> },
-          ...{ address: string; capabilities: Record<string, unknown> }[],
-        ]
-      }
-      const account = result.accounts[0]
-      const keyAuthorization = account.capabilities.keyAuthorization
-      if (!keyAuthorization) throw new Error('Tempo Wallet did not authorize Tipbot.')
-      await linkAccount({ address: account.address, keyAuthorization })
-      setStatus('connected')
-    } catch (error) {
-      setStatus('idle')
-      setError(getErrorMessage(error, 'Could not connect to Tipbot.'))
-    }
-  }
-
-  async function disconnectExistingAccount() {
-    if (!pendingConnection) return
-    setError(null)
-    setErrorCode(null)
-    setStatus('connecting')
-    try {
-      await linkAccount({ ...pendingConnection, disconnectExistingAccount: true })
-      setPendingConnection(null)
-      setStatus('connected')
-    } catch (error) {
-      setStatus('idle')
-      setError(getErrorMessage(error, 'Could not connect to Tipbot.'))
-    }
-  }
-
-  async function linkAccount(connection: {
-    address: string
-    keyAuthorization: unknown
-    disconnectExistingAccount?: boolean
-  }) {
-    const response = await rpc.api.account.link[':token'].$post({
-      json: connection,
-      param: { token: props.token },
-    })
-    if (response.ok) return
-
-    const json = await response.json().catch(() => null)
-    if (json && 'code' in json && json.code === 'account_already_connected') {
-      setErrorCode(json.code)
-      setPendingConnection(connection)
-    }
-    throw new Error(json && 'message' in json ? json.message : 'Could not connect to Tipbot.')
-  }
+  const search = Route.useSearch()
 
   return (
     <main className="min-h-screen bg-bg2 px-6 pt-8 pb-12 text-gray10 sm:pt-16 lg:pt-24">
@@ -158,182 +18,68 @@ function ConnectPanel(props: {
           src={tipbotImagePath}
           width={160}
         />
-        {status === 'connected' ? (
-          <div className="space-y-3 text-center">
-            <h1 className="text-3xl font-bold text-gray10">Connected to Tipbot</h1>
-            <p className="text-base text-gray9">You can close this tab and return to Slack.</p>
-          </div>
-        ) : (
-          <div className="w-full space-y-8">
-            <div className="space-y-3 text-center">
-              <h1 className="text-3xl font-bold text-gray10 sm:text-4xl">
-                Connect <span className="text-blue9">Tipbot</span>
-              </h1>
-              <p className="text-base text-gray9 sm:text-lg">
-                Authorize Tipbot to connect your Tempo Wallet for Slack tips.
+        {(() => {
+          if (search.status === 'connected')
+            return (
+              <div className="space-y-3 text-center" role="status">
+                <h1 className="text-3xl font-bold text-gray10">Connected to Tipbot</h1>
+                <p className="text-base text-gray9">You can close this tab and return to Slack.</p>
+              </div>
+            )
+          if (search.status === 'conflict')
+            return (
+              <form
+                action={`/api/account/link/${params.token}/resolve`}
+                className="max-w-sm space-y-4 text-center"
+                method="post"
+              >
+                <h1 className="text-3xl font-bold text-gray10">Wallet already connected</h1>
+                <p aria-live="polite" className="text-base text-gray9">
+                  This wallet is already connected to another Slack account in this workspace.
+                </p>
+                <button
+                  className="inline-flex h-12 items-center justify-center rounded-lg bg-red8 px-6 text-lg font-bold text-white transition-colors outline-none hover:bg-red7 focus-visible:ring-2 focus-visible:ring-red9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                  type="submit"
+                >
+                  Disconnect existing account and connect
+                </button>
+              </form>
+            )
+          if (search.error)
+            return (
+              <div className="max-w-sm space-y-4 text-center">
+                <h1 className="text-3xl font-bold text-gray10">Could not connect Tipbot</h1>
+                <p aria-live="polite" className="text-base text-red9">
+                  {search.error}
+                </p>
+                <a
+                  className="inline-flex h-12 items-center justify-center rounded-lg bg-green8 px-6 text-lg font-bold text-white no-underline transition-colors outline-none hover:bg-green7 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                  href={`/api/account/link/${params.token}/start`}
+                >
+                  Try again
+                </a>
+              </div>
+            )
+          return (
+            <div className="max-w-sm space-y-3 text-center">
+              <h1 className="text-3xl font-bold text-gray10">Connection link unavailable</h1>
+              <p className="text-base text-gray9">This connection link is invalid or expired.</p>
+              <p className="text-base text-gray9">
+                Run `{slackCommand} connect` in Slack to get a new link.
               </p>
             </div>
-            <div className="rounded-2xl border border-gray5 bg-bg2 p-6 shadow-xl sm:p-8">
-              <div className="border-b border-gray5 pb-6">
-                <h2 className="text-xl font-bold text-gray10 sm:text-2xl">
-                  Tipbot wants to connect to your Tempo Wallet
-                </h2>
-                <p className="mt-2 text-base text-gray9">
-                  Review the permissions below before continuing.
-                </p>
-              </div>
-              <div className="space-y-6 border-b border-gray5 py-6">
-                <h3 className="text-lg font-bold text-gray10">With this connection, Tipbot can:</h3>
-                <div className="flex gap-4">
-                  <IconLucideCheck
-                    aria-hidden="true"
-                    className="mt-1 size-5 shrink-0 text-green9"
-                  />
-                  <div className="space-y-1">
-                    <p className="text-lg font-bold text-gray10">Read your wallet address</p>
-                    <p className="text-base text-gray9">
-                      Tipbot uses your wallet address to show who is connected in Slack.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex gap-4">
-                  <IconLucideCheck
-                    aria-hidden="true"
-                    className="mt-1 size-5 shrink-0 text-green9"
-                  />
-                  <div className="space-y-1">
-                    <p className="text-lg font-bold text-gray10">Create a limited access key</p>
-                    <p className="text-base text-gray9">
-                      Tipbot can send tips up to{' '}
-                      <a
-                        className="font-medium text-blue9 no-underline underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-blue9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
-                        href={`${Tempo.getChain(data.chainId).blockExplorers?.default.url ?? Tempo.getChain(data.chainId).rpcUrls.default.http[0]}/address/${data.tokenAddress}`}
-                        rel="noreferrer"
-                        target="_blank"
-                      >
-                        {formatCurrencyAmount(data.accessKeyLimit, data.tokenCurrency)}{' '}
-                        {data.tokenSymbol}
-                      </a>{' '}
-                      every {formatPeriod(data.accessKeyLimitPeriodSeconds)} until this link
-                      expires.
-                    </p>
-                  </div>
-                </div>
-              </div>
-              <div className="space-y-4 pt-6">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                  <button
-                    className="inline-flex h-12 items-center justify-center rounded-lg bg-green8 px-6 text-lg font-bold text-white transition-colors outline-none hover:bg-green7 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
-                    disabled={status === 'connecting'}
-                    onClick={connectTipbot}
-                    type="button"
-                  >
-                    {status === 'connecting' ? 'Connecting' : 'Connect'}
-                  </button>
-                  <a
-                    className="inline-flex h-12 items-center justify-center rounded-lg px-6 text-lg font-bold text-blue9 no-underline transition-colors outline-none hover:bg-blue1 focus-visible:ring-2 focus-visible:ring-blue9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
-                    href="/"
-                  >
-                    Cancel
-                  </a>
-                </div>
-                <p className="text-base text-gray9">
-                  Next: you’ll be asked to approve this connection in Tempo Wallet.
-                </p>
-                {error ? (
-                  <div className="space-y-3">
-                    <p className="text-sm font-medium text-red9">{error}</p>
-                    {errorCode === 'account_already_connected' && pendingConnection ? (
-                      <button
-                        className="inline-flex h-10 items-center justify-center rounded-lg bg-red8 px-4 text-sm font-bold text-white transition-colors outline-none hover:bg-red7 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-red9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
-                        disabled={status === 'connecting'}
-                        onClick={disconnectExistingAccount}
-                        type="button"
-                      >
-                        {status === 'connecting'
-                          ? 'Disconnecting'
-                          : 'Disconnect existing account and connect'}
-                      </button>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          </div>
-        )}
+          )
+        })()}
       </section>
     </main>
   )
 }
 
-const getConnectData = createServerFn({ method: 'GET' })
-  .validator(z.string().check(z.minLength(1)))
-  .handler(async ({ data }) => {
-    const endpoint = rpc.api.account.link[':token']
-    const response = await api.fetch(new Request(endpoint.$url({ param: { token: data } })), env)
-    if (!response.ok) {
-      const json = (await response.json().catch(() => null)) as InferResponseType<
-        typeof endpoint.$get,
-        404
-      > | null
-      return {
-        message:
-          json && 'message' in json ? json.message : 'This connection link is invalid or expired.',
-        ok: false as const,
-      }
-    }
-
-    const json = (await response.json()) as InferResponseType<typeof endpoint.$get, 200>
-    try {
-      const metadata = await Tapimo.getTokenMetadata(env, json.chainId, json.tokenAddress)
-      return {
-        ...json,
-        tokenCurrency: metadata.currency,
-        tokenSymbol: metadata.symbol,
-      }
-    } catch {
-      return {
-        ...json,
-        tokenCurrency: 'USD',
-        tokenSymbol:
-          json.tokenAddress.toLowerCase() === Tempo.addressLookup.pathUsd.toLowerCase()
-            ? 'USD'
-            : `${json.tokenAddress.slice(0, 6)}…${json.tokenAddress.slice(-4)}`,
-      }
-    }
-  })
-
-async function authorizeAccessKey(
-  connector: ReturnType<typeof useConnectors>[number],
-  data: Extract<ReturnType<typeof Route.useLoaderData>, { ok: true }>,
-) {
-  const provider = (await connector.getProvider()) as {
-    request: (parameters: { method: string; params: unknown[] }) => Promise<unknown>
-  }
-  return (await provider.request({
-    method: 'wallet_authorizeAccessKey',
-    params: [getAuthorizeAccessKey(data)],
-  })) as { keyAuthorization: unknown; rootAddress: string }
-}
-
-function getAuthorizeAccessKey(
-  data: Extract<ReturnType<typeof Route.useLoaderData>, { ok: true }>,
-) {
-  return {
-    chainId: BigInt(data.chainId),
-    expiry: Math.floor(new Date(data.accessKeyExpiry).getTime() / 1000),
-    keyType: 'secp256k1' as const,
-    limits: [
-      {
-        limit: parseUnits(data.accessKeyLimit, 6),
-        period: data.accessKeyLimitPeriodSeconds,
-        token: data.tokenAddress,
-      },
-    ],
-    publicKey: data.accessKeyPublicKey,
-    scopes: [
-      { address: data.tokenAddress, selector: 'transfer(address,uint256)' },
-      { address: data.tokenAddress, selector: 'transferWithMemo(address,uint256,bytes32)' },
-    ],
-  }
-}
+export const Route = createFileRoute('/connect/$token')({
+  component: Component,
+  head: () => ({ meta: [{ title: 'Connect - Tipbot' }] }),
+  validateSearch: z.object({
+    error: z.optional(z.string()),
+    status: z.optional(z.enum(['conflict', 'connected'])),
+  }),
+})

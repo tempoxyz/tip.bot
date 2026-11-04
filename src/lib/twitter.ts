@@ -346,6 +346,37 @@ export async function createProof(
     .where('id', '=', challenge.id)
     .execute()
 
+  return {
+    ...formatProofTweet(env, proof),
+    avatarUrl: twitterAccount.profile_image_url,
+    name: twitterAccount.name,
+    proof,
+    username: twitterAccount.username,
+  }
+}
+
+/**
+ * Returns the proof tweet of a challenge that `createProof` prepared, for the page that the Tempo ID
+ * callback returns to. Returns `undefined` for an unknown, used, or expired challenge, or another
+ * proof.
+ */
+export async function getProof(env: Env, input: { challengeId: string; proof: string }) {
+  const db = DB.create(env.DB)
+  const challenge = await db
+    .selectFrom('provider_link_challenge')
+    .select(['expected_provider_handle', 'expires_at', 'proof_hash', 'used_at'])
+    .where('id', '=', input.challengeId)
+    .where('provider', '=', 'twitter')
+    .executeTakeFirst()
+  if (!challenge || challenge.used_at || challenge.expires_at <= new Date().toISOString())
+    return undefined
+  if (!challenge.proof_hash || !challenge.expected_provider_handle) return undefined
+  if ((await AccountLink.hashToken(env, input.proof)) !== challenge.proof_hash) return undefined
+  const username = challenge.expected_provider_handle.replace(/^@/, '')
+  return { ...formatProofTweet(env, input.proof), username }
+}
+
+function formatProofTweet(env: Pick<Env, 'TWITTER_BOT_HANDLE'>, proof: string) {
   const tweetText = [
     `Verifying my identity for @${env.TWITTER_BOT_HANDLE.replace(/^@+/, '')}`,
     '',
@@ -355,14 +386,7 @@ export async function createProof(
   ].join('\n')
   const intentUrl = new URL('/intent/tweet', 'https://twitter.com')
   intentUrl.searchParams.set('text', tweetText)
-  return {
-    avatarUrl: twitterAccount.profile_image_url,
-    intentUrl: intentUrl.toString(),
-    name: twitterAccount.name,
-    proof,
-    tweetText,
-    username: twitterAccount.username,
-  }
+  return { intentUrl: intentUrl.toString(), tweetText }
 }
 
 export async function verifyLinkChallenge(

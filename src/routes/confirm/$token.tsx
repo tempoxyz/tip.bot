@@ -1,207 +1,13 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { createServerFn } from '@tanstack/react-start'
-import { env } from 'cloudflare:workers'
-import type { InferResponseType } from 'hono/client'
-import * as React from 'react'
-import { parseUnits, toHex } from 'viem'
-import { useConnect, useConnection, useConnectors } from 'wagmi'
 import * as z from 'zod/mini'
-import { api } from '#/api.ts'
-import { WalletProviders } from '#/components/WalletProviders.tsx'
 import { slackCommand, tipbotImagePath } from '#/lib/app.ts'
-import { isLostWalletSession } from '#/lib/confirmationWallet.ts'
-import { getErrorMessage } from '#/lib/error.ts'
-import { formatCurrencyAmount } from '#/lib/format.ts'
-import { rpc } from '#/lib/rpc.ts'
 import * as Tempo from '#/lib/tempo.ts'
 
-export const Route = createFileRoute('/confirm/$token')({
-  component: Component,
-  async loader(options) {
-    return await getConfirmData({ data: options.params.token })
-  },
-})
-
+// Slack links to the Tempo ID sign-in, which authorizes the payment's access key, and the callback
+// pays. This page shows only where that ends: sent, an error, or an expired link.
 function Component() {
-  const data = Route.useLoaderData()
   const params = Route.useParams()
-
-  if (!data.ok)
-    return (
-      <main className="min-h-screen bg-bg2 px-6 pt-8 pb-12 text-gray10 sm:pt-16 lg:pt-24">
-        <section className="mx-auto flex max-w-xl flex-col items-center gap-8">
-          <img
-            alt="Tipbot"
-            className="size-28 rounded-3xl object-cover shadow-lg sm:size-36"
-            height={160}
-            src={tipbotImagePath}
-            width={160}
-          />
-          <div className="max-w-sm space-y-3 text-center">
-            <h1 className="text-3xl font-bold text-gray10">Confirmation link expired</h1>
-            <p className="text-base text-gray9">{data.message}</p>
-            <p className="text-base text-gray9">Run `{slackCommand}` again in Slack.</p>
-          </div>
-        </section>
-      </main>
-    )
-
-  return (
-    <WalletProviders.Root>
-      <ConfirmPanel data={data} token={params.token} />
-    </WalletProviders.Root>
-  )
-}
-
-function ConfirmPanel(props: {
-  data: Extract<ReturnType<typeof Route.useLoaderData>, { ok: true }>
-  token: string
-}) {
-  const connect = useConnect()
-  const connection = useConnection()
-  const connectors = useConnectors()
-  const data = props.data
-  const [error, setError] = React.useState<string | null>(null)
-  const [reconnectRequired, setReconnectRequired] = React.useState(false)
-  const [status, setStatus] = React.useState<'idle' | 'confirming' | 'sent'>('idle')
-  const [transactionHash, setTransactionHash] = React.useState<string | null>(null)
-  const recipients: Array<{
-    recipientAvatarUrl?: string | null
-    recipientProviderLabel?: string | null
-    recipientProviderUserId: string
-  }> = data.recipients ?? [
-    {
-      recipientAvatarUrl: data.recipientAvatarUrl,
-      recipientProviderLabel: data.recipientProviderLabel,
-      recipientProviderUserId: data.recipientProviderUserId,
-    },
-  ]
-  const skippedRecipients: Array<{
-    reason: 'not_connected' | 'you'
-    recipientProviderLabel?: string | null
-    recipientProviderUserId: string
-  }> = data.skippedRecipients ?? []
-  const totalAmount = String(Number(data.amount) * recipients.length)
-
-  async function confirm() {
-    setError(null)
-    setTransactionHash(null)
-    setStatus('confirming')
-    const connector = connection.connector ?? connectors[0]
-    let hadWalletAccount = false
-    let phase: 'wallet' | 'submit' = 'wallet'
-    try {
-      if (!connector) throw new Error('Tempo Wallet is unavailable.')
-      // Reset stale local provider state only after the wallet invalidated it.
-      // Reconnection is a separate user attempt, never an automatic payment retry.
-      if (reconnectRequired) await connector.disconnect()
-      const initialProvider = (await connector.getProvider()) as {
-        request: (parameters: { method: string }) => Promise<unknown>
-      }
-      const initialAccounts = await initialProvider
-        .request({ method: 'eth_accounts' })
-        .catch(() => undefined)
-      hadWalletAccount = Array.isArray(initialAccounts) && initialAccounts.length > 0
-      const account = await (async () => {
-        if (
-          !reconnectRequired &&
-          data.kind === 'reusable_access_key' &&
-          connection.status === 'connected'
-        ) {
-          const result = await authorizeAccessKey(connector, data)
-          return {
-            address: result.rootAddress,
-            capabilities: { keyAuthorization: result.keyAuthorization },
-          }
-        }
-        if (
-          data.kind === 'onetime_payment' &&
-          !reconnectRequired &&
-          connection.status === 'connected' &&
-          connection.address
-        )
-          return { address: connection.address, capabilities: {} }
-
-        const result = (await connect.connectAsync({
-          capabilities:
-            data.kind === 'reusable_access_key'
-              ? {
-                  authorizeAccessKey: getAuthorizeAccessKey(data),
-                  showDeposit: { amount: '1', token: 'USDC.e' },
-                }
-              : { showDeposit: { amount: '1', token: 'USDC.e' } },
-          chainId: data.chainId,
-          connector,
-          withCapabilities: true,
-        } as never)) as unknown as {
-          accounts: readonly [
-            { address: string; capabilities: Record<string, unknown> },
-            ...{ address: string; capabilities: Record<string, unknown> }[],
-          ]
-        }
-        return result.accounts[0]
-      })()
-      setReconnectRequired(false)
-      if (
-        data.kind === 'onetime_payment' &&
-        account.address.toLowerCase() !== data.transactionRequest?.from.toLowerCase()
-      )
-        throw new Error('Reconnect Tipbot and try again.')
-      const signedTransaction = await (async () => {
-        if (data.kind !== 'onetime_payment') return undefined
-        if (!data.transactionRequest) throw new Error('Payment request is unavailable.')
-        const provider = (await connector.getProvider()) as {
-          request: (parameters: { method: string; params: unknown[] }) => Promise<unknown>
-        }
-        return (await provider.request({
-          method: 'eth_signTransaction',
-          params: [
-            {
-              ...data.transactionRequest,
-              chainId: toHex(data.chainId),
-            } as never,
-          ],
-        })) as string
-      })()
-      const keyAuthorization = account.capabilities.keyAuthorization
-      if (data.kind === 'reusable_access_key' && !keyAuthorization)
-        throw new Error('Tempo Wallet did not approve this payment.')
-      phase = 'submit'
-      const response = await rpc.api.confirm[':token'].$post({
-        json: {
-          address: account.address,
-          ...(data.kind === 'reusable_access_key' ? { keyAuthorization } : { signedTransaction }),
-        },
-        param: { token: props.token },
-      })
-      if (!response.ok) {
-        const json = await response.json().catch(() => null)
-        throw new Error(json && 'message' in json ? json.message : 'Payment failed.')
-      }
-      const json = await response.json()
-      setTransactionHash(json.transactionHash)
-      setStatus('sent')
-    } catch (error) {
-      setStatus('idle')
-      if (phase === 'wallet' && hadWalletAccount && connector) {
-        const provider = await connector.getProvider().catch(() => undefined)
-        if (
-          provider &&
-          (await isLostWalletSession(
-            error,
-            provider as { request: (parameters: { method: string }) => Promise<unknown> },
-          ))
-        ) {
-          setReconnectRequired(true)
-          setError(
-            'Your wallet session expired. Select Confirm payment to reconnect and try again.',
-          )
-          return
-        }
-      }
-      setError(getErrorMessage(error, 'Payment failed.'))
-    }
-  }
+  const search = Route.useSearch()
 
   return (
     <main className="min-h-screen bg-bg2 px-6 pt-8 pb-12 text-gray10 sm:pt-16 lg:pt-24">
@@ -213,201 +19,58 @@ function ConfirmPanel(props: {
           src={tipbotImagePath}
           width={160}
         />
-        {status === 'sent' ? (
-          <div className="space-y-3 text-center">
-            <h1 className="text-3xl font-bold text-gray10">Payment sent</h1>
-            <p className="text-base text-gray9">You can close this tab and return to Slack.</p>
-            {transactionHash ? (
-              <a
-                className="inline-flex text-base font-bold text-blue9 no-underline hover:underline"
-                href={Tempo.formatTxLink(data.chainId, transactionHash)}
-                rel="noreferrer"
-                target="_blank"
-              >
-                View receipt
-              </a>
-            ) : null}
-          </div>
-        ) : (
-          <div className="w-full space-y-8">
-            <div className="space-y-3 text-center">
-              <h1 className="text-3xl font-bold text-gray10 sm:text-4xl">Confirm payment</h1>
-              <p className="text-base text-gray9 sm:text-lg">
-                Approve this payment in Tempo Wallet.
-              </p>
-            </div>
-            <div className="rounded-2xl border border-gray5 bg-bg2 p-6 shadow-xl sm:p-8">
-              <div className="border-b border-gray5 pb-6">
-                <h2 className="text-xl font-bold text-gray10 sm:text-2xl">
-                  Tipbot wants to send a payment
-                </h2>
-                <p className="mt-2 text-base text-gray9">
-                  Review the payment details below before continuing.
-                </p>
-              </div>
-              <div className="space-y-5 border-b border-gray5 py-6">
-                <h3 className="text-lg font-bold text-gray10">Payment details</h3>
-                <div className="divide-y divide-gray5 rounded-xl border border-gray5 bg-bg1">
-                  {data.groupLabel ? (
-                    <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
-                      <span className="text-base font-bold text-gray8 sm:text-lg">Group</span>
-                      <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
-                        @{data.groupLabel}
-                      </span>
-                    </div>
-                  ) : null}
-                  <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
-                    <span className="text-base font-bold text-gray8 sm:text-lg">Amount</span>
-                    <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
-                      {formatCurrencyAmount(data.amount, data.tokenCurrency)} {data.tokenSymbol}
-                      {recipients.length > 1 ? ' each' : ''}
-                    </span>
-                  </div>
-                  {recipients.length > 1 ? (
-                    <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
-                      <span className="text-base font-bold text-gray8 sm:text-lg">Total</span>
-                      <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
-                        {formatCurrencyAmount(totalAmount, data.tokenCurrency)} {data.tokenSymbol}
-                      </span>
-                    </div>
-                  ) : null}
-                  <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6 sm:p-5">
-                    <span className="text-base font-bold text-gray8 sm:text-lg">To</span>
-                    <div className="flex flex-col gap-3 text-lg font-bold text-gray10 sm:items-end sm:text-end sm:text-xl">
-                      {recipients.map((recipient) => (
-                        <div
-                          className="flex items-center gap-3 sm:flex-row-reverse"
-                          key={recipient.recipientProviderUserId}
-                        >
-                          {recipient.recipientAvatarUrl ? (
-                            <img
-                              alt={`${formatProviderLabel(recipient)} avatar`}
-                              className="size-8 rounded-lg object-cover"
-                              height={32}
-                              src={recipient.recipientAvatarUrl}
-                              width={32}
-                            />
-                          ) : null}
-                          <span>{formatProviderLabel(recipient)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  {data.memo ? (
-                    <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
-                      <span className="text-base font-bold text-gray8 sm:text-lg">For</span>
-                      <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
-                        {data.memo}
-                      </span>
-                    </div>
-                  ) : null}
-                  {skippedRecipients.length ? (
-                    <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6 sm:p-5">
-                      <span className="text-base font-bold text-gray8 sm:text-lg">Skipped</span>
-                      <div className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
-                        {skippedRecipients.map((recipient) => (
-                          <div key={recipient.recipientProviderUserId}>
-                            {formatProviderLabel(recipient)}{' '}
-                            <span className="text-gray8">
-                              ({recipient.reason === 'you' ? 'you' : 'not connected yet'})
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-              <div className="space-y-4 pt-6">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                  <button
-                    className="inline-flex h-12 items-center justify-center rounded-lg bg-green8 px-6 text-lg font-bold text-white transition-colors outline-none hover:bg-green7 disabled:cursor-not-allowed disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
-                    disabled={status === 'confirming'}
-                    onClick={confirm}
-                    type="button"
-                  >
-                    {status === 'confirming' ? 'Confirming' : 'Confirm payment'}
-                  </button>
+        {(() => {
+          if (search.status === 'sent')
+            return (
+              <div className="space-y-3 text-center" role="status">
+                <h1 className="text-3xl font-bold text-gray10">Payment sent</h1>
+                <p className="text-base text-gray9">You can close this tab and return to Slack.</p>
+                {search.tx && search.chain ? (
                   <a
-                    className="inline-flex h-12 items-center justify-center rounded-lg px-6 text-lg font-bold text-blue9 no-underline transition-colors outline-none hover:bg-blue1 focus-visible:ring-2 focus-visible:ring-blue9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
-                    href="/"
+                    className="inline-flex text-base font-bold text-blue9 no-underline hover:underline"
+                    href={Tempo.formatTxLink(search.chain, search.tx)}
+                    rel="noreferrer"
+                    target="_blank"
                   >
-                    Cancel
+                    View receipt
                   </a>
-                </div>
-                <p className="text-base text-gray9">
-                  {data.kind === 'reusable_access_key'
-                    ? `Tipbot can send future ${data.tokenSymbol} tips from ${data.providerLabel}, up to ${formatCurrencyAmount(data.accessKeyLimit, data.tokenCurrency)} per day. You can disconnect anytime.`
-                    : 'Tipbot will use this approval once and won’t save a new access key.'}
-                </p>
-                {error ? <p className="text-sm font-medium text-red9">{error}</p> : null}
+                ) : null}
               </div>
+            )
+          if (search.error)
+            return (
+              <div className="max-w-sm space-y-4 text-center">
+                <h1 className="text-3xl font-bold text-gray10">Payment not sent</h1>
+                <p aria-live="polite" className="text-base text-red9">
+                  {search.error}
+                </p>
+                <a
+                  className="inline-flex h-12 items-center justify-center rounded-lg bg-green8 px-6 text-lg font-bold text-white no-underline transition-colors outline-none hover:bg-green7 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                  href={`/api/confirm/${params.token}/start`}
+                >
+                  Try again
+                </a>
+              </div>
+            )
+          return (
+            <div className="max-w-sm space-y-3 text-center">
+              <h1 className="text-3xl font-bold text-gray10">Confirmation link expired</h1>
+              <p className="text-base text-gray9">Run `{slackCommand}` again in Slack.</p>
             </div>
-          </div>
-        )}
+          )
+        })()}
       </section>
     </main>
   )
 }
 
-const getConfirmData = createServerFn({ method: 'GET' })
-  .validator(z.string().check(z.minLength(1)))
-  .handler(async ({ data }) => {
-    const endpoint = rpc.api.confirm[':token']
-    const response = await api.fetch(new Request(endpoint.$url({ param: { token: data } })), env)
-    if (!response.ok) {
-      const json = (await response.json().catch(() => null)) as InferResponseType<
-        typeof endpoint.$get,
-        404
-      > | null
-      return {
-        message: json && 'message' in json ? json.message : 'Confirmation link expired.',
-        ok: false as const,
-      }
-    }
-
-    return (await response.json()) as InferResponseType<typeof endpoint.$get, 200>
-  })
-
-async function authorizeAccessKey(
-  connector: ReturnType<typeof useConnectors>[number],
-  data: Extract<ReturnType<typeof Route.useLoaderData>, { ok: true }>,
-) {
-  const provider = (await connector.getProvider()) as {
-    request: (parameters: { method: string; params: unknown[] }) => Promise<unknown>
-  }
-  return (await provider.request({
-    method: 'wallet_authorizeAccessKey',
-    params: [getAuthorizeAccessKey(data)],
-  })) as { keyAuthorization: unknown; rootAddress: string }
-}
-
-function getAuthorizeAccessKey(
-  data: Extract<ReturnType<typeof Route.useLoaderData>, { ok: true }>,
-) {
-  return {
-    chainId: BigInt(data.chainId),
-    expiry: Math.floor(new Date(data.accessKeyExpiry).getTime() / 1000),
-    keyType: 'secp256k1' as const,
-    limits: [
-      {
-        limit: parseUnits(data.accessKeyLimit, 6),
-        period: data.accessKeyLimitPeriodSeconds,
-        token: data.tokenAddress,
-      },
-    ],
-    publicKey: data.accessKeyPublicKey,
-    scopes: [
-      { address: data.tokenAddress, selector: 'transfer(address,uint256)' },
-      { address: data.tokenAddress, selector: 'transferWithMemo(address,uint256,bytes32)' },
-    ],
-  }
-}
-
-function formatProviderLabel(input: {
-  recipientProviderLabel?: string | null
-  recipientProviderUserId: string
-}) {
-  if (!input.recipientProviderLabel) return input.recipientProviderUserId
-  return `@${input.recipientProviderLabel.replace(/^@+/, '')}`
-}
+export const Route = createFileRoute('/confirm/$token')({
+  component: Component,
+  head: () => ({ meta: [{ title: 'Confirm payment - Tipbot' }] }),
+  validateSearch: z.object({
+    chain: z.optional(z.coerce.number()),
+    error: z.optional(z.string()),
+    status: z.optional(z.literal('sent')),
+    tx: z.optional(z.string()),
+  }),
+})

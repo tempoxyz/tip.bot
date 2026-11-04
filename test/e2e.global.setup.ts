@@ -3,10 +3,12 @@ import { createEmulator } from 'emulate'
 import { hc } from 'hono/client'
 import * as fs from 'node:fs/promises'
 import { join } from 'node:path'
+import { GenericContainer, Wait } from 'testcontainers'
 import type { api } from '#/api.ts'
 import * as Constants from './constants.ts'
 import { startDevServer } from './devServer.ts'
 import { Env } from './env.ts'
+import * as TempoNode from './tempo.ts'
 import { getAvailablePort } from './utils.ts'
 
 export default async function globalSetup() {
@@ -24,17 +26,49 @@ export default async function globalSetup() {
   })
   console.log('e2e: started slack emulator')
 
+  // Tempo ID's sign-in and approval pages, on the id-dev image. The browser and the dev server
+  // reach it at one origin, so the container publishes its port on the same port of the host.
+  const tempoIdPort = await getAvailablePort()
+  const tempoIdUrl = `http://localhost:${tempoIdPort}`
+  const defaults = Env.get()
+  console.log('e2e: starting tempo id')
+  const tempoId = await new GenericContainer(
+    process.env.ID_DEV_IMAGE ?? 'ghcr.io/tempoxyz/id-dev:latest',
+  )
+    .withEnvironment({
+      ID_DEV_APPS: JSON.stringify([
+        {
+          clientId: defaults.TEMPO_ID_CLIENT_ID,
+          clientSecret: defaults.TEMPO_ID_CLIENT_SECRET,
+          name: 'Tipbot',
+          redirectUris: [`http://${host}/api/auth/callback`],
+        },
+      ]),
+      PORT: String(tempoIdPort),
+      URL: tempoIdUrl,
+    })
+    .withExposedPorts({ container: tempoIdPort, host: tempoIdPort })
+    .withWaitStrategy(Wait.forHealthCheck())
+    .withStartupTimeout(5 * 60 * 1000) // 5 minutes, for a first pull
+    .start()
+  console.log('e2e: started tempo id')
+
+  // The local chain that payments settle on. The Tempo ID accounts of the specs are funded on it.
+  console.log('e2e: starting tempo')
+  const tempo = await TempoNode.start()
+  console.log('e2e: started tempo')
+
   const env = Env.get({
     HOST: host,
+    RPC_URL_TESTNET: tempo.rpcUrl,
     SLACK_APP_ID: 'A000000001',
     SLACK_API_URL: `${slack.url}/api`,
+    TEMPO_ID_URL: tempoIdUrl,
   })
 
   console.log('e2e: starting dev server')
   const server = await startDevServer({
     CLOUDFLARE_PERSIST_STATE_PATH: statePath,
-    PLAYWRIGHT_ACCOUNT_PRIVATE_KEY:
-      '0x0000000000000000000000000000000000000000000000000000000000000001',
     ...env,
     PORT: String(port),
   })
@@ -50,6 +84,8 @@ export default async function globalSetup() {
   return async () => {
     server.stop()
     await slack.close()
+    await tempoId.stop()
+    await tempo.stop()
   }
 }
 

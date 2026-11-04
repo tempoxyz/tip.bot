@@ -1,568 +1,105 @@
-import type { Kysely } from 'kysely'
+import { Address, Secp256k1 } from 'ox'
+import * as AccessKey from '#/lib/accessKey.ts'
+import * as AccountLink from '#/lib/accountLink.ts'
 import * as Confirmation from '#/lib/confirmation.ts'
 import * as Tempo from '#/lib/tempo.ts'
-import type { DB } from '#db/types.gen.ts'
-import { Account } from 'viem/tempo'
-import type * as Factory from '../factory.ts'
+import * as TempoNode from '../tempo.ts'
 import { expect, test } from './fixture.ts'
+import { insertMember } from './members.ts'
 
 test('visitor opens an expired confirmation link', async ({ app, page }) => {
-  await page.goto(app.url({ params: { token: 'missing' }, to: '/confirm/$token' }))
+  await page.goto(app.url('/api/confirm/missing/start'))
 
+  await expect(page).toHaveURL(app.url({ params: { token: 'missing' }, to: '/confirm/$token' }))
   await expect(page.getByRole('heading', { name: 'Confirmation link expired' })).toBeVisible()
   await expect(page.getByText('Run `/tip` again in Slack.')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Confirm payment' })).toBeHidden()
 })
 
-test('slack member opens valid confirmation link', async ({ app, page }) => {
-  const token = await Confirmation.encrypt(app.env, {
-    amount: 5_000_000,
-    chainId: Tempo.chainLookup.localnet,
-    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes
-    idempotencyKey: `confirm:${crypto.randomUUID()}`,
-    kind: 'reusable_access_key',
-    memo: 'lunch',
-    nonce: crypto.randomUUID(),
-    provider: 'slack',
-    providerChannelId: 'C000000001',
-    providerId: 'T000000001',
-    recipientProviderLabel: 'member',
-    recipientProviderUserId: 'U000000002',
-    senderProviderUserId: 'U000000001',
-    tokenAddress: Tempo.addressLookup.pathUsd,
-    workspaceId: crypto.randomUUID(),
-  })
-
-  await page.goto(app.url({ params: { token }, to: '/confirm/$token' }))
-
-  await expect(page.getByRole('heading', { name: 'Confirm payment' })).toBeVisible()
-  await expect(page.getByText('Approve this payment in Tempo Wallet.')).toBeVisible()
-  await expect(page.getByText('$5.00 PathUSD')).toBeVisible()
-  await expect(page.getByText('@member')).toBeVisible()
-  await expect(page.getByText('lunch')).toBeVisible()
-  await expect(page.getByText('Tipbot can send future PathUSD tips from Slack')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Confirm payment' })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Cancel' })).toBeVisible()
-})
-
-test('slack member opens valid multi-recipient confirmation link', async ({ app, page }) => {
-  const token = await Confirmation.encrypt(app.env, {
-    accessKeyExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
-    accessKeyLimit: '3000000',
-    amount: 1_500_000,
-    chainId: Tempo.chainLookup.localnet,
-    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes
-    idempotencyKey: `confirm:${crypto.randomUUID()}`,
-    kind: 'reusable_access_key',
-    memo: 'team lunch',
-    nonce: crypto.randomUUID(),
-    provider: 'slack',
-    providerChannelId: 'C000000001',
-    providerId: 'T000000001',
-    recipientProviderLabel: 'foo',
-    recipientProviderUserId: 'U000000002',
-    recipients: [
-      { recipientProviderLabel: 'foo', recipientProviderUserId: 'U000000002' },
-      { recipientProviderLabel: 'bar', recipientProviderUserId: 'U000000003' },
-    ],
-    senderProviderUserId: 'U000000001',
-    tokenAddress: Tempo.addressLookup.pathUsd,
-    workspaceId: crypto.randomUUID(),
-  })
-
-  await page.goto(app.url({ params: { token }, to: '/confirm/$token' }))
-
-  await expect(page.getByRole('heading', { name: 'Confirm payment' })).toBeVisible()
-  await expect(page.getByText('$1.50 PathUSD each')).toBeVisible()
-  await expect(page.getByText('Total')).toBeVisible()
-  await expect(page.getByText('$3.00 PathUSD')).toBeVisible()
-  await expect(page.getByText('@foo')).toBeVisible()
-  await expect(page.getByText('@bar')).toBeVisible()
-  await expect(page.getByText('team lunch')).toBeVisible()
-})
-
-test('slack member opens group confirmation link with skipped recipients', async ({
-  app,
-  page,
-}) => {
-  const token = await Confirmation.encrypt(app.env, {
-    accessKeyExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
-    accessKeyLimit: '3000000',
-    amount: 1_000,
-    chainId: Tempo.chainLookup.localnet,
-    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes
-    groupLabel: 'engineering',
-    idempotencyKey: `confirm:${crypto.randomUUID()}`,
-    kind: 'reusable_access_key',
-    memo: 'coffee',
-    nonce: crypto.randomUUID(),
-    provider: 'slack',
-    providerChannelId: 'C000000001',
-    providerId: 'T000000001',
-    recipientProviderLabel: 'foo',
-    recipientProviderUserId: 'U000000002',
-    recipients: [
-      { recipientProviderLabel: 'foo', recipientProviderUserId: 'U000000002' },
-      { recipientProviderLabel: 'bar', recipientProviderUserId: 'U000000003' },
-    ],
-    senderProviderUserId: 'U000000001',
-    skippedRecipients: [
-      { reason: 'not_connected', recipientProviderLabel: 'boo', recipientProviderUserId: 'UBOO' },
-      { reason: 'you', recipientProviderLabel: 'joshie', recipientProviderUserId: 'UJOSHIE' },
-    ],
-    tokenAddress: Tempo.addressLookup.pathUsd,
-    workspaceId: crypto.randomUUID(),
-  })
-
-  await page.goto(app.url({ params: { token }, to: '/confirm/$token' }))
-
-  await expect(page.getByText('Group')).toBeVisible()
-  await expect(page.getByText('@engineering')).toBeVisible()
-  await expect(page.getByText('Skipped')).toBeVisible()
-  await expect(page.getByText('@boo (not connected yet)')).toBeVisible()
-  await expect(page.getByText('@joshie (you)')).toBeVisible()
-  await expect(page.getByText('$0.001 PathUSD each')).toBeVisible()
-  await expect(page.getByText('$0.002 PathUSD')).toBeVisible()
-  await expect(page.getByText('coffee')).toBeVisible()
-})
-
-test('slack member confirms payment with wallet approval', async ({ app, page }) => {
-  const root = Account.fromSecp256k1(
-    '0x0000000000000000000000000000000000000000000000000000000000000001',
-  )
-  const token = await Confirmation.encrypt(app.env, {
-    amount: 5_000_000,
-    chainId: Tempo.chainLookup.localnet,
-    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes
-    idempotencyKey: `confirm:${crypto.randomUUID()}`,
-    kind: 'reusable_access_key',
-    memo: 'lunch',
-    nonce: crypto.randomUUID(),
-    provider: 'slack',
-    providerChannelId: 'C000000001',
-    providerId: 'T000000001',
-    recipientProviderLabel: 'member',
-    recipientProviderUserId: 'U000000002',
-    senderProviderUserId: 'U000000001',
-    tokenAddress: Tempo.addressLookup.pathUsd,
-    workspaceId: crypto.randomUUID(),
-  })
-  await page.route('**/api/confirm/*', async (route) => {
-    if (route.request().method() !== 'POST') return await route.continue()
-
-    const json = route.request().postDataJSON() as {
-      address?: string
-      keyAuthorization?: unknown
-    }
-    expect(json.address).toBe(root.address)
-    expect(json.keyAuthorization).toEqual(expect.any(Object))
-    await route.fulfill({
-      body: JSON.stringify({ ok: true, transactionHash: `0x${'1'.repeat(64)}` }),
-      contentType: 'application/json',
-      status: 200,
+for (const kind of ['onetime_payment', 'reusable_access_key'] as const)
+  test(`slack member confirms a ${kind === 'onetime_payment' ? 'one-time payment' : 'payment with a reusable access key'} with Tempo ID`, async ({
+    app,
+    db,
+    factory,
+    page,
+  }) => {
+    const workspace = await factory.workspace.insert({
+      chain_id: Tempo.chainLookup.localnet,
+      provider_id: `T${crypto.randomUUID()}`,
     })
-  })
-
-  await page.goto(app.url({ params: { token }, to: '/confirm/$token' }))
-  await page.waitForLoadState('networkidle')
-  await expect(page.getByRole('button', { name: 'Confirm payment' })).toBeVisible()
-  await page.getByRole('button', { name: 'Confirm payment' }).click()
-
-  await expect(page.getByRole('heading', { name: 'Payment sent' })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'View receipt' })).toHaveAttribute(
-    'href',
-    Tempo.formatTxLink(Tempo.chainLookup.localnet, `0x${'1'.repeat(64)}`),
-  )
-  await expect(page.getByText('You can close this tab and return to Slack.')).toBeVisible()
-})
-
-test('slack member confirms one-time payment with wallet signature', async ({
-  app,
-  db,
-  factory,
-  page,
-}) => {
-  const senderRoot = Account.fromSecp256k1(
-    '0x0000000000000000000000000000000000000000000000000000000000000001',
-  )
-  const recipientRoot = Account.fromSecp256k1(
-    '0x0000000000000000000000000000000000000000000000000000000000000002',
-  )
-  const workspace = await factory.workspace.insert({
-    chain_id: Tempo.chainLookup.testnet,
-    provider_id: `T${crypto.randomUUID().replaceAll('-', '')}`,
-  })
-  const senderAccount = await (async () => {
-    const existing = await db
-      .selectFrom('account')
-      .selectAll()
-      .where('address', '=', senderRoot.address)
-      .executeTakeFirst()
-    if (existing) return existing
-    try {
-      return await factory.account.insert({ address: senderRoot.address })
-    } catch (error) {
-      if (!(error instanceof Error && /unique constraint/i.test(error.message))) throw error
-      return await db
-        .selectFrom('account')
-        .selectAll()
-        .where('address', '=', senderRoot.address)
-        .executeTakeFirstOrThrow()
-    }
-  })()
-  const recipientAccount = await (async () => {
-    const existing = await db
-      .selectFrom('account')
-      .selectAll()
-      .where('address', '=', recipientRoot.address)
-      .executeTakeFirst()
-    if (existing) return existing
-    try {
-      return await factory.account.insert({ address: recipientRoot.address })
-    } catch (error) {
-      if (!(error instanceof Error && /unique constraint/i.test(error.message))) throw error
-      return await db
-        .selectFrom('account')
-        .selectAll()
-        .where('address', '=', recipientRoot.address)
-        .executeTakeFirstOrThrow()
-    }
-  })()
-  await insertMember(db, factory, {
-    account_id: senderAccount.id,
-    provider_user_id: 'U000000001',
-    workspace_id: workspace.id,
-  })
-  await insertMember(db, factory, {
-    account_id: recipientAccount.id,
-    provider_user_id: 'U000000002',
-    workspace_id: workspace.id,
-  })
-  const token = await Confirmation.encrypt(app.env, {
-    amount: 11_000_000,
-    chainId: Tempo.chainLookup.testnet,
-    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes
-    idempotencyKey: `confirm:${crypto.randomUUID()}`,
-    kind: 'onetime_payment',
-    memo: 'lunch',
-    nonce: crypto.randomUUID(),
-    provider: 'slack',
-    providerChannelId: 'C000000001',
-    providerId: workspace.provider_id,
-    recipientProviderLabel: 'member',
-    recipientProviderUserId: 'U000000002',
-    senderProviderUserId: 'U000000001',
-    tokenAddress: Tempo.addressLookup.pathUsd,
-    workspaceId: workspace.id,
-  })
-  await page.route('**/api/confirm/*', async (route) => {
-    if (route.request().method() !== 'POST') return await route.continue()
-
-    const json = route.request().postDataJSON() as {
-      address?: string
-      keyAuthorization?: unknown
-      signedTransaction?: string
-    }
-    expect(json.address).toBe(senderRoot.address)
-    expect(json.keyAuthorization).toBeUndefined()
-    expect(json.signedTransaction).toMatch(/^0x[0-9a-f]+$/)
-    await route.fulfill({
-      body: JSON.stringify({ ok: true, transactionHash: `0x${'2'.repeat(64)}` }),
-      contentType: 'application/json',
-      status: 200,
+    const recipient = await insertMember(db, factory, {
+      account_id: (
+        await factory.account.insert({
+          address: Address.fromPublicKey(
+            Secp256k1.getPublicKey({ privateKey: Secp256k1.randomPrivateKey() }),
+          ),
+        })
+      ).id,
+      provider_user_id: `U${crypto.randomUUID()}`,
+      workspace_id: workspace.id,
     })
-  })
-
-  await page.goto(app.url({ params: { token }, to: '/confirm/$token' }))
-  await page.waitForLoadState('networkidle')
-  await expect(page.getByText('Tipbot will use this approval once')).toBeVisible()
-  await page.getByRole('button', { name: 'Confirm payment' }).click()
-
-  await expect(page.getByRole('heading', { name: 'Payment sent' })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'View receipt' })).toHaveAttribute(
-    'href',
-    Tempo.formatTxLink(Tempo.chainLookup.testnet, `0x${'2'.repeat(64)}`),
-  )
-})
-
-test('slack member confirms receipt boost with wallet signature', async ({
-  app,
-  db,
-  factory,
-  page,
-}) => {
-  const senderRoot = Account.fromSecp256k1(
-    '0x0000000000000000000000000000000000000000000000000000000000000001',
-  )
-  const recipientRoot = Account.fromSecp256k1(
-    '0x0000000000000000000000000000000000000000000000000000000000000002',
-  )
-  const workspace = await factory.workspace.insert({
-    chain_id: Tempo.chainLookup.testnet,
-    provider_id: `T${crypto.randomUUID().replaceAll('-', '')}`,
-  })
-  const senderAccount = await (async () => {
-    const existing = await db
-      .selectFrom('account')
-      .selectAll()
-      .where('address', '=', senderRoot.address)
-      .executeTakeFirst()
-    if (existing) return existing
-    try {
-      return await factory.account.insert({ address: senderRoot.address })
-    } catch (error) {
-      if (!(error instanceof Error && /unique constraint/i.test(error.message))) throw error
-      return await db
-        .selectFrom('account')
-        .selectAll()
-        .where('address', '=', senderRoot.address)
-        .executeTakeFirstOrThrow()
-    }
-  })()
-  const recipientAccount = await (async () => {
-    const existing = await db
-      .selectFrom('account')
-      .selectAll()
-      .where('address', '=', recipientRoot.address)
-      .executeTakeFirst()
-    if (existing) return existing
-    try {
-      return await factory.account.insert({ address: recipientRoot.address })
-    } catch (error) {
-      if (!(error instanceof Error && /unique constraint/i.test(error.message))) throw error
-      return await db
-        .selectFrom('account')
-        .selectAll()
-        .where('address', '=', recipientRoot.address)
-        .executeTakeFirstOrThrow()
-    }
-  })()
-  const senderMember = await insertMember(db, factory, {
-    account_id: senderAccount.id,
-    provider_user_id: 'U000000001',
-    workspace_id: workspace.id,
-  })
-  const recipientMember = await insertMember(db, factory, {
-    account_id: recipientAccount.id,
-    provider_user_id: 'U000000002',
-    workspace_id: workspace.id,
-  })
-  const receiptTs = '1700000000.000001'
-  const channelId = 'C000000001'
-  const originalBatch = await factory.tip_batch.insert({
-    amount_each: 1000,
-    idempotency_key: `command:${crypto.randomUUID()}`,
-    provider: 'slack',
-    provider_channel_id: channelId,
-    provider_id: workspace.provider_id,
-    recipient_count: 1,
-    sender_member_id: senderMember.id,
-    source: 'command',
-    status: 'confirmed',
-    token_address: Tempo.addressLookup.pathUsd,
-    total_amount: 1000,
-    transaction_hash: `0x${'1'.repeat(64)}`,
-    workspace_id: workspace.id,
-  })
-  await factory.tip.insert({
-    amount: 1000,
-    batch_id: originalBatch.id,
-    chain_id: workspace.chain_id,
-    confirmed_at: new Date().toISOString(),
-    idempotency_key: originalBatch.idempotency_key,
-    recipient_id: recipientAccount.id,
-    recipient_member_id: recipientMember.id,
-    sender_id: senderAccount.id,
-    sender_member_id: senderMember.id,
-    token_address: Tempo.addressLookup.pathUsd,
-    workspace_id: workspace.id,
-  })
-  await factory.tip_receipt_message.insert({
-    channel_id: channelId,
-    message_ts: receiptTs,
-    thread_ts: receiptTs,
-    tip_batch_id: originalBatch.id,
-    workspace_id: workspace.id,
-  })
-  const token = await Confirmation.encrypt(app.env, {
-    amount: 1000,
-    chainId: Tempo.chainLookup.testnet,
-    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes
-    idempotencyKey: `boost:${workspace.id}:${channelId}:${receiptTs}:${senderMember.id}`,
-    kind: 'onetime_payment',
-    memo: null,
-    nonce: crypto.randomUUID(),
-    provider: 'slack',
-    providerChannelId: channelId,
-    providerId: workspace.provider_id,
-    providerThreadId: receiptTs,
-    recipientProviderLabel: 'member',
-    recipientProviderUserId: 'U000000002',
-    senderProviderUserId: 'U000000001',
-    tokenAddress: Tempo.addressLookup.pathUsd,
-    workspaceId: workspace.id,
-  })
-  await page.route('**/api/confirm/*', async (route) => {
-    if (route.request().method() !== 'POST') return await route.continue()
-
-    const json = route.request().postDataJSON() as {
-      address?: string
-      keyAuthorization?: unknown
-      signedTransaction?: string
-    }
-    expect(json.address).toBe(senderRoot.address)
-    expect(json.keyAuthorization).toBeUndefined()
-    expect(json.signedTransaction).toMatch(/^0x[0-9a-f]+$/)
-    await route.fulfill({
-      body: JSON.stringify({ ok: true, transactionHash: `0x${'4'.repeat(64)}` }),
-      contentType: 'application/json',
-      status: 200,
+    const sender = await insertMember(db, factory, {
+      provider_user_id: `U${crypto.randomUUID()}`,
+      workspace_id: workspace.id,
     })
-  })
-
-  await page.goto(app.url({ params: { token }, to: '/confirm/$token' }))
-  await page.waitForLoadState('networkidle')
-  await expect(page.getByText('$0.001 PathUSD')).toBeVisible()
-  await expect(page.getByText('@member')).toBeVisible()
-  await expect(page.getByText('Tipbot will use this approval once')).toBeVisible()
-  await page.getByRole('button', { name: 'Confirm payment' }).click()
-
-  await expect(page.getByRole('heading', { name: 'Payment sent' })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'View receipt' })).toHaveAttribute(
-    'href',
-    Tempo.formatTxLink(Tempo.chainLookup.testnet, `0x${'4'.repeat(64)}`),
-  )
-})
-
-test('slack member confirms multi-recipient one-time payment with wallet signature', async ({
-  app,
-  db,
-  factory,
-  page,
-}) => {
-  const senderRoot = Account.fromSecp256k1(
-    '0x0000000000000000000000000000000000000000000000000000000000000001',
-  )
-  const workspace = await factory.workspace.insert({
-    chain_id: Tempo.chainLookup.testnet,
-    provider_id: `T${crypto.randomUUID().replaceAll('-', '')}`,
-  })
-  const senderAccount = await (async () => {
-    const existing = await db
-      .selectFrom('account')
-      .selectAll()
-      .where('address', '=', senderRoot.address)
-      .executeTakeFirst()
-    if (existing) return existing
-    try {
-      return await factory.account.insert({ address: senderRoot.address })
-    } catch (error) {
-      if (!(error instanceof Error && /unique constraint/i.test(error.message))) throw error
-      return await db
-        .selectFrom('account')
-        .selectAll()
-        .where('address', '=', senderRoot.address)
-        .executeTakeFirstOrThrow()
-    }
-  })()
-  const firstRecipientAccount = await factory.account.insert({})
-  const secondRecipientAccount = await factory.account.insert({})
-  await insertMember(db, factory, {
-    account_id: senderAccount.id,
-    provider_user_id: 'U000000001',
-    workspace_id: workspace.id,
-  })
-  await insertMember(db, factory, {
-    account_id: firstRecipientAccount.id,
-    provider_user_id: 'U000000002',
-    workspace_id: workspace.id,
-  })
-  await insertMember(db, factory, {
-    account_id: secondRecipientAccount.id,
-    provider_user_id: 'U000000003',
-    workspace_id: workspace.id,
-  })
-  const token = await Confirmation.encrypt(app.env, {
-    amount: 1_500_000,
-    chainId: Tempo.chainLookup.testnet,
-    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes
-    idempotencyKey: `confirm:${crypto.randomUUID()}`,
-    kind: 'onetime_payment',
-    memo: 'team lunch',
-    nonce: crypto.randomUUID(),
-    provider: 'slack',
-    providerChannelId: 'C000000001',
-    providerId: workspace.provider_id,
-    recipientProviderLabel: 'foo',
-    recipientProviderUserId: 'U000000002',
-    recipients: [
-      { recipientProviderLabel: 'foo', recipientProviderUserId: 'U000000002' },
-      { recipientProviderLabel: 'bar', recipientProviderUserId: 'U000000003' },
-    ],
-    senderProviderUserId: 'U000000001',
-    tokenAddress: Tempo.addressLookup.pathUsd,
-    workspaceId: workspace.id,
-  })
-  await page.route('**/api/confirm/*', async (route) => {
-    if (route.request().method() !== 'POST') return await route.continue()
-
-    const json = route.request().postDataJSON() as {
-      address?: string
-      keyAuthorization?: unknown
-      signedTransaction?: string
-    }
-    expect(json.address).toBe(senderRoot.address)
-    expect(json.keyAuthorization).toBeUndefined()
-    expect(json.signedTransaction).toMatch(/^0x[0-9a-f]+$/)
-    await route.fulfill({
-      body: JSON.stringify({ ok: true, transactionHash: `0x${'3'.repeat(64)}` }),
-      contentType: 'application/json',
-      status: 200,
+    const linkToken = crypto.randomUUID()
+    const accessKey = AccessKey.generate()
+    await factory.account_link_token.insert({
+      access_key_address: accessKey.address,
+      access_key_ciphertext: await AccessKey.encrypt(app.env, accessKey.privateKey),
+      access_key_expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
+      access_key_public_key: accessKey.publicKey,
+      member_id: sender.id,
+      token_hash: await AccountLink.hashToken(app.env, linkToken),
     })
+
+    // The sender connects a Tempo Account, which then holds funds on the local chain.
+    await app.tempoId.signIn(page)
+    await page.goto(app.url(`/api/account/link/${linkToken}/start`))
+    await app.tempoId.approve(page)
+    await expect(page.getByRole('heading', { name: 'Connected to Tipbot' })).toBeVisible()
+    const senderAccount = await db
+      .selectFrom('member')
+      .innerJoin('provider_identity', 'provider_identity.id', 'member.provider_identity_id')
+      .innerJoin('account', 'account.id', 'provider_identity.account_id')
+      .select('account.address')
+      .where('member.id', '=', sender.id)
+      .executeTakeFirstOrThrow()
+    await TempoNode.mint({
+      amount: '10',
+      feePayer: app.env.FEE_PAYER_PRIVATE_KEY_TESTNET,
+      rpcUrl: app.env.RPC_URL_TESTNET!,
+      to: senderAccount.address,
+    })
+    const idempotencyKey = `confirm:${crypto.randomUUID()}`
+    const token = await Confirmation.encrypt(app.env, {
+      amount: 1_000_000,
+      chainId: Tempo.chainLookup.localnet,
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(), // 10 minutes
+      idempotencyKey,
+      kind,
+      memo: 'lunch',
+      nonce: crypto.randomUUID(),
+      provider: 'slack',
+      providerChannelId: 'C000000001',
+      providerId: workspace.provider_id,
+      recipientProviderUserId: recipient.provider_user_id,
+      senderProviderUserId: sender.provider_user_id,
+      tokenAddress: Tempo.addressLookup.pathUsd,
+      workspaceId: workspace.id,
+    })
+
+    await page.goto(app.url(`/api/confirm/${token}/start`))
+    await expect(
+      page.getByText(kind === 'onetime_payment' ? 'Spend $1' : 'Spend $10 per day'),
+    ).toBeVisible()
+    await app.tempoId.approve(page)
+
+    await expect(page.getByRole('heading', { name: 'Payment sent' })).toBeVisible()
+    await expect(page.getByRole('link', { name: 'View receipt' })).toBeVisible()
+    const tip = await db
+      .selectFrom('tip')
+      .select('confirmed_at')
+      .where('idempotency_key', '=', idempotencyKey)
+      .executeTakeFirstOrThrow()
+    expect(tip.confirmed_at).toEqual(expect.any(String))
   })
-
-  await page.goto(app.url({ params: { token }, to: '/confirm/$token' }))
-  await page.waitForLoadState('networkidle')
-  await expect(page.getByText('$1.50 PathUSD each')).toBeVisible()
-  await expect(page.getByText('$3.00 PathUSD')).toBeVisible()
-  await expect(page.getByText('@foo')).toBeVisible()
-  await expect(page.getByText('@bar')).toBeVisible()
-  await expect(page.getByText('Tipbot will use this approval once')).toBeVisible()
-  await page.getByRole('button', { name: 'Confirm payment' }).click()
-
-  await expect(page.getByRole('heading', { name: 'Payment sent' })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'View receipt' })).toHaveAttribute(
-    'href',
-    Tempo.formatTxLink(Tempo.chainLookup.testnet, `0x${'3'.repeat(64)}`),
-  )
-})
-
-async function insertMember(
-  db: Kysely<DB>,
-  factory: ReturnType<typeof Factory.create>,
-  attrs: Partial<DB.Insertable.member> &
-    Pick<DB.Insertable.member, 'workspace_id'> & { account_id?: string | null },
-) {
-  const member = factory.member.attrs(attrs as never)
-  const { account_id: accountId, ...memberValues } = member as typeof member & {
-    account_id?: string | null
-  }
-  if (member.provider_identity_id) return await factory.member.insert(memberValues)
-
-  const workspace = await db
-    .selectFrom('workspace')
-    .select(['provider', 'provider_id'])
-    .where('id', '=', member.workspace_id)
-    .executeTakeFirstOrThrow()
-  const identity = await factory.provider_identity.insert({
-    account_id: accountId ?? null,
-    created_at: member.created_at,
-    display_name: member.login,
-    provider: workspace.provider,
-    provider_user_id: member.provider_user_id,
-    provider_workspace_id: workspace.provider_id,
-    real_name: member.name,
-    updated_at: member.updated_at,
-  })
-  return await factory.member.insert({ ...memberValues, provider_identity_id: identity.id })
-}
