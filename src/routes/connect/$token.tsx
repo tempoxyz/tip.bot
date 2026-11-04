@@ -267,7 +267,7 @@ function ConnectPanel(props: {
 }
 
 const getConnectData = createServerFn({ method: 'GET' })
-  .inputValidator(z.string().check(z.minLength(1)))
+  .validator(z.string().check(z.minLength(1)))
   .handler(async ({ data }) => {
     const endpoint = rpc.api.account.link[':token']
     const response = await api.fetch(new Request(endpoint.$url({ param: { token: data } })), env)

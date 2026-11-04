@@ -9,31 +9,26 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as DashRouteImport } from './routes/dash'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as LinkXRouteImport } from './routes/link/x'
-import { Route as InstallSlackRouteImport } from './routes/install/slack'
-import { Route as ConnectTokenRouteImport } from './routes/connect/$token'
+import { Route as DashRouteImport } from './routes/dash'
 import { Route as ConfirmTokenRouteImport } from './routes/confirm/$token'
+import { Route as ConnectTokenRouteImport } from './routes/connect/$token'
+import { Route as InstallSlackRouteImport } from './routes/install/slack'
+import { Route as LinkXRouteImport } from './routes/link/x'
 
-const DashRoute = DashRouteImport.update({
-  id: '/dash',
-  path: '/dash',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const LinkXRoute = LinkXRouteImport.update({
-  id: '/link/x',
-  path: '/link/x',
+const DashRoute = DashRouteImport.update({
+  id: '/dash',
+  path: '/dash',
   getParentRoute: () => rootRouteImport,
 } as any)
-const InstallSlackRoute = InstallSlackRouteImport.update({
-  id: '/install/slack',
-  path: '/install/slack',
+const ConfirmTokenRoute = ConfirmTokenRouteImport.update({
+  id: '/confirm/$token',
+  path: '/confirm/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConnectTokenRoute = ConnectTokenRouteImport.update({
@@ -41,9 +36,14 @@ const ConnectTokenRoute = ConnectTokenRouteImport.update({
   path: '/connect/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ConfirmTokenRoute = ConfirmTokenRouteImport.update({
-  id: '/confirm/$token',
-  path: '/confirm/$token',
+const InstallSlackRoute = InstallSlackRouteImport.update({
+  id: '/install/slack',
+  path: '/install/slack',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LinkXRoute = LinkXRouteImport.update({
+  id: '/link/x',
+  path: '/link/x',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -110,13 +110,6 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/dash': {
-      id: '/dash'
-      path: '/dash'
-      fullPath: '/dash'
-      preLoaderRoute: typeof DashRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/': {
       id: '/'
       path: '/'
@@ -124,18 +117,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/link/x': {
-      id: '/link/x'
-      path: '/link/x'
-      fullPath: '/link/x'
-      preLoaderRoute: typeof LinkXRouteImport
+    '/dash': {
+      id: '/dash'
+      path: '/dash'
+      fullPath: '/dash'
+      preLoaderRoute: typeof DashRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/install/slack': {
-      id: '/install/slack'
-      path: '/install/slack'
-      fullPath: '/install/slack'
-      preLoaderRoute: typeof InstallSlackRouteImport
+    '/confirm/$token': {
+      id: '/confirm/$token'
+      path: '/confirm/$token'
+      fullPath: '/confirm/$token'
+      preLoaderRoute: typeof ConfirmTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/connect/$token': {
@@ -145,11 +138,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ConnectTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/confirm/$token': {
-      id: '/confirm/$token'
-      path: '/confirm/$token'
-      fullPath: '/confirm/$token'
-      preLoaderRoute: typeof ConfirmTokenRouteImport
+    '/install/slack': {
+      id: '/install/slack'
+      path: '/install/slack'
+      fullPath: '/install/slack'
+      preLoaderRoute: typeof InstallSlackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/link/x': {
+      id: '/link/x'
+      path: '/link/x'
+      fullPath: '/link/x'
+      preLoaderRoute: typeof LinkXRouteImport
       parentRoute: typeof rootRouteImport
     }
   }

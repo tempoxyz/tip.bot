@@ -171,7 +171,7 @@ export default defineConfig({
           __SLACK_APP_ID__: JSON.stringify(''),
         },
         plugins: lazyPlugins(async () => {
-          const workers = await import('@cloudflare/vitest-pool-workers')
+          const workers = await import('@cloudflare/vitest-plugin')
           const path = await import('node:path')
           const { setupVitestOutputFilter } = await import('./config/vitest.ts')
           const envMod = await import('./test/env.ts')
@@ -210,6 +210,9 @@ export default defineConfig({
         }),
         test: {
           fileParallelism: false,
+          // TODO: Remove when @cloudflare/vitest-plugin is upgraded to 1.4.3, which supports Vitest's filesystem module cache.
+          // https://github.com/cloudflare/workers-sdk/pull/16163
+          fsModuleCache: false,
           include: ['src/**/*.workers.test.ts'],
           name: 'workers',
           globalSetup: ['test/workers.global.setup.ts'],

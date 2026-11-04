@@ -2,13 +2,13 @@ import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { expect, test } from 'vitest'
 
-// Resolve the patched transitive dependencies actually used by tapimo's docs stack.
+// Resolve the upgraded transitive dependencies actually used by tapimo's docs stack.
 const require = createRequire(import.meta.url)
 const tapimoRequire = createRequire(require.resolve('tapimo/client'))
 const vocsRequire = createRequire(tapimoRequire.resolve('vocs'))
 
-test.each(['cjs', 'mjs'])('image-size %s preserves supported image metadata', async (extension) => {
-  const path = vocsRequire.resolve('image-size').replace(/\.cjs$/, `.${extension}`)
+test.each(['cjs', 'esm'])('image-size %s preserves supported image metadata', async (format) => {
+  const path = vocsRequire.resolve('image-size').replace('/dist/cjs/', `/dist/${format}/`)
   const { imageSize } = (await import(pathToFileURL(path).href)) as {
     imageSize: (input: Uint8Array) => { height: number; width: number }
   }
@@ -45,6 +45,13 @@ test.each(['cjs', 'mjs'])('image-size %s preserves supported image metadata', as
   expect(
     imageSize(Buffer.concat([header, box('jxlp', Buffer.concat([Buffer.alloc(4), codestream]))])),
   ).toMatchObject({ height: 1, width: 1 })
+
+  // A zero-length ICNS entry looped forever before 2.0.3 (GHSA-w3rx-r6r6-pgpr).
+  const zeroIcns = Buffer.alloc(24)
+  zeroIcns.write('icns')
+  zeroIcns.writeUInt32BE(zeroIcns.length, 4)
+  zeroIcns.write('icp4', 8)
+  expect(() => imageSize(zeroIcns)).toThrow()
 })
 
 test('the TOML upgrade preserves frontmatter values', () => {
