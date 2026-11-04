@@ -93,7 +93,11 @@ export function isAllowedToken(chainId: number, tokenAddress: string) {
   return false
 }
 
-export function getTokenAddress(chainId: number, value: string) {
+export function getTokenAddress(
+  chainId: number,
+  value: string,
+  defaultTokenAddress?: string | null,
+) {
   const address = Address.validate(value) ? Address.checksum(value) : null
   if (address && isAllowedToken(chainId, address)) return address
 
@@ -101,7 +105,10 @@ export function getTokenAddress(chainId: number, value: string) {
   const tokenAddress = (() => {
     if (normalized === 'ousd' || normalized === 'openusd') return addressLookup.ousd
     if (normalized === 'pathusd' || normalized === 'path') return addressLookup.pathUsd
-    if (normalized === 'usd') return getDefaultTokenAddress(chainId)
+    if (normalized === 'usd')
+      return defaultTokenAddress
+        ? Address.checksum(defaultTokenAddress)
+        : getDefaultTokenAddress(chainId)
     if (normalized === 'usdce' || normalized === 'usdc') return addressLookup.usdcE
     if (normalized === 'usdt0' || normalized === 'usdt') return addressLookup.usdt0
     if (normalized === 'alphausd' || normalized === 'alpha') return addressLookup.alphaUsd

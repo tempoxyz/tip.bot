@@ -1086,7 +1086,11 @@ export async function parseTwitterTip(env: Env, input: TwitterTweetInput) {
   let tokenAddress = null
   if (parsed.token) {
     const workspace = await ensureTwitterWorkspace(DB.create(env.DB), new Date().toISOString())
-    tokenAddress = Tempo.getTokenAddress(workspace.chain_id, parsed.token)
+    tokenAddress = Tempo.getTokenAddress(
+      workspace.chain_id,
+      parsed.token,
+      workspace.default_token_address,
+    )
     if (!tokenAddress) return null
   }
   if (Tip.isTransferMemoTooLong(parsed.memo)) return null

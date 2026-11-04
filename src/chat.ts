@@ -2248,7 +2248,11 @@ const handlers = {
     }
 
     const tokenAddress = parsed.token
-      ? Tempo.getTokenAddress(workspace?.chain_id ?? Tempo.chainLookup.mainnet, parsed.token)
+      ? Tempo.getTokenAddress(
+          workspace?.chain_id ?? Tempo.chainLookup.mainnet,
+          parsed.token,
+          workspace?.default_token_address,
+        )
       : null
     if (parsed.token && !tokenAddress) {
       await postPrivateReply(
