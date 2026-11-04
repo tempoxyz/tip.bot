@@ -113,123 +113,121 @@ function ConfirmPanel(props: {
           src={tipbotImagePath}
           width={160}
         />
-          <div className="w-full space-y-8">
-            <div className="space-y-3 text-center">
-              <h1 className="text-3xl font-bold text-gray10 sm:text-4xl">Confirm payment</h1>
-              <p className="text-base text-gray9 sm:text-lg">
-                Approve this payment with Tempo ID.
+        <div className="w-full space-y-8">
+          <div className="space-y-3 text-center">
+            <h1 className="text-3xl font-bold text-gray10 sm:text-4xl">Confirm payment</h1>
+            <p className="text-base text-gray9 sm:text-lg">Approve this payment with Tempo ID.</p>
+          </div>
+          <div className="rounded-2xl border border-gray5 bg-bg2 p-6 shadow-xl sm:p-8">
+            <div className="border-b border-gray5 pb-6">
+              <h2 className="text-xl font-bold text-gray10 sm:text-2xl">
+                Tipbot wants to send a payment
+              </h2>
+              <p className="mt-2 text-base text-gray9">
+                Review the payment details below before continuing.
               </p>
             </div>
-            <div className="rounded-2xl border border-gray5 bg-bg2 p-6 shadow-xl sm:p-8">
-              <div className="border-b border-gray5 pb-6">
-                <h2 className="text-xl font-bold text-gray10 sm:text-2xl">
-                  Tipbot wants to send a payment
-                </h2>
-                <p className="mt-2 text-base text-gray9">
-                  Review the payment details below before continuing.
-                </p>
-              </div>
-              <div className="space-y-5 border-b border-gray5 py-6">
-                <h3 className="text-lg font-bold text-gray10">Payment details</h3>
-                <div className="divide-y divide-gray5 rounded-xl border border-gray5 bg-bg1">
-                  {data.groupLabel ? (
-                    <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
-                      <span className="text-base font-bold text-gray8 sm:text-lg">Group</span>
-                      <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
-                        @{data.groupLabel}
-                      </span>
-                    </div>
-                  ) : null}
+            <div className="space-y-5 border-b border-gray5 py-6">
+              <h3 className="text-lg font-bold text-gray10">Payment details</h3>
+              <div className="divide-y divide-gray5 rounded-xl border border-gray5 bg-bg1">
+                {data.groupLabel ? (
                   <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
-                    <span className="text-base font-bold text-gray8 sm:text-lg">Amount</span>
+                    <span className="text-base font-bold text-gray8 sm:text-lg">Group</span>
                     <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
-                      {formatCurrencyAmount(data.amount, data.tokenCurrency)} {data.tokenSymbol}
-                      {recipients.length > 1 ? ' each' : ''}
+                      @{data.groupLabel}
                     </span>
                   </div>
-                  {recipients.length > 1 ? (
-                    <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
-                      <span className="text-base font-bold text-gray8 sm:text-lg">Total</span>
-                      <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
-                        {formatCurrencyAmount(totalAmount, data.tokenCurrency)} {data.tokenSymbol}
-                      </span>
-                    </div>
-                  ) : null}
+                ) : null}
+                <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
+                  <span className="text-base font-bold text-gray8 sm:text-lg">Amount</span>
+                  <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
+                    {formatCurrencyAmount(data.amount, data.tokenCurrency)} {data.tokenSymbol}
+                    {recipients.length > 1 ? ' each' : ''}
+                  </span>
+                </div>
+                {recipients.length > 1 ? (
+                  <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
+                    <span className="text-base font-bold text-gray8 sm:text-lg">Total</span>
+                    <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
+                      {formatCurrencyAmount(totalAmount, data.tokenCurrency)} {data.tokenSymbol}
+                    </span>
+                  </div>
+                ) : null}
+                <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6 sm:p-5">
+                  <span className="text-base font-bold text-gray8 sm:text-lg">To</span>
+                  <div className="flex flex-col gap-3 text-lg font-bold text-gray10 sm:items-end sm:text-end sm:text-xl">
+                    {recipients.map((recipient) => (
+                      <div
+                        className="flex items-center gap-3 sm:flex-row-reverse"
+                        key={recipient.recipientProviderUserId}
+                      >
+                        {recipient.recipientAvatarUrl ? (
+                          <img
+                            alt={`${formatProviderLabel(recipient)} avatar`}
+                            className="size-8 rounded-lg object-cover"
+                            height={32}
+                            src={recipient.recipientAvatarUrl}
+                            width={32}
+                          />
+                        ) : null}
+                        <span>{formatProviderLabel(recipient)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                {data.memo ? (
+                  <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
+                    <span className="text-base font-bold text-gray8 sm:text-lg">For</span>
+                    <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
+                      {data.memo}
+                    </span>
+                  </div>
+                ) : null}
+                {skippedRecipients.length ? (
                   <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6 sm:p-5">
-                    <span className="text-base font-bold text-gray8 sm:text-lg">To</span>
-                    <div className="flex flex-col gap-3 text-lg font-bold text-gray10 sm:items-end sm:text-end sm:text-xl">
-                      {recipients.map((recipient) => (
-                        <div
-                          className="flex items-center gap-3 sm:flex-row-reverse"
-                          key={recipient.recipientProviderUserId}
-                        >
-                          {recipient.recipientAvatarUrl ? (
-                            <img
-                              alt={`${formatProviderLabel(recipient)} avatar`}
-                              className="size-8 rounded-lg object-cover"
-                              height={32}
-                              src={recipient.recipientAvatarUrl}
-                              width={32}
-                            />
-                          ) : null}
-                          <span>{formatProviderLabel(recipient)}</span>
+                    <span className="text-base font-bold text-gray8 sm:text-lg">Skipped</span>
+                    <div className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
+                      {skippedRecipients.map((recipient) => (
+                        <div key={recipient.recipientProviderUserId}>
+                          {formatProviderLabel(recipient)}{' '}
+                          <span className="text-gray8">
+                            ({recipient.reason === 'you' ? 'you' : 'not connected yet'})
+                          </span>
                         </div>
                       ))}
                     </div>
                   </div>
-                  {data.memo ? (
-                    <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:p-5">
-                      <span className="text-base font-bold text-gray8 sm:text-lg">For</span>
-                      <span className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
-                        {data.memo}
-                      </span>
-                    </div>
-                  ) : null}
-                  {skippedRecipients.length ? (
-                    <div className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6 sm:p-5">
-                      <span className="text-base font-bold text-gray8 sm:text-lg">Skipped</span>
-                      <div className="text-lg font-bold text-gray10 sm:text-end sm:text-xl">
-                        {skippedRecipients.map((recipient) => (
-                          <div key={recipient.recipientProviderUserId}>
-                            {formatProviderLabel(recipient)}{' '}
-                            <span className="text-gray8">
-                              ({recipient.reason === 'you' ? 'you' : 'not connected yet'})
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-              <div className="space-y-4 pt-6">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                  <a
-                    className="inline-flex h-12 items-center justify-center rounded-lg bg-green8 px-6 text-lg font-bold text-white no-underline transition-colors outline-none hover:bg-green7 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
-                    href={`/api/confirm/${props.token}/start`}
-                  >
-                    Confirm payment
-                  </a>
-                  <a
-                    className="inline-flex h-12 items-center justify-center rounded-lg px-6 text-lg font-bold text-blue9 no-underline transition-colors outline-none hover:bg-blue1 focus-visible:ring-2 focus-visible:ring-blue9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
-                    href="/"
-                  >
-                    Cancel
-                  </a>
-                </div>
-                <p className="text-base text-gray9">
-                  {data.kind === 'reusable_access_key'
-                    ? `Tipbot can send future ${data.tokenSymbol} tips from ${data.providerLabel}, up to ${formatCurrencyAmount(data.accessKeyLimit, data.tokenCurrency)} per day. You can disconnect anytime.`
-                    : 'Tipbot uses this approval for this payment only, and keeps no access key.'}
-                </p>
-                {error ? (
-                  <p aria-live="polite" className="text-sm font-medium text-red9">
-                    {error}
-                  </p>
                 ) : null}
               </div>
             </div>
+            <div className="space-y-4 pt-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <a
+                  className="inline-flex h-12 items-center justify-center rounded-lg bg-green8 px-6 text-lg font-bold text-white no-underline transition-colors outline-none hover:bg-green7 focus-visible:ring-2 focus-visible:ring-green9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                  href={`/api/confirm/${props.token}/start`}
+                >
+                  Confirm payment
+                </a>
+                <a
+                  className="inline-flex h-12 items-center justify-center rounded-lg px-6 text-lg font-bold text-blue9 no-underline transition-colors outline-none hover:bg-blue1 focus-visible:ring-2 focus-visible:ring-blue9 focus-visible:ring-offset-2 focus-visible:ring-offset-bg2 focus-visible:outline-none"
+                  href="/"
+                >
+                  Cancel
+                </a>
+              </div>
+              <p className="text-base text-gray9">
+                {data.kind === 'reusable_access_key'
+                  ? `Tipbot can send future ${data.tokenSymbol} tips from ${data.providerLabel}, up to ${formatCurrencyAmount(data.accessKeyLimit, data.tokenCurrency)} per day. You can disconnect anytime.`
+                  : 'Tipbot uses this approval for this payment only, and keeps no access key.'}
+              </p>
+              {error ? (
+                <p aria-live="polite" className="text-sm font-medium text-red9">
+                  {error}
+                </p>
+              ) : null}
+            </div>
           </div>
+        </div>
       </section>
     </main>
   )

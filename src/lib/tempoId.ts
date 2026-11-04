@@ -132,7 +132,10 @@ export async function get<env extends { Bindings: Env }>(c: Context<env>) {
 /** Signs out: revokes the session's refresh token, and deletes the cookie. */
 export async function end<env extends { Bindings: Env }>(c: Context<env>) {
   const id = getCookie(c, sessionCookie, 'host')
-  if (id) await create(c.env).backend.end({ id }).catch(() => undefined)
+  if (id)
+    await create(c.env)
+      .backend.end({ id })
+      .catch(() => undefined)
   deleteCookie(c, sessionCookie, cookieOptions)
 }
 

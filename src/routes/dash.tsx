@@ -12,17 +12,7 @@ import { getErrorMessage } from '#/lib/error.ts'
 import IconLogosSlackIcon from '~icons/logos/slack-icon.jsx'
 import IconSimpleIconsX from '~icons/simple-icons/x.jsx'
 
-export const Route = createFileRoute('/dash')({
-  component: DashboardPanel,
-  head: () => ({ meta: [{ title: 'Dashboard - Tipbot' }] }),
-  async loader() {
-    const dashboard = await getDashboardData()
-    if (!dashboard.ok) throw redirect({ to: '/' })
-    return dashboard
-  },
-})
-
-function DashboardPanel() {
+function Component() {
   const loaderDashboard = Route.useLoaderData()
   const [dashboard, setDashboard] = React.useState(loaderDashboard)
   const [statusMessage, setStatusMessage] = React.useState<string | null>(null)
@@ -146,6 +136,16 @@ function DashboardPanel() {
     </main>
   )
 }
+
+export const Route = createFileRoute('/dash')({
+  component: Component,
+  head: () => ({ meta: [{ title: 'Dashboard - Tipbot' }] }),
+  async loader() {
+    const dashboard = await getDashboardData()
+    if (!dashboard.ok) throw redirect({ to: '/' })
+    return dashboard
+  },
+})
 
 function AccountSection(props: {
   accounts: DashboardAccount[]

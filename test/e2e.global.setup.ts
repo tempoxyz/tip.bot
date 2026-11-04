@@ -8,6 +8,7 @@ import type { api } from '#/api.ts'
 import * as Constants from './constants.ts'
 import { startDevServer } from './devServer.ts'
 import { Env } from './env.ts'
+import * as TempoNode from './tempo.ts'
 import { getAvailablePort } from './utils.ts'
 
 export default async function globalSetup() {
@@ -52,8 +53,14 @@ export default async function globalSetup() {
     .start()
   console.log('e2e: started tempo id')
 
+  // The local chain that payments settle on. The Tempo ID accounts of the specs are funded on it.
+  console.log('e2e: starting tempo')
+  const tempo = await TempoNode.start()
+  console.log('e2e: started tempo')
+
   const env = Env.get({
     HOST: host,
+    RPC_URL_TESTNET: tempo.rpcUrl,
     SLACK_APP_ID: 'A000000001',
     SLACK_API_URL: `${slack.url}/api`,
     TEMPO_ID_URL: tempoIdUrl,
@@ -78,6 +85,7 @@ export default async function globalSetup() {
     server.stop()
     await slack.close()
     await tempoId.stop()
+    await tempo.stop()
   }
 }
 

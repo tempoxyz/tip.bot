@@ -203,9 +203,14 @@ function Component() {
                 </div>
               ) : (
                 <div className="space-y-6 border-b border-gray5 py-6">
-                  <h3 className="text-lg font-bold text-gray10">With this connection, Tipbot can:</h3>
+                  <h3 className="text-lg font-bold text-gray10">
+                    With this connection, Tipbot can:
+                  </h3>
                   <div className="flex gap-4">
-                    <IconLucideCheck aria-hidden="true" className="mt-1 size-5 shrink-0 text-green9" />
+                    <IconLucideCheck
+                      aria-hidden="true"
+                      className="mt-1 size-5 shrink-0 text-green9"
+                    />
                     <div className="space-y-1">
                       <p className="text-lg font-bold text-gray10">Read your X profile</p>
                       <p className="text-base text-gray9">
@@ -214,7 +219,10 @@ function Component() {
                     </div>
                   </div>
                   <div className="flex gap-4">
-                    <IconLucideCheck aria-hidden="true" className="mt-1 size-5 shrink-0 text-green9" />
+                    <IconLucideCheck
+                      aria-hidden="true"
+                      className="mt-1 size-5 shrink-0 text-green9"
+                    />
                     <div className="space-y-1">
                       <p className="text-lg font-bold text-gray10">Create a limited access key</p>
                       <p className="text-base text-gray9">

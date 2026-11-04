@@ -95,6 +95,8 @@ export default defineConfig({
                   })() ?? config.vars?.HOST),
               ...(process.env.PLAYWRIGHT
                 ? {
+                    FEE_PAYER_PRIVATE_KEY_TESTNET: process.env.FEE_PAYER_PRIVATE_KEY_TESTNET ?? '',
+                    RPC_URL_TESTNET: process.env.RPC_URL_TESTNET ?? '',
                     SECRET_KEY: process.env.SECRET_KEY ?? '',
                     SLACK_CLIENT_ID: process.env.SLACK_CLIENT_ID ?? '',
                     SLACK_CLIENT_SECRET: process.env.SLACK_CLIENT_SECRET ?? '',
@@ -103,6 +105,8 @@ export default defineConfig({
                     TEMPO_ID_CLIENT_ID: process.env.TEMPO_ID_CLIENT_ID ?? '',
                     TEMPO_ID_CLIENT_SECRET: process.env.TEMPO_ID_CLIENT_SECRET ?? '',
                     TEMPO_ID_URL: process.env.TEMPO_ID_URL ?? '',
+                    TWITTER_OAUTH_CLIENT_ID: process.env.TWITTER_OAUTH_CLIENT_ID ?? '',
+                    TWITTER_OAUTH_CLIENT_SECRET: process.env.TWITTER_OAUTH_CLIENT_SECRET ?? '',
                   }
                 : {}),
               SLACK_API_URL: process.env.SLACK_API_URL ?? config.vars?.SLACK_API_URL,
