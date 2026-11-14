@@ -67,7 +67,6 @@ overrides:
   '@babel/core': 7.29.7
   '@grpc/grpc-js': 1.14.5
   axios: 1.20.0
-  '@hono/node-server@<2.1.3': 2.1.3
   # Keep browser compatibility data on established releases for CI's package-age policy.
   baseline-browser-mapping: 2.11.21
   browserslist: 4.28.9
@@ -106,6 +105,10 @@ overrides:
   vitest: 'catalog:'
   ws: 8.21.0
   zod: 4.6.6
+  # wata 0.4.2 depends on @hono/node-server ^1.13.7 and no 1.x release is fixed; remove once wata moves to 2.x.
+  'wata>@hono/node-server': 2.1.6
+  # emulate 0.5 (dev only) depends on @hono/node-server ^1 and no 1.x release is fixed; remove once emulate moves to 2.x.
+  'emulate>@hono/node-server': 2.1.6
 packageExtensions:
   '@cloudflare/vitest-plugin@*':
     dependencies:
