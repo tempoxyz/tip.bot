@@ -105,8 +105,10 @@ overrides:
   vitest: 'catalog:'
   ws: 8.21.0
   zod: 4.6.6
-  'hono@<4.13.16': 4.13.16
-  '@hono/node-server@<2.1.6': 2.1.6
+  # wata 0.4.2 depends on @hono/node-server ^1.13.7 and no 1.x release is fixed; remove once wata moves to 2.x.
+  'wata>@hono/node-server': 2.1.6
+  # emulate 0.5 (dev only) depends on @hono/node-server ^1 and no 1.x release is fixed; remove once emulate moves to 2.x.
+  'emulate>@hono/node-server': 2.1.6
 packageExtensions:
   '@cloudflare/vitest-plugin@*':
     dependencies:

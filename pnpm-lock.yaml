@@ -56,8 +56,8 @@ overrides:
   vitest: 5.0.5
   ws: 8.21.0
   zod: 4.6.6
-  hono@<4.13.16: 4.13.16
-  '@hono/node-server@<2.1.6': 2.1.6
+  wata>@hono/node-server: 2.1.6
+  emulate>@hono/node-server: 2.1.6
 
 packageExtensionsChecksum: sha256-suNdHsg4HyLvhuLapYRWKkFJJiiBgitUopRlVl+C9VI=
 
@@ -742,18 +742,18 @@ packages:
     resolution: {integrity: sha512-p/KH9MnfNcsm3sR6x4lNgm5j+QN4Et8srKredl9DZfXiyZ1UQ3aQ2YVpFLbqktYN5JI+DB+VZFKM2PqE5hLKjQ==}
     engines: {node: '>=20'}
     peerDependencies:
-      hono: 4.13.16
+      hono: ^4 || ^5.0.0-0
 
   '@hono/standard-validator@0.2.3':
     resolution: {integrity: sha512-bp9vHu6Va6SfMHC3D4ZLBbT/woi+AZ9CRdTXQu3kLJuLh2W/Gb9UO4hijS+BQAGFXi4EGpXdetxpzwTAawSVeg==}
     peerDependencies:
       '@standard-schema/spec': ^1.0.0
-      hono: 4.13.16
+      hono: '>=3.9.0'
 
   '@hono/zod-validator@0.8.0':
     resolution: {integrity: sha512-5uS4S1/LKtZQYvD4BtpPUFkOv8d1wNxHHrChm26buMiEYc1FrHWvDUaKVBwkiVtvSExHSpLGDvcnpI2Copyj9w==}
     peerDependencies:
-      hono: 4.13.16
+      hono: '>=4.10.0'
       zod: 4.6.6
 
   '@iconify-json/lucide@1.2.117':
@@ -3974,7 +3974,7 @@ packages:
       '@standard-community/standard-json': ^0.3.5
       '@standard-community/standard-openapi': ^0.2.9
       '@types/json-schema': ^7.0.15
-      hono: 4.13.16
+      hono: ^4.11.2
       openapi-types: ^12.1.3
     peerDependenciesMeta:
       '@hono/standard-validator':
@@ -4664,7 +4664,7 @@ packages:
       '@modelcontextprotocol/sdk': 1.32.1
       elysia: '>=1'
       express: '>=5'
-      hono: 4.13.16
+      hono: '>=4.12.25'
       viem: '>=2.54.0'
     peerDependenciesMeta:
       '@modelcontextprotocol/sdk':
