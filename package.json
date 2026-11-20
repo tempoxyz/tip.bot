@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "vp build",
+    "build:broker": "node --experimental-strip-types scripts/broker-build.ts",
     "check": "vp check",
     "check:types": "tsgo -b",
     "db:codegen": "node --experimental-strip-types db/codegen.ts",
@@ -78,7 +79,7 @@
     "vite": "catalog:",
     "vite-plus": "catalog:",
     "vitest": "catalog:",
-    "wrangler": "4.91.0"
+    "wrangler": "4.151.0"
   },
   "devEngines": {
     "runtime": {

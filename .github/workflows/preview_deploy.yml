@@ -372,7 +372,10 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           TWITTER_BOT_HANDLE: ${{ vars.TWITTER_BOT_HANDLE || env.TWITTER_BOT_HANDLE }}
         run: |
+          # tipbot-preview-name is the placeholder since Wrangler 4.151, which
+          # rejects __PREVIEW_NAME__. Branches from before keep the old one.
           sed -i.bak \
+            -e "s|\"tipbot-preview-name\"|\"${PREVIEW_NAME}\"|g" \
             -e "s|__PREVIEW_NAME__|${PREVIEW_NAME}|g" \
             -e "s|__PREVIEW_APEX__|${PREVIEW_APEX}|g" \
             -e "s|__PREVIEW_PR_NUMBER__|${PR_NUMBER}|g" \

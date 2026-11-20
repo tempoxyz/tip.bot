@@ -87,11 +87,13 @@
   },
   "env": {
     "preview": {
-      "name": "__PREVIEW_NAME__",
+      // preview_deploy.yml replaces tipbot-preview-name with tipbot-pr<number>.
+      // Wrangler rejects a Worker name with capitals or underscores.
+      "name": "tipbot-preview-name",
       "d1_databases": [
         {
           "binding": "DB",
-          "database_name": "__PREVIEW_NAME__",
+          "database_name": "tipbot-preview-name",
           "database_id": "__PREVIEW_D1_ID__",
           "migrations_dir": "db/migrations",
         },
@@ -168,6 +170,8 @@
     },
     "production": {
       "name": "tipbot",
+      // tempo-prd. The Cloudflare Deploy Broker's builder needs an explicit account.
+      "account_id": "ba6ee3674b03f08481e57ff9992c601e",
       "d1_databases": [
         {
           "binding": "DB",
