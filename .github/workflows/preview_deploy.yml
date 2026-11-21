@@ -6,10 +6,11 @@ name: Preview Deploy
 # the built Worker, its static assets, the D1 migration SQL and the Slack
 # manifests. scripts/preview-artifact.ts checks that artifact before any token
 # is minted, and Wrangler uploads the Worker unbundled with main's config and
-# runs none of it. The Cloudflare token comes from Cloudflare STS (policy
-# `preview-deploy`), which admits only this job on main. A preview still runs
-# the pull request's code with the preview secrets below, its Slack app's
-# credentials and a database seeded from production, as before.
+# runs none of it. The Cloudflare tokens come from Cloudflare STS (policies
+# `preview-deploy` and `preview-seed`), which admit only this job on main. A
+# preview still runs the pull request's code with the preview secrets below,
+# its Slack app's credentials and a database seeded from production, as
+# before.
 on:
   workflow_call:
     inputs:
@@ -395,14 +396,14 @@ jobs:
       # serves only this runner's IP address, and STS revokes it when the job
       # ends. It holds D1, Queues and Workers Scripts write on the production
       # account and Workers Routes on tip.bot, so this job must never run pull
-      # request code.
+      # request code. The seed gets a D1-only token of its own.
       - name: Fetch a Cloudflare token
         id: cloudflare
         uses: tempoxyz/gh-actions/actions/cloudflare-sts@1a535d662a51f211d750307541069cb849535414 # 2026-11-19T07-33-38Z-1a535d66
         with:
           account: prd
           policy: preview-deploy
-          ttl: 15m
+          ttl: 10m
 
       # Found by name, never by the ID in the preview comment.
       - name: Setup preview D1
@@ -523,15 +524,28 @@ jobs:
             exit 1
           fi
 
+      # The seed makes a few D1 queries per member, one at a time (86 members
+      # took about a minute), so it gets a fresh token of its own, under
+      # tip.bot's `preview-seed` policy: D1 write only, for the same job. STS
+      # has no read-only D1 grant for this repository, so the seed's read of
+      # production uses it too.
+      - name: Fetch a Cloudflare D1 token
+        id: cloudflare_d1
+        if: vars.PREVIEW_SEED_SLACK_TEAM_ID != ''
+        uses: tempoxyz/gh-actions/actions/cloudflare-sts@1a535d662a51f211d750307541069cb849535414 # 2026-11-19T07-33-38Z-1a535d66
+        with:
+          account: prd
+          policy: preview-seed
+          ttl: 15m
+
       # Main's scripts/preview-seed.ts copies one Slack workspace and its
       # linked members from the production `tipbot` database (its ID comes from
-      # main's wrangler.jsonc) into the preview's database. STS has no read-only
-      # D1 grant for this repository, so it reads with the same token.
+      # main's wrangler.jsonc) into the preview's database.
       - name: Seed preview workspace
         id: seed
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ steps.cloudflare.outputs.account-id }}
-          CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare.outputs.token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.cloudflare_d1.outputs.account-id }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare_d1.outputs.token }}
           PREVIEW_D1_ID: ${{ steps.d1.outputs.id }}
           PREVIEW_HOST: ${{ env.PREVIEW_HOST }}
           PREVIEW_SEED_SLACK_TEAM_ID: ${{ vars.PREVIEW_SEED_SLACK_TEAM_ID }}

@@ -52,17 +52,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          PR=$(gh api "repos/${{ github.repository }}/commits/${HEAD_SHA}/pulls" \
-            --jq "map(select(.state == \"open\" and .draft == false and .head.repo.full_name == \"${GITHUB_REPOSITORY}\")) | first // empty | {number, sha: .head.sha}")
-          if [ -z "$PR" ]; then
+          # A pull request stacked on the run's branch also contains the commit,
+          # so pick the one whose head is the commit.
+          PRS=$(gh api "repos/${{ github.repository }}/commits/${HEAD_SHA}/pulls" \
+            --jq "map(select(.state == \"open\" and .draft == false and .head.repo.full_name == \"${GITHUB_REPOSITORY}\") | {number, sha: .head.sha})")
+          if [ "$(echo "$PRS" | jq length)" = "0" ]; then
             echo "No open, ready pull request found for ${HEAD_SHA}."
             exit 1
           fi
-          if [ "$(echo "$PR" | jq -r '.sha')" != "$HEAD_SHA" ]; then
-            echo "::notice::Pull request $(echo "$PR" | jq -r '.number') has moved past ${HEAD_SHA}; the newer commit's run deploys its preview."
+          NUMBER=$(echo "$PRS" | jq -r --arg sha "$HEAD_SHA" 'map(select(.sha == $sha)) | first | .number // empty')
+          if [ -z "$NUMBER" ]; then
+            echo "::notice::Pull request $(echo "$PRS" | jq -r 'map(.number) | join(", ")') has moved past ${HEAD_SHA}; the newer commit's run deploys its preview."
             exit 0
           fi
-          echo "number=$(echo "$PR" | jq -r '.number')" >> "$GITHUB_OUTPUT"
+          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
 
   preview:
     name: Preview
