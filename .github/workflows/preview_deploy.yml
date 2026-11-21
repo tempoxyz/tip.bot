@@ -1,9 +1,24 @@
 name: Preview Deploy
 
+# preview.yml calls this from main on `workflow_run`, so it is always main's
+# copy. The deploy job checks out main, never the pull request. The pull
+# request's code reaches it only as the Pull Request run's `preview` artifact:
+# the built Worker, its static assets, the D1 migration SQL and the Slack
+# manifests. scripts/preview-artifact.ts checks that artifact before any token
+# is minted, and Wrangler uploads the Worker unbundled with main's config and
+# runs none of it. The Cloudflare tokens come from Cloudflare STS (policies
+# `preview-deploy` and `preview-seed`), which admit only this job on main. A
+# preview still runs the pull request's code with the preview secrets below,
+# its Slack app's credentials and a database seeded from production, as
+# before.
 on:
   workflow_call:
     inputs:
       pr_number:
+        required: true
+        type: string
+      # The Pull Request run that built the preview.
+      run_id:
         required: true
         type: string
       sha:
@@ -14,10 +29,6 @@ on:
         required: false
         type: string
     secrets:
-      CLOUDFLARE_ACCOUNT_ID:
-        required: true
-      CLOUDFLARE_API_TOKEN:
-        required: true
       FEE_PAYER_PRIVATE_KEY_MAINNET:
         required: true
       FEE_PAYER_PRIVATE_KEY_TESTNET:
@@ -32,6 +43,7 @@ on:
         required: true
 
 permissions:
+  actions: read
   contents: read
   id-token: write
   issues: write
@@ -57,15 +69,25 @@ jobs:
       - name: Secure runner
         uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
 
+      # A run that built no preview has nothing to deploy: its push was a
+      # draft's, its branch predates the Preview Build job, or the artifact has
+      # expired.
       - name: Check PR state
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          RUN_ID: ${{ inputs.run_id }}
         run: |
           PR_JSON=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '{state: .state, draft: .draft}')
           STATE=$(echo "$PR_JSON" | jq -r '.state')
           DRAFT=$(echo "$PR_JSON" | jq -r '.draft')
+          ARTIFACTS=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}/artifacts?name=preview" --jq '[.artifacts[] | select(.expired == false)] | length')
+          if [ "$ARTIFACTS" = "0" ]; then
+            echo "::notice::Pull Request run ${RUN_ID} uploaded no preview build, so there is nothing to deploy. A ready pull request's next push builds one; a branch from before the Preview Build job needs main merged first."
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$STATE" = "open" ] && [ "$DRAFT" != "true" ]; then
             echo "should_deploy=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -78,6 +100,7 @@ jobs:
     if: needs.gate.outputs.should_deploy == 'true'
     needs: gate
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: preview
     concurrency:
       group: slack-config-ci
@@ -86,14 +109,30 @@ jobs:
       - name: Secure runner
         uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
 
+      # Main's latest commit, never the pull request's: every script, action
+      # and dependency of this job is main's.
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           persist-credentials: false
-          ref: ${{ inputs.sha }}
 
       - name: Setup pnpm
         uses: ./.github/actions/setup-pnpm # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
+
+      # The pull request's run wrote the artifact, so it may hold any file. It
+      # stays outside the workspace, where it replaces no file of main.
+      - name: Download preview
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          github-token: ${{ github.token }}
+          name: preview
+          path: ${{ runner.temp }}/preview
+          run-id: ${{ inputs.run_id }}
+
+      # Refuses links and special files, unexpected entries and migration
+      # names, and Slack manifests with a URL off this preview's host.
+      - name: Check preview
+        run: node --experimental-strip-types scripts/preview-artifact.ts check "$RUNNER_TEMP/preview"
 
       - name: Setup Slack config token
         id: slack_token
@@ -102,6 +141,8 @@ jobs:
           slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
           slack-config-access-token: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
 
+      # Only this workflow's own comment holds the state: anyone can comment on
+      # a pull request of this public repository.
       - name: Read preview state
         id: state
         env:
@@ -109,7 +150,7 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           STATE_KEY: ${{ secrets.SECRET_KEY }}
         run: |
-          BODY=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --slurp | jq -r 'map(.[] | select(.body | contains("tipbot-preview"))) | first | .body // ""')
+          BODY=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --slurp | jq -r 'map(.[] | select(.user.login == "github-actions[bot]" and (.body | contains("tipbot-preview")))) | first | .body // ""')
           node - "$BODY" <<'NODE'
           import crypto from 'node:crypto'
           import fs from 'node:fs'
@@ -228,19 +269,20 @@ jobs:
               '{pr: ($pr | tonumber), d1_id: $d1_id, reaction_tip_emoji: $reaction_tip_emoji, reaction_tip_text: $reaction_tip_text, scopes_hash: $scopes_hash, seeded_at: $seeded_at, slack_app_id: $slack_app_id, slack_app_ids: $slack_app_ids, slack_credentials: $slack_credentials}')
             BODY=$(printf '%s\n\n<!-- tipbot-preview: %s -->' "$BODY" "$STATE")
           fi
-          COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --jq '.[] | select(.body | contains("tipbot-preview") or contains("Tipbot preview deployment")) | .id' | head -1)
+          COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("tipbot-preview") or contains("Tipbot preview deployment"))) | .id' | head -1)
           if [ -n "$COMMENT_ID" ]; then
             gh api "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}" -X PATCH -f body="$BODY"
           else
             gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -X POST -f body="$BODY"
           fi
 
-      - name: Render Slack manifests
+      # The Preview Build job rendered both manifests from the pull request's
+      # scripts/slack.ts, so the preview app gets the pull request's scopes and
+      # events. "Check preview" pinned their URLs to this preview's host.
+      - name: Read Slack manifest scopes
         id: manifest
         run: |
-          SLACK_EVENT_SUBSCRIPTIONS=0 pnpm slack:app manifest preview "$PREVIEW_HOST" > /tmp/slack-manifest-bootstrap.json
-          pnpm slack:app manifest preview "$PREVIEW_HOST" > /tmp/slack-manifest.json
-          SCOPES_HASH=$(jq -c '.oauth_config.scopes.bot | sort' /tmp/slack-manifest.json | shasum -a 256 | cut -d' ' -f1)
+          SCOPES_HASH=$(jq -c '.oauth_config.scopes.bot | sort' "$RUNNER_TEMP/preview/slack-manifest.json" | shasum -a 256 | cut -d' ' -f1)
           echo "scopes_hash=$SCOPES_HASH" >> "$GITHUB_OUTPUT"
 
       - name: Configure Slack preview app
@@ -252,11 +294,11 @@ jobs:
         run: |
           set -euo pipefail
           METHOD="apps.manifest.update"
-          MANIFEST=/tmp/slack-manifest.json
+          MANIFEST="$RUNNER_TEMP"/preview/slack-manifest.json
           REPLACED_APP_ID=""
           if [ -z "$APP_ID" ]; then
             METHOD="apps.manifest.create"
-            MANIFEST=/tmp/slack-manifest-bootstrap.json
+            MANIFEST="$RUNNER_TEMP"/preview/slack-manifest-bootstrap.json
           fi
           BODY=$(jq -nc --rawfile manifest "$MANIFEST" --arg app_id "$APP_ID" 'if $app_id == "" then {manifest: $manifest} else {app_id: $app_id, manifest: $manifest} end')
           for attempt in 1 2 3; do
@@ -277,7 +319,7 @@ jobs:
               REPLACED_APP_ID="$APP_ID"
               APP_ID=""
               METHOD="apps.manifest.create"
-              MANIFEST=/tmp/slack-manifest-bootstrap.json
+              MANIFEST="$RUNNER_TEMP"/preview/slack-manifest-bootstrap.json
               BODY=$(jq -nc --rawfile manifest "$MANIFEST" '{manifest: $manifest}')
               for attempt in 1 2 3; do
                 RESPONSE=$(curl -fsS -X POST "https://slack.com/api/${METHOD}" \
@@ -348,93 +390,78 @@ jobs:
           echo "app_id=$APP_ID" >> "$GITHUB_OUTPUT"
           echo "replaced_app_id=$REPLACED_APP_ID" >> "$GITHUB_OUTPUT"
 
+      # Cloudflare STS mints the token under tip.bot's `preview-deploy` policy,
+      # which admits only this job of main's preview_deploy.yml, called by
+      # main's preview.yml on `workflow_run`, in the preview environment. It
+      # serves only this runner's IP address, and STS revokes it when the job
+      # ends. It holds D1, Queues and Workers Scripts write on the production
+      # account and Workers Routes on tip.bot, so this job must never run pull
+      # request code. The seed gets a D1-only token of its own.
+      - name: Fetch a Cloudflare token
+        id: cloudflare
+        uses: tempoxyz/gh-actions/actions/cloudflare-sts@1a535d662a51f211d750307541069cb849535414 # 2026-11-19T07-33-38Z-1a535d66
+        with:
+          account: prd
+          policy: preview-deploy
+          ttl: 10m
+
+      # Found by name, never by the ID in the preview comment.
       - name: Setup preview D1
         id: d1
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          STATE_D1_ID: ${{ steps.state.outputs.d1_id }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.cloudflare.outputs.account-id }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare.outputs.token }}
         run: |
           AUTH="Authorization: Bearer ${CLOUDFLARE_API_TOKEN}"
           API="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database"
-          D1_ID="$STATE_D1_ID"
-          if [ -z "$D1_ID" ]; then
-            D1_ID=$(curl -fsS -H "$AUTH" "$API" | jq -r --arg name "$PREVIEW_NAME" '.result[] | select(.name == $name) | .uuid // empty' | head -1)
-          fi
+          D1_ID=$(curl -fsS -H "$AUTH" "${API}?name=${PREVIEW_NAME}" | jq -r --arg name "$PREVIEW_NAME" '.result[] | select(.name == $name) | .uuid // empty' | head -1)
           if [ -z "$D1_ID" ]; then
             D1_ID=$(curl -fsS -X POST -H "$AUTH" -H "Content-Type: application/json" "$API" -d "{\"name\":\"${PREVIEW_NAME}\"}" | jq -r '.result.uuid')
           fi
           echo "id=$D1_ID" >> "$GITHUB_OUTPUT"
 
-      - name: Setup preview wrangler config
+      # Main's wrangler.jsonc names the Worker, its bindings, D1 database,
+      # queues, custom domain and vars. Only the module, asset and migration
+      # paths point at the artifact. A pull request's change to wrangler.jsonc
+      # reaches its preview only after it merges.
+      # TWITTER_BOT_HANDLE is the workflow's, from preview.yml's input: the
+      # repository variable or tipbotgg, the same value Preview Build baked in.
+      - name: Write Wrangler config
         env:
           D1_ID: ${{ steps.d1.outputs.id }}
           PR_NUMBER: ${{ inputs.pr_number }}
-          TWITTER_BOT_HANDLE: ${{ vars.TWITTER_BOT_HANDLE || env.TWITTER_BOT_HANDLE }}
-        run: |
-          # tipbot-preview-name is the placeholder since Wrangler 4.151, which
-          # rejects __PREVIEW_NAME__. Branches from before keep the old one.
-          sed -i.bak \
-            -e "s|\"tipbot-preview-name\"|\"${PREVIEW_NAME}\"|g" \
-            -e "s|__PREVIEW_NAME__|${PREVIEW_NAME}|g" \
-            -e "s|__PREVIEW_APEX__|${PREVIEW_APEX}|g" \
-            -e "s|__PREVIEW_PR_NUMBER__|${PR_NUMBER}|g" \
-            -e "s|__PREVIEW_TWITTER_BOT_HANDLE__|${TWITTER_BOT_HANDLE}|g" \
-            -e "s|__PREVIEW_D1_ID__|${D1_ID}|g" \
-            wrangler.jsonc
+        run: node --experimental-strip-types scripts/preview-artifact.ts config "$RUNNER_TEMP/preview" "$RUNNER_TEMP/deploy/wrangler.json"
 
+      # Wrangler runs from a directory of its own, so no config or .env of the
+      # checkout or the artifact applies.
       - name: Setup preview Queues
+        working-directory: ${{ runner.temp }}/deploy
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.cloudflare.outputs.account-id }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare.outputs.token }}
         run: |
-          # shellcheck disable=SC2016
-          QUEUES=$(node -e '
-            const text = require("node:fs").readFileSync("wrangler.jsonc", "utf8")
-              .replace(/(?<=^[^"]*(?:"[^"]*"[^"]*)*)\/\/.*$/gm, "")
-              .replace(/,(\s*[\]}])/g, "$1")
-            const queues = JSON.parse(text).env.preview.queues
-            const names = new Set([
-              ...queues.producers.map((producer) => producer.queue),
-              ...queues.consumers.flatMap((consumer) =>
-                consumer.dead_letter_queue ? [consumer.queue, consumer.dead_letter_queue] : [consumer.queue],
-              ),
-            ])
-            for (const name of names) console.log(name)
-          ')
+          QUEUES=$(jq -r '.env.preview.queues | [.producers[].queue, (.consumers[] | .queue, (.dead_letter_queue // empty))] | unique[]' wrangler.json)
           for QUEUE in $QUEUES; do
-            pnpm exec wrangler queues create "$QUEUE" 2>/dev/null || true
+            "$GITHUB_WORKSPACE/node_modules/.bin/wrangler" queues create "$QUEUE" 2>/dev/null || true
           done
 
+      # The pull request's migration SQL, applied to the preview's own database.
       - name: Run migrations
-        run: pnpm exec wrangler d1 migrations apply "$PREVIEW_NAME" --env preview --remote
+        working-directory: ${{ runner.temp }}/deploy
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.cloudflare.outputs.account-id }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare.outputs.token }}
+        run: |
+          "$GITHUB_WORKSPACE/node_modules/.bin/wrangler" d1 migrations apply "$PREVIEW_NAME" --env preview --remote --config wrangler.json
 
-      - name: Build
-        run: pnpm build
-        env:
-          CLOUDFLARE_ENV: preview
-          EMULATE_SLACK: 0
-          SLACK_APP_ID: ${{ steps.slack.outputs.app_id }}
-
+      # Uploads the pull request's built Worker unbundled, so Wrangler runs none
+      # of it, with the preview's secrets. Wrangler requires them with the
+      # first upload of a Worker whose config lists them as required.
       - name: Deploy preview
-        uses: tempoxyz/gh-actions/vendor/cloudflare/wrangler-action@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
-        with:
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          command: deploy --env preview
-          environment: preview
-          secrets: |
-            FEE_PAYER_PRIVATE_KEY_MAINNET
-            FEE_PAYER_PRIVATE_KEY_TESTNET
-            SECRET_KEY
-            SLACK_CLIENT_ID
-            SLACK_CLIENT_SECRET
-            SLACK_SIGNING_SECRET
-            TEMPO_API_KEY
+        working-directory: ${{ runner.temp }}/deploy
         env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.cloudflare.outputs.account-id }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare.outputs.token }}
           FEE_PAYER_PRIVATE_KEY_MAINNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_MAINNET }}
           FEE_PAYER_PRIVATE_KEY_TESTNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_TESTNET }}
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
@@ -442,6 +469,16 @@ jobs:
           SLACK_CLIENT_SECRET: ${{ steps.slack.outputs.client_secret || steps.state.outputs.client_secret }}
           SLACK_SIGNING_SECRET: ${{ steps.slack.outputs.signing_secret || steps.state.outputs.signing_secret }}
           TEMPO_API_KEY: ${{ secrets.TEMPO_API_KEY }}
+        run: |
+          SECRETS_FILE="$RUNNER_TEMP/preview-secrets.json"
+          trap 'rm -f "$SECRETS_FILE"' EXIT
+          umask 077
+          node -e '
+            const names = process.argv.slice(2)
+            const secrets = Object.fromEntries(names.map((name) => [name, process.env[name] ?? ""]))
+            require("node:fs").writeFileSync(process.argv[1], JSON.stringify(secrets))
+          ' "$SECRETS_FILE" FEE_PAYER_PRIVATE_KEY_MAINNET FEE_PAYER_PRIVATE_KEY_TESTNET SECRET_KEY SLACK_CLIENT_ID SLACK_CLIENT_SECRET SLACK_SIGNING_SECRET TEMPO_API_KEY
+          "$GITHUB_WORKSPACE/node_modules/.bin/wrangler" deploy --config wrangler.json --env preview --secrets-file "$SECRETS_FILE"
 
       - name: Enable Slack event subscriptions
         if: steps.slack.outputs.created == 'true'
@@ -449,7 +486,7 @@ jobs:
           APP_ID: ${{ steps.slack.outputs.app_id }}
           SLACK_CONFIG_ACCESS_TOKEN: ${{ steps.slack_token.outputs.token }}
         run: |
-          BODY=$(jq -nc --rawfile manifest /tmp/slack-manifest.json --arg app_id "$APP_ID" '{app_id: $app_id, manifest: $manifest}')
+          BODY=$(jq -nc --rawfile manifest "$RUNNER_TEMP"/preview/slack-manifest.json --arg app_id "$APP_ID" '{app_id: $app_id, manifest: $manifest}')
           for attempt in 1 2 3; do
             RESPONSE=$(curl -fsS -X POST https://slack.com/api/apps.manifest.update \
               -H "Authorization: Bearer ${SLACK_CONFIG_ACCESS_TOKEN}" \
@@ -487,11 +524,28 @@ jobs:
             exit 1
           fi
 
+      # The seed makes a few D1 queries per member, one at a time (86 members
+      # took about a minute), so it gets a fresh token of its own, under
+      # tip.bot's `preview-seed` policy: D1 write only, for the same job. STS
+      # has no read-only D1 grant for this repository, so the seed's read of
+      # production uses it too.
+      - name: Fetch a Cloudflare D1 token
+        id: cloudflare_d1
+        if: vars.PREVIEW_SEED_SLACK_TEAM_ID != ''
+        uses: tempoxyz/gh-actions/actions/cloudflare-sts@1a535d662a51f211d750307541069cb849535414 # 2026-11-19T07-33-38Z-1a535d66
+        with:
+          account: prd
+          policy: preview-seed
+          ttl: 15m
+
+      # Main's scripts/preview-seed.ts copies one Slack workspace and its
+      # linked members from the production `tipbot` database (its ID comes from
+      # main's wrangler.jsonc) into the preview's database.
       - name: Seed preview workspace
         id: seed
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.cloudflare_d1.outputs.account-id }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare_d1.outputs.token }}
           PREVIEW_D1_ID: ${{ steps.d1.outputs.id }}
           PREVIEW_HOST: ${{ env.PREVIEW_HOST }}
           PREVIEW_SEED_SLACK_TEAM_ID: ${{ vars.PREVIEW_SEED_SLACK_TEAM_ID }}
@@ -552,7 +606,7 @@ jobs:
           if [ "$JOB_STATUS" = "success" ]; then
             DETAILS=$(printf '\n\n%s\n\n%s\n\nReaction tips:\n\n%s%s' "${INSTALL}" "${COMMANDS}" "${REACTION_TIP_TEXT}" "${REINSTALL}")
           fi
-          PREVIOUS_BODY=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --slurp | jq -r 'map(.[] | select(.body | contains("tipbot-preview"))) | first | .body // ""')
+          PREVIOUS_BODY=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --slurp | jq -r 'map(.[] | select(.user.login == "github-actions[bot]" and (.body | contains("tipbot-preview")))) | first | .body // ""')
           PREVIOUS_STATE=$(node -e 'const body = process.argv[1] || ""; const match = body.match(/<!-- tipbot-preview: (.*?) -->/); try { console.log(JSON.stringify(JSON.parse(match?.[1] ?? "{}"))) } catch { console.log("{}") }' "$PREVIOUS_BODY")
           STATE=$(jq -nc \
             --arg previous_state_raw "$PREVIOUS_STATE" \
@@ -579,7 +633,7 @@ jobs:
             "| ${PREVIEW_APEX} | ${STATUS} | ${PREVIEW} | ${UPDATED} |" \
             "${DETAILS}" \
             "<!-- tipbot-preview: ${STATE} -->")
-          COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --jq '.[] | select(.body | contains("tipbot-preview") or contains("Tipbot preview deployment")) | .id' | head -1)
+          COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("tipbot-preview") or contains("Tipbot preview deployment"))) | .id' | head -1)
           if [ -n "$COMMENT_ID" ]; then
             gh api "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}" -X PATCH -f body="$BODY"
           else

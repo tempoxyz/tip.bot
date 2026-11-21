@@ -87,7 +87,8 @@
   },
   "env": {
     "preview": {
-      // preview_deploy.yml replaces tipbot-preview-name with tipbot-pr<number>.
+      // The Preview Build job (pull_request.yml) and scripts/preview-artifact.ts
+      // replace tipbot-preview-name with tipbot-pr<number>.
       // Wrangler rejects a Worker name with capitals or underscores.
       "name": "tipbot-preview-name",
       "d1_databases": [
