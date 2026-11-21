@@ -6,9 +6,13 @@
 
 ## Production
 
+### Deploys
+
+`production.yml` deploys the `tipbot` Worker through the [Cloudflare Deploy Broker](https://github.com/tempoxyz/cloudflare-deploy-broker). It holds no Cloudflare credential: the broker applies pending D1 migrations, then uploads and promotes the version. `tempoxyz/cloudflare-deploy-policies` authorizes its bindings, so a new binding or Durable Object class needs a policy change first. The Worker keeps its secrets; add or change them in the broker dashboard (https://cf.tehq.net/, Workers tab).
+
 ### Cloudflare API token
 
-Create or update the deployment token in the [Cloudflare API Tokens dashboard](https://dash.cloudflare.com/profile/api-tokens).
+Previews (`preview_deploy.yml`, `preview_destroy.yml`, `preview_sweep.yml`) still use the `preview` environment's `CLOUDFLARE_API_TOKEN`. Create or update it in the [Cloudflare API Tokens dashboard](https://dash.cloudflare.com/profile/api-tokens).
 
 This API token will affect the below accounts and zones, along with their respective permissions:
 

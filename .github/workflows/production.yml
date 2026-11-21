@@ -6,6 +6,13 @@ on:
 
 permissions: {}
 
+# One run at a time, in push order, never cancelled: the broker finishes work a
+# cancelled job started, so overlapping runs could deploy out of order. GitHub
+# keeps only the newest pending run, so main's latest commit deploys last.
+concurrency:
+  group: production
+  cancel-in-progress: false
+
 env:
   WRANGLER_SEND_METRICS: false
 
@@ -40,10 +47,58 @@ jobs:
       id-token: write
     uses: ./.github/workflows/check.yml # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
 
+  # The build reads the production Slack app ID, a GitHub environment variable,
+  # which only a job in that environment can see. It is public: tip.bot serves
+  # it in a meta tag.
+  settings:
+    name: Settings
+    needs: authorize
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+    outputs:
+      slack_app_id: ${{ steps.slack_app_id.outputs.value }}
+    steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
+      - name: Read the Slack app ID
+        id: slack_app_id
+        env:
+          SLACK_APP_ID: ${{ vars.SLACK_APP_ID }}
+        run: |
+          if [[ ! "$SLACK_APP_ID" =~ ^A[0-9A-Z]{6,32}$ ]]; then
+            echo "::error::The production environment's SLACK_APP_ID is not a Slack app ID."
+            exit 1
+          fi
+          echo "value=${SLACK_APP_ID}" >> "$GITHUB_OUTPUT"
+
+  # Builds and attests the Worker, its chunks, static assets, configuration and
+  # D1 migrations without any Cloudflare credential. The deploy job hands the
+  # artifact to the Cloudflare Deploy Broker, whose tipbot authorization admits
+  # only this workflow on main, in the production environment.
+  build:
+    name: Build
+    needs: [check, settings]
+    permissions:
+      actions: write
+      artifact-metadata: write
+      attestations: write
+      contents: read
+      id-token: write
+    uses: tempoxyz/gh-actions/.github/workflows/cloudflare-deploy-broker-build.yml@1a535d662a51f211d750307541069cb849535414 # 2026-11-19T07-33-38Z-1a535d66
+    with:
+      build-command: SLACK_APP_ID=${{ needs.settings.outputs.slack_app_id }} pnpm build:broker
+      wrangler-config: dist/server/wrangler.json
+      d1-migrations-directory: db/migrations
+      artifact-name: tipbot
+
   deploy:
     name: Deploy
-    needs: check
+    needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: production
     permissions:
       contents: read
@@ -52,66 +107,27 @@ jobs:
       - name: Secure runner
         uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
 
-      - name: Checkout
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      # The broker applies pending D1 migrations to DB, then uploads and
+      # promotes the version, and stops before promotion if a migration fails.
+      # The Worker keeps its secrets; change them in the broker dashboard
+      # (https://cf.tehq.net/, Workers tab).
+      - name: Migrate D1 and deploy through the broker
+        uses: tempoxyz/gh-actions/actions/cloudflare-deploy-broker@1a535d662a51f211d750307541069cb849535414 # 2026-11-19T07-33-38Z-1a535d66
         with:
-          persist-credentials: false
+          deployment-id: tipbot
+          artifact-id: ${{ needs.build.outputs.artifact-id }}
+          archive-digest: ${{ needs.build.outputs.archive-digest }}
+          module-digest: ${{ needs.build.outputs.module-digest }}
 
-      - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
-
-      - name: Run migrations
-        run: pnpm exec wrangler d1 migrations apply tipbot --env production --remote
-        env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-
-      - name: Build
-        run: pnpm build
-        env:
-          CLOUDFLARE_ENV: production
-          SLACK_APP_ID: ${{ vars.SLACK_APP_ID }}
-
-      - name: Deploy to Production
-        uses: tempoxyz/gh-actions/vendor/cloudflare/wrangler-action@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy --env production
-          environment: production
-          secrets: |
-            FEE_PAYER_PRIVATE_KEY_MAINNET
-            FEE_PAYER_PRIVATE_KEY_TESTNET
-            RPC_CREDENTIALS
-            SECRET_KEY
-            SLACK_CLIENT_ID
-            SLACK_CLIENT_SECRET
-            SLACK_SIGNING_SECRET
-            TEMPO_API_KEY
-            TWITTER_ACCESS_TOKEN
-            TWITTER_ACCESS_TOKEN_SECRET
-            TWITTER_BEARER_TOKEN
-            TWITTER_CONSUMER_KEY
-            TWITTER_CONSUMER_SECRET
-            TWITTER_OAUTH_CLIENT_ID
-            TWITTER_OAUTH_CLIENT_SECRET
-        env:
-          FEE_PAYER_PRIVATE_KEY_MAINNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_MAINNET }}
-          FEE_PAYER_PRIVATE_KEY_TESTNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_TESTNET }}
-          RPC_CREDENTIALS: ${{ secrets.RPC_CREDENTIALS }}
-          SECRET_KEY: ${{ secrets.SECRET_KEY }}
-          SLACK_APP_ID: ${{ vars.SLACK_APP_ID }}
-          SLACK_CLIENT_ID: ${{ secrets.SLACK_CLIENT_ID }}
-          SLACK_CLIENT_SECRET: ${{ secrets.SLACK_CLIENT_SECRET }}
-          SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
-          TEMPO_API_KEY: ${{ secrets.TEMPO_API_KEY }}
-          TWITTER_ACCESS_TOKEN: ${{ secrets.TWITTER_ACCESS_TOKEN }}
-          TWITTER_ACCESS_TOKEN_SECRET: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET }}
-          TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
-          TWITTER_CONSUMER_KEY: ${{ secrets.TWITTER_CONSUMER_KEY }}
-          TWITTER_CONSUMER_SECRET: ${{ secrets.TWITTER_CONSUMER_SECRET }}
-          TWITTER_OAUTH_CLIENT_ID: ${{ secrets.TWITTER_OAUTH_CLIENT_ID }}
-          TWITTER_OAUTH_CLIENT_SECRET: ${{ secrets.TWITTER_OAUTH_CLIENT_SECRET }}
+      # /api/health queries D1.
+      - name: Check https://tip.bot
+        run: |
+          for _ in $(seq 1 10); do
+            if curl -fsS --max-time 10 https://tip.bot/api/health; then exit 0; fi
+            sleep 6 # 6 seconds
+          done
+          echo "::error::https://tip.bot/api/health did not return 200."
+          exit 1
 
   update_slack_app:
     name: Update Slack App

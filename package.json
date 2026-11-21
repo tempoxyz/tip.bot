@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "vp build",
+    "build:broker": "node --experimental-strip-types scripts/broker-build.ts",
     "check": "vp check",
     "check:types": "tsgo -b",
     "db:codegen": "node --experimental-strip-types db/codegen.ts",
@@ -37,7 +38,7 @@
     "@tanstack/router-plugin": "1.168.46",
     "accounts": "^0.15.2",
     "chat": "4.27.0",
-    "hono": "4.13.13",
+    "hono": "4.13.19",
     "kysely": "0.28.17",
     "nanoid": "^5.1.16",
     "ox": "0.14.20",
@@ -78,7 +79,7 @@
     "vite": "catalog:",
     "vite-plus": "catalog:",
     "vitest": "catalog:",
-    "wrangler": "4.91.0"
+    "wrangler": "4.151.0"
   },
   "devEngines": {
     "runtime": {
