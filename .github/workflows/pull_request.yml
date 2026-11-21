@@ -20,3 +20,97 @@ jobs:
       contents: read
       id-token: write
     uses: ./.github/workflows/check.yml # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
+
+  # Builds the pull request's preview with no secrets and no Cloudflare token,
+  # and uploads it as the `preview` artifact. When this workflow succeeds,
+  # preview.yml runs main's code, which checks the artifact and deploys it with
+  # a short-lived Cloudflare STS token, so no pull request code runs where that
+  # token is. Drafts and pull requests from forks get no preview.
+  preview_build:
+    name: Preview Build
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      # Reads the preview comment for the Slack app ID.
+      pull-requests: read
+    env:
+      PREVIEW_APEX: pr${{ github.event.pull_request.number }}
+      PREVIEW_HOST: pr${{ github.event.pull_request.number }}.tip.bot
+      PREVIEW_NAME: tipbot-pr${{ github.event.pull_request.number }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      SLACK_APP_NAME: Tipbot PR ${{ github.event.pull_request.number }}
+      SLACK_BOT_DISPLAY_NAME: Tipbot PR ${{ github.event.pull_request.number }}
+      SLACK_COMMAND: /tippr${{ github.event.pull_request.number }}
+    steps:
+      - name: Secure runner
+        uses: tempoxyz/gh-actions/actions/secure-runner@35019557465e3c38ee3468be171771fd73577584 # 2026-10-20T06-22-38Z-35019557
+
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Setup pnpm
+        uses: ./.github/actions/setup-pnpm # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
+
+      # The build puts the Slack app ID in a meta tag. preview_deploy.yml creates
+      # the app on the first preview, so the first build has none, and the next
+      # one reads it from the preview comment.
+      - name: Read Slack app ID
+        id: slack_app_id
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BODY=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate --slurp | jq -r 'map(.[] | select(.user.login == "github-actions[bot]" and (.body | contains("tipbot-preview")))) | first | .body // ""')
+          APP_ID=$(node -e 'const match = (process.argv[1] || "").match(/<!-- tipbot-preview: (.*?) -->/); try { console.log(JSON.parse(match?.[1] ?? "{}").slack_app_id ?? "") } catch { console.log("") }' "$BODY")
+          if [[ "$APP_ID" =~ ^A[0-9A-Z]{6,32}$ ]]; then echo "value=$APP_ID" >> "$GITHUB_OUTPUT"; fi
+
+      # preview_deploy.yml creates the D1 database and writes the deploy config
+      # from main's wrangler.jsonc, so the build needs only the host and handle.
+      - name: Setup preview wrangler config
+        env:
+          TWITTER_BOT_HANDLE: ${{ vars.TWITTER_BOT_HANDLE || 'tipbotgg' }}
+        run: |
+          # tipbot-preview-name is the placeholder since Wrangler 4.151, which
+          # rejects __PREVIEW_NAME__. Branches from before keep the old one.
+          sed -i.bak \
+            -e "s|\"tipbot-preview-name\"|\"${PREVIEW_NAME}\"|g" \
+            -e "s|__PREVIEW_NAME__|${PREVIEW_NAME}|g" \
+            -e "s|__PREVIEW_APEX__|${PREVIEW_APEX}|g" \
+            -e "s|__PREVIEW_PR_NUMBER__|${PR_NUMBER}|g" \
+            -e "s|__PREVIEW_TWITTER_BOT_HANDLE__|${TWITTER_BOT_HANDLE}|g" \
+            wrangler.jsonc
+
+      - name: Build
+        run: pnpm build
+        env:
+          CLOUDFLARE_ENV: preview
+          EMULATE_SLACK: 0
+          SLACK_APP_ID: ${{ steps.slack_app_id.outputs.value }}
+
+      # scripts/preview-artifact.ts (main's copy) checks this layout before
+      # anything holds a token.
+      - name: Package preview
+        run: |
+          PREVIEW="$RUNNER_TEMP/preview"
+          mkdir -p "$PREVIEW/migrations"
+          cp -R dist/server "$PREVIEW/server"
+          rm -rf "$PREVIEW/server/.dev.vars" "$PREVIEW/server/.vite" "$PREVIEW/server/wrangler.json"
+          cp -R dist/client "$PREVIEW/client"
+          cp db/migrations/*.sql "$PREVIEW/migrations/"
+          SLACK_EVENT_SUBSCRIPTIONS=0 pnpm --silent slack:app manifest preview "$PREVIEW_HOST" > "$PREVIEW/slack-manifest-bootstrap.json"
+          pnpm --silent slack:app manifest preview "$PREVIEW_HOST" > "$PREVIEW/slack-manifest.json"
+
+      - name: Upload preview
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: preview
+          path: ${{ runner.temp }}/preview
+          if-no-files-found: error
+          # The client ships .assetsignore.
+          include-hidden-files: true
+          retention-days: 3

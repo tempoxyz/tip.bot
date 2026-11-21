@@ -1,5 +1,9 @@
 name: Preview Sweep
 
+# Deletes previews whose pull request is closed or a draft but whose cleanup
+# failed or never ran: their Slack apps, then their Worker, D1 database and
+# queues in the production account, with a short-lived Cloudflare STS token
+# (policy `preview-sweep`).
 on:
   repository_dispatch:
     types: [preview_sweep]
@@ -44,6 +48,7 @@ jobs:
     if: always() && (github.event_name == 'schedule' || needs.authorize.result == 'success')
     needs: authorize
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: preview
     permissions:
       contents: read
@@ -67,10 +72,22 @@ jobs:
           slack-config-refresh-token: ${{ secrets.SLACK_CONFIG_REFRESH_TOKEN }}
           slack-config-access-token: ${{ secrets.SLACK_CONFIG_ACCESS_TOKEN }}
 
+      # Cloudflare STS mints the token under tip.bot's `preview-sweep` policy,
+      # which admits only this job of main's preview_sweep.yml, on its schedule
+      # or a repository dispatch, in the preview environment. It serves only
+      # this runner's IP address, and STS revokes it when the job ends.
+      - name: Fetch a Cloudflare token
+        id: cloudflare
+        uses: tempoxyz/gh-actions/actions/cloudflare-sts@1a535d662a51f211d750307541069cb849535414 # 2026-11-19T07-33-38Z-1a535d66
+        with:
+          account: prd
+          policy: preview-sweep
+          ttl: 15m
+
       - name: Sweep orphaned previews
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.cloudflare.outputs.account-id }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare.outputs.token }}
           GH_TOKEN: ${{ github.token }}
           SLACK_CONFIG_ACCESS_TOKEN: ${{ steps.slack_token.outputs.token }}
         run: |
@@ -82,14 +99,19 @@ jobs:
             | jq -r '.result[].id // empty' | grep '^tipbot-pr[0-9][0-9]*$' || true)
           # shellcheck disable=SC2001
           WORKER_PR_NUMBERS=$(echo "$WORKERS" | sed 's/^tipbot-pr//' || true)
+          # Preview databases are found by name, never by the ID in a comment.
+          D1_DATABASES=$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database?name=tipbot-pr" \
+            | jq -c '[.result[] | select(.name | test("^tipbot-pr[0-9]+$")) | {name, uuid}]' || echo '[]')
+          D1_PR_NUMBERS=$(echo "$D1_DATABASES" | jq -r '.[].name | ltrimstr("tipbot-pr")')
           QUEUE_PR_NUMBERS=$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/queues" \
             | jq -r '.result[].queue_name // empty' \
             | sed -n 's/^tipbot-pending-tip-pr\([0-9][0-9]*\)\(-dlq\)\?$/\1/p' || true)
           COMMENT_PR_NUMBERS=$(gh api "repos/${{ github.repository }}/issues/comments" --paginate \
-            --jq '.[] | select(.body | contains("tipbot-preview")) | .issue_url | split("/")[-1]' \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("tipbot-preview"))) | .issue_url | split("/")[-1]' \
             2>/dev/null || true)
-          PR_NUMBERS=$(printf '%s\n%s\n%s\n' "$WORKER_PR_NUMBERS" "$QUEUE_PR_NUMBERS" "$COMMENT_PR_NUMBERS" | grep '^[0-9][0-9]*$' | sort -n -u || true)
+          PR_NUMBERS=$(printf '%s\n%s\n%s\n%s\n' "$WORKER_PR_NUMBERS" "$D1_PR_NUMBERS" "$QUEUE_PR_NUMBERS" "$COMMENT_PR_NUMBERS" | grep '^[0-9][0-9]*$' | sort -n -u || true)
           for PR_NUMBER in $PR_NUMBERS; do
             worker="tipbot-pr${PR_NUMBER}"
             PR_JSON=$(gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '{state: .state, draft: .draft}' 2>/dev/null || echo '{"state":"unknown","draft":false}')
@@ -100,9 +122,8 @@ jobs:
               continue
             fi
 
-            BODY=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --slurp 2>/dev/null | jq -r 'map(.[] | select(.body | contains("tipbot-preview"))) | first | .body // ""' || true)
+            BODY=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --slurp 2>/dev/null | jq -r 'map(.[] | select(.user.login == "github-actions[bot]" and (.body | contains("tipbot-preview")))) | first | .body // ""' || true)
             META=$(node -e 'const body = process.argv[1] || ""; const match = body.match(/<!-- tipbot-preview: (.*?) -->/); console.log(match?.[1] ?? "{}")' "$BODY")
-            D1_ID=$(echo "$META" | jq -r '.d1_id // empty')
             SLACK_APP_IDS=$(echo "$META" | jq -c '[((.slack_app_ids // [])[]), (.slack_app_id // empty)] | map(select(. != "")) | unique')
 
             if [ -n "$SLACK_CONFIG_ACCESS_TOKEN" ] && [ "$SLACK_APP_IDS" != "[]" ]; then
@@ -147,12 +168,12 @@ jobs:
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
               "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${worker}?force=true" \
               || true
-            if [ -n "$D1_ID" ]; then
+            for D1_ID in $(echo "$D1_DATABASES" | jq -r --arg name "$worker" '.[] | select(.name == $name) | .uuid'); do
               curl -fsS -X DELETE \
                 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
                 "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${D1_ID}" \
                 || true
-            fi
+            done
             for QUEUE_ID in $QUEUE_IDS; do
               curl -fsS -X DELETE \
                 -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
@@ -169,7 +190,7 @@ jobs:
               "| Name | Status | Preview | Updated (UTC) |" \
               "| :--- | :----- | :------ | :------------ |" \
               "| pr${PR_NUMBER} | [![Shut Down](https://vercel.com/static/status/canceled.svg) Shut Down](${RUN_URL}) | [pr${PR_NUMBER}.tip.bot](https://pr${PR_NUMBER}.tip.bot) | ${UPDATED} |")
-            COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --jq '.[] | select(.body | contains("tipbot-preview") or contains("Tipbot preview deployment")) | .id' | head -1)
+            COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("tipbot-preview") or contains("Tipbot preview deployment"))) | .id' | head -1)
             if [ -n "$COMMENT_ID" ]; then
               gh api "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}" -X PATCH -f body="$BODY"
             fi

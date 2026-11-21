@@ -1,5 +1,8 @@
 name: Preview Destroy
 
+# Deletes a pull request's preview when it closes or turns into a draft:
+# its Slack apps, then its Worker, D1 database and queues in the production
+# account, with a short-lived Cloudflare STS token (policy `preview-destroy`).
 on: # zizmor: ignore[dangerous-triggers] Runs main's workflow and checkout; PR code is never checked out.
   pull_request_target:
     types: [closed, converted_to_draft]
@@ -43,6 +46,7 @@ jobs:
     name: Destroy
     needs: authorize
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: preview
     permissions:
       contents: read
@@ -59,13 +63,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          BODY=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --slurp | jq -r 'map(.[] | select(.body | contains("tipbot-preview"))) | first | .body // ""')
+          BODY=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --slurp | jq -r 'map(.[] | select(.user.login == "github-actions[bot]" and (.body | contains("tipbot-preview")))) | first | .body // ""')
           node - "$BODY" <<'NODE' >> "$GITHUB_OUTPUT"
           const body = process.argv[2] || ''
           const match = body.match(/<!-- tipbot-preview: (.*?) -->/)
           if (!match) process.exit(0)
           const state = JSON.parse(match[1])
-          if (state.d1_id) console.log(`d1_id=${state.d1_id}`)
           if (state.slack_app_id) console.log(`slack_app_id=${state.slack_app_id}`)
           const slackAppIds = [
             ...(Array.isArray(state.slack_app_ids) ? state.slack_app_ids : []),
@@ -112,10 +115,25 @@ jobs:
           done < <(echo "$SLACK_APP_IDS" | jq -r '.[]')
           if [ "$FAILED" != "0" ]; then echo "Slack app cleanup failed; continuing preview cleanup."; fi
 
+      # Cloudflare STS mints the token under tip.bot's `preview-destroy` policy,
+      # which admits only this job of main's preview_destroy.yml on
+      # `pull_request_target`, in the preview environment. A pull request
+      # closed against another base branch runs that branch's copy, which the
+      # policy refuses; the daily sweep then deletes its preview. The token
+      # serves only this runner's IP address, and STS revokes it when the job
+      # ends.
+      - name: Fetch a Cloudflare token
+        id: cloudflare
+        uses: tempoxyz/gh-actions/actions/cloudflare-sts@1a535d662a51f211d750307541069cb849535414 # 2026-11-19T07-33-38Z-1a535d66
+        with:
+          account: prd
+          policy: preview-destroy
+          ttl: 10m
+
       - name: Remove Worker from Queue consumers
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.cloudflare.outputs.account-id }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare.outputs.token }}
         run: |
           QUEUE_IDS=$(curl -fsS \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
@@ -136,8 +154,8 @@ jobs:
 
       - name: Clear Worker bindings
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.cloudflare.outputs.account-id }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare.outputs.token }}
         run: |
           curl -fsS -X PATCH \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
@@ -147,30 +165,35 @@ jobs:
 
       - name: Delete preview Worker
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.cloudflare.outputs.account-id }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare.outputs.token }}
         run: |
           curl -fsS -X DELETE \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/${PREVIEW_NAME}?force=true" \
             || true
 
+      # Found by name, never by the ID in the preview comment, so a comment
+      # can't point this at another database.
       - name: Delete preview D1
-        if: steps.state.outputs.d1_id != ''
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          D1_ID: ${{ steps.state.outputs.d1_id }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.cloudflare.outputs.account-id }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare.outputs.token }}
         run: |
-          curl -fsS -X DELETE \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${D1_ID}" \
-            || true
+          API="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database"
+          D1_IDS=$(curl -fsS -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" "${API}?name=${PREVIEW_NAME}" \
+            | jq -r --arg name "$PREVIEW_NAME" '.result[] | select(.name == $name) | .uuid')
+          for D1_ID in $D1_IDS; do
+            curl -fsS -X DELETE \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              "${API}/${D1_ID}" \
+              || true
+          done
 
       - name: Delete preview Queues
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.cloudflare.outputs.account-id }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare.outputs.token }}
         run: |
           QUEUE_IDS=$(curl -fsS \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
@@ -197,7 +220,7 @@ jobs:
             "| Name | Status | Preview | Updated (UTC) |" \
             "| :--- | :----- | :------ | :------------ |" \
             "| ${PREVIEW_APEX} | [![Shut Down](https://vercel.com/static/status/canceled.svg) Shut Down](${RUN_URL}) | [${PREVIEW_HOST}](https://${PREVIEW_HOST}) | ${UPDATED} |")
-          COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --jq '.[] | select(.body | contains("tipbot-preview") or contains("Tipbot preview deployment")) | .id' | head -1)
+          COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("tipbot-preview") or contains("Tipbot preview deployment"))) | .id' | head -1)
           if [ -n "$COMMENT_ID" ]; then
             gh api "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}" -X PATCH -f body="$BODY"
           fi

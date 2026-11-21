@@ -1,6 +1,11 @@
 name: Preview
 
-on: # zizmor: ignore[dangerous-triggers] Loads from main and authorizes the triggering actor before checking out PR code.
+# Deploys a pull request's preview after its Pull Request run succeeds. That
+# run's Preview Build job builds the pull request with no secrets and uploads
+# it. `workflow_run` runs main's copy of this workflow and of
+# preview_deploy.yml, which treat the build as data, so no pull request code
+# runs where the Cloudflare token or the preview secrets are.
+on: # zizmor: ignore[dangerous-triggers] Runs only main's code, for branches of this repository, after authorizing the triggering actor.
   workflow_run:
     workflows: [Pull Request]
     types: [completed]
@@ -10,7 +15,11 @@ permissions: {}
 jobs:
   authorize:
     name: Authorize
-    if: github.event.workflow_run.conclusion == 'success'
+    # Pull requests from forks get no preview: their Pull Request run builds none.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     outputs:
       pr_number: ${{ steps.pr.outputs.number }}
@@ -34,6 +43,8 @@ jobs:
           GH_TOKEN: ${{ steps.member_token.outputs.token }}
         run: gh api --silent "orgs/tempoxyz/members/${ACTOR}"
 
+      # Only an open, ready pull request of this repository whose head is the
+      # run's commit gets a preview.
       - name: Resolve pull request
         id: pr
         env:
@@ -41,7 +52,7 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           NUMBER=$(gh api "repos/${{ github.repository }}/commits/${HEAD_SHA}/pulls" \
-            --jq 'map(select(.state == "open" and .draft == false)) | first | .number // empty')
+            --jq "map(select(.state == \"open\" and .draft == false and .head.repo.full_name == \"${GITHUB_REPOSITORY}\" and .head.sha == \"${HEAD_SHA}\")) | first | .number // empty")
           if [ -z "$NUMBER" ]; then
             echo "No open, ready pull request found for ${HEAD_SHA}."
             exit 1
@@ -52,6 +63,8 @@ jobs:
     name: Preview
     needs: authorize
     permissions:
+      # Downloads the Pull Request run's preview build.
+      actions: read
       contents: read
       id-token: write
       issues: write
@@ -59,11 +72,10 @@ jobs:
     uses: ./.github/workflows/preview_deploy.yml # zizmor: ignore[self-repository] actionlint does not support $/ references yet.
     with:
       pr_number: ${{ needs.authorize.outputs.pr_number }}
+      run_id: ${{ github.event.workflow_run.id }}
       sha: ${{ github.event.workflow_run.head_sha }}
       twitter_bot_handle: ${{ vars.TWITTER_BOT_HANDLE || 'tipbotgg' }}
     secrets:
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       FEE_PAYER_PRIVATE_KEY_MAINNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_MAINNET }}
       FEE_PAYER_PRIVATE_KEY_TESTNET: ${{ secrets.FEE_PAYER_PRIVATE_KEY_TESTNET }}
       SECRET_KEY: ${{ secrets.SECRET_KEY }}

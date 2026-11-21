@@ -10,12 +10,12 @@
 
 `production.yml` deploys the `tipbot` Worker through the [Cloudflare Deploy Broker](https://github.com/tempoxyz/cloudflare-deploy-broker). It holds no Cloudflare credential: the broker applies pending D1 migrations, then uploads and promotes the version. `tempoxyz/cloudflare-deploy-policies` authorizes its bindings, so a new binding or Durable Object class needs a policy change first. The Worker keeps its secrets; add or change them in the broker dashboard (https://cf.tehq.net/, Workers tab).
 
-### Cloudflare API token
+### Previews
 
-Previews (`preview_deploy.yml`, `preview_destroy.yml`, `preview_sweep.yml`) still use the `preview` environment's `CLOUDFLARE_API_TOKEN`. Create or update it in the [Cloudflare API Tokens dashboard](https://dash.cloudflare.com/profile/api-tokens).
+No workflow holds a long-lived Cloudflare token. Previews get short-lived tokens from [Cloudflare STS](https://github.com/tempoxyz/cloudflare-sts), under tip.bot's `preview-deploy`, `preview-destroy` and `preview-sweep` policies there. Each admits only its own workflow on `main`, in the `preview` environment.
 
-This API token will affect the below accounts and zones, along with their respective permissions:
+- `pull_request.yml`'s Preview Build job builds the pull request with no secrets, and uploads the Worker, static assets, D1 migrations and Slack manifests as the `preview` artifact. Pull requests from forks and drafts get no preview.
+- `preview.yml` runs main's code on `workflow_run` and calls `preview_deploy.yml`, which checks out main, checks the artifact (`scripts/preview-artifact.ts`), configures the Slack preview app, and only then fetches the token. It creates the D1 database and queues, applies the pull request's migrations, deploys the Worker unbundled with main's `wrangler.jsonc` and the preview secrets, and seeds the database with main's `scripts/preview-seed.ts`. No pull request code runs where the token is. So a pull request's change to `wrangler.jsonc`, `scripts/preview-seed.ts` or the Wrangler version reaches its preview only after it merges.
+- `preview_destroy.yml` and `preview_sweep.yml` delete previews with their own tokens.
 
-- All accounts — Workers Observability:Edit, Workers Builds Configuration:Edit, Workers AI:Edit, D1:Edit, Workers Tail:Read, Workers Scripts:Edit, Account Settings:Read
-- Tempo Production Resources
-  - tip.bot — Workers Routes:Edit
+The deploy token holds D1, Queues and Workers Scripts write on the whole production account, and Zone Read and Workers Routes write on `tip.bot`, so the deploy job must never run pull request code. A preview still runs the pull request's code with the preview secrets and a copy of one production Slack workspace's members.
