@@ -71,6 +71,8 @@ jobs:
 
       # preview_deploy.yml creates the D1 database and writes the deploy config
       # from main's wrangler.jsonc, so the build needs only the host and handle.
+      # The handle is the repository variable or tipbotgg, as preview.yml passes
+      # to the deploy, so the bundle and the Worker's var agree.
       - name: Setup preview wrangler config
         env:
           TWITTER_BOT_HANDLE: ${{ vars.TWITTER_BOT_HANDLE || 'tipbotgg' }}

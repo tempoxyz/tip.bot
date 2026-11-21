@@ -43,25 +43,31 @@ jobs:
           GH_TOKEN: ${{ steps.member_token.outputs.token }}
         run: gh api --silent "orgs/tempoxyz/members/${ACTOR}"
 
-      # Only an open, ready pull request of this repository whose head is the
-      # run's commit gets a preview.
+      # Only an open, ready pull request of this repository whose head is still
+      # the run's commit gets a preview. A newer push's run deploys instead of
+      # a superseded one, so that one ends here without a pull request number.
       - name: Resolve pull request
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          NUMBER=$(gh api "repos/${{ github.repository }}/commits/${HEAD_SHA}/pulls" \
-            --jq "map(select(.state == \"open\" and .draft == false and .head.repo.full_name == \"${GITHUB_REPOSITORY}\" and .head.sha == \"${HEAD_SHA}\")) | first | .number // empty")
-          if [ -z "$NUMBER" ]; then
+          PR=$(gh api "repos/${{ github.repository }}/commits/${HEAD_SHA}/pulls" \
+            --jq "map(select(.state == \"open\" and .draft == false and .head.repo.full_name == \"${GITHUB_REPOSITORY}\")) | first // empty | {number, sha: .head.sha}")
+          if [ -z "$PR" ]; then
             echo "No open, ready pull request found for ${HEAD_SHA}."
             exit 1
           fi
-          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
+          if [ "$(echo "$PR" | jq -r '.sha')" != "$HEAD_SHA" ]; then
+            echo "::notice::Pull request $(echo "$PR" | jq -r '.number') has moved past ${HEAD_SHA}; the newer commit's run deploys its preview."
+            exit 0
+          fi
+          echo "number=$(echo "$PR" | jq -r '.number')" >> "$GITHUB_OUTPUT"
 
   preview:
     name: Preview
     needs: authorize
+    if: needs.authorize.outputs.pr_number != ''
     permissions:
       # Downloads the Pull Request run's preview build.
       actions: read
